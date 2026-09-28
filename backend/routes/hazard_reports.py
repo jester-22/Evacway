@@ -139,6 +139,61 @@ def list_hazard_reports():
     reports = query.order_by(HazardReport.submitted_at.desc()).all()
     return jsonify([report_to_dict(r) for r in reports])
 
+def closed_road_names_near(report):
+    """Names of roads that are currently closed within the closure radius."""
+    report_geom_subquery = (
+        db.session.query(HazardReport.geom)
+        .filter(HazardReport.id == report.id)
+        .scalar_subquery()
+    )
+
+    roads = RoadSegment.query.filter(
+        RoadSegment.is_closed.is_(True),
+        func.ST_DWithin(
+            func.cast(RoadSegment.geom, Geography),
+            func.cast(report_geom_subquery, Geography),
+            ROAD_CLOSURE_RADIUS_METERS
+        )
+    ).all()
+
+    return dedupe([road.road_name or f"Road #{road.id}" for road in roads])
+
+
+@reports_bp.route('/api/hazard-reports/public', methods=['GET'])
+def list_public_hazard_reports():
+    # Public on purpose: residents don't log in. Only validated reports,
+    # and only fields that are safe to show on the public map.
+    reports = (
+        HazardReport.query
+        .filter_by(status='validated')
+        .order_by(HazardReport.submitted_at.desc())
+        .all()
+    )
+
+    result = []
+
+    for report in reports:
+        point = to_shape(report.geom)
+        closed_roads = closed_road_names_near(report)
+
+        result.append({
+            "id": report.id,
+            "description": report.description,
+            "photo_url": report.photo_url,
+            "report_type": report.report_type,
+            "status": report.status,
+            "latitude": point.y,
+            "longitude": point.x,
+            "validated_at": (
+                report.validated_at.isoformat()
+                if report.validated_at
+                else None
+            ),
+            "blocks_road": len(closed_roads) > 0,
+            "closed_roads": closed_roads
+        })
+
+    return jsonify(result)
 
 @reports_bp.route('/api/hazard-reports/<int:report_id>/validate', methods=['PATCH'])
 @role_required('admin', 'lgu_personnel')

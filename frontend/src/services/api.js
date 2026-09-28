@@ -117,6 +117,9 @@ export const api = {
           : ""
       }`
     ),
+    
+  getPublicHazardReports: () =>
+  request("/api/hazard-reports/public"),
 
   validateHazardReport: (
     id,

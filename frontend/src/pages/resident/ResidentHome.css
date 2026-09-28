@@ -1367,6 +1367,22 @@
   transform: translateY(-2px);
 }
 
+.resident-hazard-marker.blocked-road-marker {
+  color: #fff;
+}
+
+.resident-hazard-marker.blocked-road-marker .resident-hazard-marker-icon,
+.resident-hazard-marker.blocked-road-marker .resident-hazard-marker-label {
+  border-color: #fff;
+  color: #fff;
+  background: #dc2626;
+}
+
+.resident-hazard-marker.blocked-road-marker:hover .resident-hazard-marker-icon,
+.resident-hazard-marker.blocked-road-marker:hover .resident-hazard-marker-label {
+  background: #b91c1c;
+}
+
 .evacuation-entrance-marker {
   width: 19px;
   height: 19px;
@@ -1401,3 +1417,4 @@
   white-space: nowrap;
   transform: translateX(-50%);
 }
+

@@ -33,6 +33,7 @@ import {
   faDoorOpen,
   faChevronRight,
   faTriangleExclamation,
+  faBan,
 } from "@fortawesome/free-solid-svg-icons";
 
 import "../../components_css/MyLocationMarker.css";
@@ -73,6 +74,12 @@ const EMPTY_FEATURE_COLLECTION = {
   type: "FeatureCollection",
   features: [],
 };
+
+const VALIDATED_STATUS = "validated";
+
+function isValidatedReport(report) {
+  return String(report?.status || "").toLowerCase() === VALIDATED_STATUS;
+}
 
 function estimateTravelTimes(distanceKm) {
   return {
@@ -305,7 +312,7 @@ function createMyLocationMarker() {
 // Popups
 // --------------------------------------------------
 
-function createHazardPopup(properties) {
+function createHazardPopup(properties, closedRoadNames = []) {
   const container = document.createElement("div");
 
   const name = document.createElement("strong");
@@ -321,6 +328,22 @@ function createHazardPopup(properties) {
 
   container.appendChild(name);
   container.appendChild(type);
+  if (isBlockedRoadReport(properties)) {
+    const blockedStatus = document.createElement("div");
+    blockedStatus.textContent = "Road status: Blocked";
+    blockedStatus.style.marginTop = "4px";
+    blockedStatus.style.color = "#b91c1c";
+    blockedStatus.style.fontWeight = "700";
+    container.appendChild(blockedStatus);
+  }
+
+  if (closedRoadNames.length > 0) {
+    const affectedRoads = document.createElement("div");
+    affectedRoads.textContent = `Affected roads: ${closedRoadNames.join(", ")}`;
+    affectedRoads.style.color = "#b91c1c";
+    affectedRoads.style.fontWeight = "600";
+    container.appendChild(affectedRoads);
+  }
   container.appendChild(risk);
 
   const description = properties.description || properties.details;
@@ -333,12 +356,18 @@ function createHazardPopup(properties) {
     container.appendChild(detail);
   }
 
-  const photoPath = properties.photo_url || properties.image_url || properties.photo;
+  const photoPath =
+    properties.photo_url ??
+    properties.image_url ??
+    properties.photo_path ??
+    properties.image_path ??
+    properties.photo ??
+    properties.image;
+  const photoMessage = document.createElement("div");
+
   if (photoPath) {
     const photo = document.createElement("img");
-    photo.src = /^https?:\/\//i.test(photoPath)
-      ? photoPath
-      : `${BASE_URL}${photoPath.startsWith("/") ? "" : "/"}${photoPath}`;
+    photo.src = resolvePhotoUrl(photoPath);
     photo.alt = "Photo attached to hazard report";
     photo.style.display = "block";
     photo.style.width = "220px";
@@ -347,11 +376,35 @@ function createHazardPopup(properties) {
     photo.style.objectFit = "cover";
     photo.style.marginTop = "8px";
     photo.style.borderRadius = "6px";
-    photo.onerror = () => photo.remove();
+    photo.onerror = () => {
+      photo.remove();
+      photoMessage.textContent = "Photo could not be loaded.";
+    };
     container.appendChild(photo);
+  } else {
+    photoMessage.textContent = "No photo was attached to this report.";
+  }
+
+  if (photoMessage.textContent) {
+    photoMessage.style.marginTop = "7px";
+    photoMessage.style.color = "#64748b";
+    photoMessage.style.fontSize = "12px";
+    container.appendChild(photoMessage);
   }
 
   return container;
+}
+
+function isBlockedRoadReport(report) {
+  if (report.blocks_road === true) return true;
+
+  if (Array.isArray(report.closed_roads) && report.closed_roads.length > 0) {
+    return true;
+  }
+
+  const text = `${report.report_type || ""} ${report.hazard_type || ""}`;
+
+  return /block|closed|obstruct/i.test(text);
 }
 
 function createRoadPopup(properties) {
@@ -367,6 +420,114 @@ function createRoadPopup(properties) {
 
   container.appendChild(name);
   container.appendChild(status);
+
+  return container;
+}
+
+function resolvePhotoUrl(path) {
+  if (!path) return null;
+
+  if (/^(https?:|data:|blob:)/i.test(path)) return path;
+
+  const baseUrl = BASE_URL.endsWith("/") ? BASE_URL : `${BASE_URL}/`;
+  return new URL(path, baseUrl).toString();
+}
+
+function findReportForRoad(properties, reports) {
+  const roadId =
+    properties.id ?? properties.road_segment_id ?? properties.segment_id;
+  const reportId =
+    properties.report_id ??
+    properties.hazard_report_id ??
+    properties.closed_by_report_id;
+
+  const matches = (reports || []).filter((report) => {
+    const linkedRoadId = report.road_segment_id ?? report.road_id;
+
+    return (
+      (reportId != null && String(report.id) === String(reportId)) ||
+      (roadId != null && linkedRoadId != null && String(linkedRoadId) === String(roadId))
+    );
+  });
+
+  return (
+    matches.find((report) => report.photo_url || report.image_url || report.photo) ||
+    matches[0] ||
+    null
+  );
+}
+
+function createBlockedRoadPopup(properties, report) {
+  const container = document.createElement("div");
+
+  const name = document.createElement("strong");
+  name.textContent = properties.road_name || "Unnamed road";
+  container.appendChild(name);
+
+  const status = document.createElement("div");
+  status.textContent = "Closed - avoid this road";
+  status.style.color = "#b91c1c";
+  status.style.fontWeight = "600";
+  container.appendChild(status);
+
+  const reason =
+    properties.closure_reason || report?.report_type || report?.hazard_type;
+  if (reason) {
+    const reasonLine = document.createElement("div");
+    reasonLine.textContent = `Reason: ${reason}`;
+    container.appendChild(reasonLine);
+  }
+
+  const description =
+    properties.description ||
+    properties.details ||
+    report?.description ||
+    report?.details;
+  if (description) {
+    const detail = document.createElement("p");
+    detail.textContent = description;
+    detail.style.margin = "6px 0 0";
+    detail.style.maxWidth = "230px";
+    detail.style.whiteSpace = "normal";
+    container.appendChild(detail);
+  }
+
+  const dateValue =
+    properties.closed_at || report?.validated_at || report?.created_at;
+  if (dateValue) {
+    const date = new Date(dateValue);
+    if (!Number.isNaN(date.getTime())) {
+      const dateLine = document.createElement("div");
+      dateLine.textContent = `Closed: ${date.toLocaleString()}`;
+      dateLine.style.marginTop = "4px";
+      dateLine.style.fontSize = "12px";
+      dateLine.style.opacity = "0.75";
+      container.appendChild(dateLine);
+    }
+  }
+
+  const photoUrl = resolvePhotoUrl(
+    properties.photo_url ||
+      properties.image_url ||
+      properties.photo ||
+      report?.photo_url ||
+      report?.image_url ||
+      report?.photo
+  );
+  if (photoUrl) {
+    const photo = document.createElement("img");
+    photo.src = photoUrl;
+    photo.alt = "Photo of the closed road";
+    photo.style.display = "block";
+    photo.style.width = "220px";
+    photo.style.maxWidth = "100%";
+    photo.style.maxHeight = "140px";
+    photo.style.objectFit = "cover";
+    photo.style.marginTop = "8px";
+    photo.style.borderRadius = "6px";
+    photo.onerror = () => photo.remove();
+    container.appendChild(photo);
+  }
 
   return container;
 }
@@ -536,8 +697,12 @@ const ResidentHome = () => {
 
   useEffect(() => {
     api
-      .getHazardReports()
-      .then((reports) => setHazardReports(Array.isArray(reports) ? reports : []))
+      .getPublicHazardReports()
+      .then((reports) =>
+        setHazardReports(
+          Array.isArray(reports) ? reports.filter(isValidatedReport) : []
+        )
+      )
       .catch((error) => console.error("Hazard reports loading error:", error));
   }, []);
 
@@ -645,21 +810,33 @@ const ResidentHome = () => {
 
       if (!coordinates) return;
 
+      const blocked = isBlockedRoadReport(report);
+
+      const closedRoadNames = Array.isArray(report.closed_roads)
+      ? report.closed_roads
+      : [];
+      
       const element = document.createElement("button");
       element.type = "button";
-      element.className = "resident-hazard-marker";
+      element.className = blocked
+        ? "resident-hazard-marker blocked-road-marker"
+        : "resident-hazard-marker";
       element.setAttribute(
         "aria-label",
-        `View hazard: ${report.report_type || "Hazard report"}`
+        `View ${blocked ? "blocked road" : "hazard"}: ${report.report_type || "Hazard report"}`
       );
 
       const iconElement = document.createElement("span");
       iconElement.className = "resident-hazard-marker-icon";
-      iconElement.innerHTML = icon(faTriangleExclamation).html.join("");
+      iconElement.innerHTML = icon(
+        blocked ? faBan : faTriangleExclamation
+      ).html.join("");
 
       const label = document.createElement("span");
       label.className = "resident-hazard-marker-label";
-      label.textContent = report.report_type || "Hazard";
+      label.textContent = blocked
+        ? "Road blocked"
+        : report.report_type || "Hazard";
 
       element.append(iconElement, label);
 
@@ -667,7 +844,7 @@ const ResidentHome = () => {
         .setLngLat(coordinates)
         .setPopup(
           new mapboxgl.Popup({ offset: 12 }).setDOMContent(
-            createHazardPopup(report)
+            createHazardPopup(report, closedRoadNames)
           )
         )
         .addTo(map);
@@ -679,7 +856,7 @@ const ResidentHome = () => {
       hazardMarkersRef.current.forEach((marker) => marker.remove());
       hazardMarkersRef.current = [];
     };
-  }, [hazardReports, mapLoaded]);
+  }, [hazardReports, roads, mapLoaded]);
 
   // --------------------------------------------------
   // Restore the resident saved on this device
@@ -945,11 +1122,19 @@ const ResidentHome = () => {
         return;
       }
 
+      const properties = feature.properties || {};
+      const content = properties.is_closed
+        ? createBlockedRoadPopup(
+            properties,
+            findReportForRoad(properties, hazardReports)
+          )
+        : createRoadPopup(properties);
+
       new mapboxgl.Popup({
         offset: 10,
       })
         .setLngLat(e.lngLat)
-        .setDOMContent(createRoadPopup(feature.properties || {}))
+        .setDOMContent(content)
         .addTo(map);
     }
 
@@ -958,7 +1143,7 @@ const ResidentHome = () => {
     return () => {
       map.off("click", layerId, handleRoadClick);
     };
-  }, [roads, mapLoaded]);
+  }, [roads, hazardReports, mapLoaded]);
 
   // --------------------------------------------------
   // Add Sogod boundary

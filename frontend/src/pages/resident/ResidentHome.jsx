@@ -612,7 +612,9 @@ const ResidentHome = () => {
       map.getCanvas().style.cursor = "pointer";
     };
     const handleMouseLeave = () => {
-      map.getCanvas().style.cursor = pickingLocation ? "crosshair" : "";
+      map.getCanvas().style.cursor = pickingLocationRef.current
+        ? "crosshair"
+        : "";
     };
 
     map.on("click", "resident-hazard-fill", handleZoneClick);
@@ -1166,7 +1168,9 @@ const ResidentHome = () => {
     };
 
     const handleMouseLeave = () => {
-      map.getCanvas().style.cursor = pickingLocation ? "crosshair" : "";
+      map.getCanvas().style.cursor = pickingLocationRef.current
+        ? "crosshair"
+        : "";
     };
 
     const handleEvacCenterClick = (e) => {
@@ -1212,6 +1216,7 @@ const ResidentHome = () => {
         const entranceElement = createSimpleMarker(
           "evacuation-entrance-marker"
         );
+        entranceElement.style.visibility = "hidden";
 
         const entranceLabel = document.createElement("span");
         entranceLabel.className = "evacuation-entrance-label";
@@ -1234,12 +1239,24 @@ const ResidentHome = () => {
       });
     });
 
+    const updateEntranceVisibility = () => {
+      const visible = map.getZoom() >= ROOM_MIN_ZOOM;
+
+      entranceMarkersRef.current.forEach((marker) => {
+        marker.getElement().style.visibility = visible ? "visible" : "hidden";
+      });
+    };
+
+    updateEntranceVisibility();
+    map.on("zoomend", updateEntranceVisibility);
+
     return () => {
       map.off("click", fillLayerId, handleEvacCenterClick);
       map.off("mouseenter", fillLayerId, handleMouseEnter);
       map.off("mouseleave", fillLayerId, handleMouseLeave);
+      map.off("zoomend", updateEntranceVisibility);
     };
-  }, [evacCenters, mapLoaded, pickingLocation]);
+  }, [evacCenters, mapLoaded]);
 
   // --------------------------------------------------
   // Evacuation center ICONS (zoomed out)

@@ -2998,54 +2998,54 @@
   min-height: 100%;
   height: auto;
   padding: clamp(16px, 2.2vw, 30px);
-  background: #f2f6fb;
+  background: #f5f7fa;
   color: var(--barangay-ink);
   font-family: "Public Sans", "Segoe UI", sans-serif;
 }
 
 .barangay-page .barangay-header {
   align-items: center;
-  min-height: 108px;
-  padding: 22px 24px;
-  margin-bottom: 22px;
-  border: 1px solid #164b8c;
-  border-radius: 8px;
-  color: #fff;
-  background: linear-gradient(112deg, #103d78 0%, #1759a6 67%, #2874bf 100%);
-  box-shadow: 0 8px 20px rgba(20, 65, 117, 0.12);
+  min-height: 78px;
+  padding: 4px 0 18px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #d9e1eb;
+  color: #15243a;
+  background: transparent;
+  box-shadow: none;
 }
 
 .barangay-page .barangay-title {
-  color: #fff;
-  font-size: 25px;
+  color: #153c6b;
+  font-size: 24px;
   font-weight: 750;
 }
 
 .barangay-page .barangay-subtitle {
-  color: #d2e5fc;
+  color: #687b91;
   font-size: 13px;
 }
 
 .barangay-page .barangay-header-actions .btn-primary {
-  border-color: #fff;
-  color: var(--barangay-blue-dark);
-  background: #fff;
+  border-color: var(--barangay-blue);
+  color: #fff;
+  background: var(--barangay-blue);
 }
 
 .barangay-page .barangay-header-actions .btn-primary:hover:not(:disabled) {
-  border-color: #e5f1ff;
-  background: #e5f1ff;
+  border-color: var(--barangay-blue-dark);
+  background: var(--barangay-blue-dark);
 }
 
 .barangay-page .barangay-header-actions .btn-secondary {
-  border-color: rgba(255, 255, 255, 0.45);
-  color: #fff;
-  background: rgba(255, 255, 255, 0.08);
+  border-color: #c8d6e7;
+  color: #31506f;
+  background: #fff;
 }
 
 .barangay-page .barangay-header-actions .btn-secondary:hover:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.75);
-  background: rgba(255, 255, 255, 0.16);
+  border-color: #8fb5e0;
+  color: var(--barangay-blue-dark);
+  background: #f7fbff;
 }
 
 .barangay-page .btn {
@@ -3095,28 +3095,17 @@
 }
 
 .barangay-page .barangay-card {
-  position: relative;
   padding: 18px;
   border-color: #dce5ef;
-  border-radius: 8px;
+  border-radius: 5px;
   background: #fff;
-  box-shadow: 0 2px 6px rgba(22, 48, 80, 0.035);
-  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
-}
-
-.barangay-page .barangay-card::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  border-radius: 8px 0 0 8px;
-  background: #7eb5ee;
-  content: "";
+  box-shadow: none;
+  transition: border-color 150ms ease, background 150ms ease;
 }
 
 .barangay-page .barangay-card:hover {
   border-color: #a9c9ec;
-  box-shadow: 0 8px 18px rgba(22, 67, 119, 0.09);
-  transform: translateY(-2px);
+  background: #fcfdff;
 }
 
 .barangay-page .card-top {
@@ -3127,11 +3116,11 @@
 .barangay-page .barangay-icon {
   width: 44px;
   height: 44px;
-  border: 0;
-  border-radius: 8px;
-  color: #fff;
-  background: linear-gradient(145deg, #2876c4, #1759a6);
-  box-shadow: 0 4px 10px rgba(23, 89, 166, 0.2);
+  border: 1px solid #d5e2f0;
+  border-radius: 5px;
+  color: #1759a6;
+  background: #edf4fc;
+  box-shadow: none;
 }
 
 .barangay-page .card-title-area h3 {
@@ -3203,9 +3192,10 @@
   gap: 20px;
   padding: 19px;
   margin-bottom: 16px;
-  border-color: #d9e5f2;
-  border-radius: 8px;
-  background: linear-gradient(110deg, #e7f1fd, #f9fbfe 72%);
+  border: 1px solid #d9e2ec;
+  border-left: 3px solid #2872b9;
+  border-radius: 5px;
+  background: #fff;
   box-shadow: none;
 }
 
@@ -3228,8 +3218,8 @@
   min-width: 104px;
   padding: 10px 12px;
   border-color: #d5e3f2;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.82);
+  border-radius: 4px;
+  background: #f7f9fc;
 }
 
 .barangay-page .stat-label {
@@ -3296,8 +3286,8 @@
 
 .barangay-page .table-card {
   border-color: #dce5ef;
-  border-radius: 7px;
-  box-shadow: 0 2px 7px rgba(22, 48, 80, 0.035);
+  border-radius: 5px;
+  box-shadow: none;
 }
 
 .barangay-page .barangay-table th {
@@ -3353,8 +3343,8 @@
 .barangay-page .evacuation-center-card {
   padding: 16px;
   border-color: #dce5ef;
-  border-radius: 7px;
-  box-shadow: 0 2px 6px rgba(22, 48, 80, 0.035);
+  border-radius: 5px;
+  box-shadow: none;
 }
 
 .barangay-page .evacuation-center-header {
@@ -3444,7 +3434,7 @@
 
 .barangay-page .empty-state {
   border-color: #d7e4f2;
-  border-radius: 8px;
+  border-radius: 5px;
   background: #fff;
 }
 
@@ -3480,8 +3470,8 @@
 .barangay-page .import-modal,
 .barangay-page .family-modal {
   border-color: #d8e3ef;
-  border-radius: 9px;
-  box-shadow: 0 24px 70px rgba(8, 32, 62, 0.25);
+  border-radius: 6px;
+  box-shadow: 0 12px 36px rgba(8, 32, 62, 0.2);
 }
 
 .barangay-page .modal-header {
@@ -3588,7 +3578,7 @@
 @media (max-width: 800px) {
   .barangay-page .barangay-header {
     align-items: flex-start;
-    padding: 19px;
+    padding: 4px 0 16px;
   }
 
   .barangay-page .detail-header-card {
@@ -3603,7 +3593,7 @@
 @media (max-width: 600px) {
   .barangay-page .barangay-header {
     gap: 16px;
-    padding: 17px;
+    padding: 4px 0 15px;
   }
 
   .barangay-page .barangay-header-actions {

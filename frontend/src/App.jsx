@@ -6,6 +6,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import ResidentHome from "./pages/resident/ResidentHome";
 import LguDashboard from "./pages/lgu/LguDashboard";
 import AdminDashboard from "./pages/admin/AdminDashboard";
+import PasswordSetup from "./pages/auth/PasswordSetup";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
           {/* Public — no login required, per the proposal */}
           <Route path="/" element={<LandingPage />} />
           <Route path="/map" element={<ResidentHome />} />
+          <Route path="/set-password" element={<PasswordSetup />} />
 
           {/* LGU Personnel only */}
           <Route

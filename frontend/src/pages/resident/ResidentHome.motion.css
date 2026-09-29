@@ -1,0 +1,96 @@
+/* Import AFTER ResidentHome.css. CSS only: no changes to your map logic.
+   Uses the standalone `translate` property so it never fights the
+   transform: translateX(-50%) your panels already use for centering. */
+
+/* ---------- Entrances: motion answers what the person just did ---------- */
+@keyframes rh-rise { from { opacity: 0; translate: 0 14px; } to { opacity: 1; translate: 0 0; } }
+@keyframes rh-drop { from { opacity: 0; translate: 0 -12px; } to { opacity: 1; translate: 0 0; } }
+@keyframes rh-slide-in { from { opacity: 0; translate: -18px 0; } to { opacity: 1; translate: 0 0; } }
+@keyframes rh-sheet { from { translate: 0 100%; } to { translate: 0 0; } }
+@keyframes rh-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rh-pop { from { opacity: 0; scale: 0.96; translate: 0 8px; } to { opacity: 1; scale: 1; translate: 0 0; } }
+
+.cd-panel { animation: rh-slide-in 0.32s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+.route-panel { animation: rh-drop 0.36s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+.resident-search-results,
+.resident-search-no-results,
+.map-options-dropdown { animation: rh-drop 0.2s ease-out both; }
+.mc-overlay { animation: rh-fade 0.2s ease-out both; }
+.mc-modal { animation: rh-pop 0.26s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+.toast-error,
+.toast-success { animation: rh-rise 0.3s ease-out both; }
+.bottom-bar { animation: rh-rise 0.6s cubic-bezier(0.2, 0.75, 0.2, 1) 0.2s both; }
+
+/* ---------- Chrome polish ---------- */
+.top-bar {
+  background: linear-gradient(100deg, var(--navy) 0%, #0e4aa8 100%);
+}
+.bottom-bar {
+  backdrop-filter: blur(14px) saturate(1.4);
+  background: rgba(255, 255, 255, 0.9);
+}
+.action-btn,
+.action-btn-primary,
+.locate-btn,
+.map-options-toggle,
+.cd-list-item,
+.mc-btn {
+  transition: background-color 0.15s, transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.action-btn-primary:hover:not(:disabled),
+.locate-btn:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.action-btn:active,
+.action-btn-primary:active,
+.locate-btn:active { transform: scale(0.97); }
+
+/* The main action gently breathes while it is waiting to be used */
+.action-btn-primary:not(:disabled) { animation: rh-ready 3.2s ease-out infinite; }
+.action-btn-primary:hover { animation: none; }
+@keyframes rh-ready {
+  0% { box-shadow: 0 1px 2px rgba(11, 30, 66, 0.25), 0 0 0 0 rgba(27, 95, 193, 0.45); }
+  70%, 100% { box-shadow: 0 1px 2px rgba(11, 30, 66, 0.25), 0 0 0 14px rgba(27, 95, 193, 0); }
+}
+
+/* One walking chip, so let it use the full row */
+.route-modes { grid-template-columns: 1fr; }
+
+/* ---------- Live navigation ---------- */
+.route-panel.is-navigating .route-turn-arrow { animation: rh-nudge 1.6s ease-in-out infinite; }
+@keyframes rh-nudge { 50% { translate: 0 -3px; } }
+.route-panel.is-navigating .route-guidance { border-left-color: #16a34a; }
+.walking-navigation-button.is-active { animation: rh-live 1.8s ease-out infinite; }
+@keyframes rh-live {
+  0% { box-shadow: 0 0 0 0 rgba(180, 35, 24, 0.45); }
+  70%, 100% { box-shadow: 0 0 0 12px rgba(180, 35, 24, 0); }
+}
+
+/* ---------- Map markers (animate children only: Mapbox positions the
+   root element with transform, so never animate transform on it) ---------- */
+.resident-hazard-marker.blocked-road-marker .resident-hazard-marker-icon {
+  animation: rh-alert 2.2s ease-out infinite;
+}
+@keyframes rh-alert {
+  0% { box-shadow: 0 3px 10px rgba(45, 31, 22, 0.35), 0 0 0 0 rgba(220, 38, 38, 0.55); }
+  70%, 100% { box-shadow: 0 3px 10px rgba(45, 31, 22, 0.35), 0 0 0 16px rgba(220, 38, 38, 0); }
+}
+.evacuation-entrance-marker { animation: rh-entrance 2.6s ease-out infinite; }
+@keyframes rh-entrance {
+  0% { box-shadow: 0 2px 8px rgba(17, 42, 35, 0.4), 0 0 0 0 rgba(21, 128, 93, 0.5); }
+  70%, 100% { box-shadow: 0 2px 8px rgba(17, 42, 35, 0.4), 0 0 0 14px rgba(21, 128, 93, 0); }
+}
+
+/* ---------- Small screens ---------- */
+@media (max-width: 640px) {
+  .cd-panel { animation: rh-sheet 0.32s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+  .mc-modal { animation: rh-sheet 0.3s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+}
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .cd-panel, .route-panel, .resident-search-results, .resident-search-no-results,
+  .map-options-dropdown, .mc-overlay, .mc-modal, .toast-error, .toast-success,
+  .bottom-bar, .action-btn-primary, .walking-navigation-button.is-active,
+  .route-panel.is-navigating .route-turn-arrow,
+  .resident-hazard-marker.blocked-road-marker .resident-hazard-marker-icon,
+  .evacuation-entrance-marker { animation: none !important; }
+}

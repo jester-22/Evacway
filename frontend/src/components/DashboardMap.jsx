@@ -8,6 +8,7 @@ import { icon } from "@fortawesome/fontawesome-svg-core";
 import {
   faWater,
   faMountain,
+  faTriangleExclamation,
   faSearch,
   faLocationDot,
   faMapPin,
@@ -19,8 +20,10 @@ import {
   faChevronRight,
 } from "@fortawesome/free-solid-svg-icons";
 
-import { api } from "../services/api";
+import { api, BASE_URL } from "../services/api";
 import "../components_css/DashboardMap.css";
+import { isValidatedReport, createReportMarker, createReportPopup } from "./mapReports";
+import "../components_css/MapOverlays.css";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -108,6 +111,54 @@ function createPopup(title, content) {
   return popup;
 }
 
+function createHazardPopup(properties = {}) {
+  const container = document.createElement("div");
+  container.className = "dashboard-hazard-popup";
+
+  const title = document.createElement("strong");
+  title.textContent =
+    properties.name || properties.hazard_name || properties.hazard_type || "Hazard zone";
+  container.appendChild(title);
+
+  const type = document.createElement("div");
+  type.textContent = `Type: ${properties.hazard_type || "Unknown"}`;
+  container.appendChild(type);
+
+  const risk = document.createElement("div");
+  risk.textContent = `Risk: ${properties.risk_level || "Unspecified"}`;
+  risk.className = `dashboard-hazard-popup-risk risk-${String(
+    properties.risk_level || "unknown"
+  ).toLowerCase()}`;
+  container.appendChild(risk);
+
+  const description = properties.description || properties.details;
+  if (description) {
+    const details = document.createElement("p");
+    details.textContent = description;
+    container.appendChild(details);
+  }
+
+  const photoPath =
+    properties.photo_url || properties.image_url || properties.photo_path || properties.photo;
+  if (photoPath) {
+    const photo = document.createElement("img");
+    photo.src = /^https?:\/\//i.test(photoPath)
+      ? photoPath
+      : `${BASE_URL}${photoPath.startsWith("/") ? "" : "/"}${photoPath}`;
+    photo.alt = "Hazard zone reference";
+    photo.className = "dashboard-hazard-popup-photo";
+    photo.onerror = () => photo.remove();
+    container.appendChild(photo);
+  } else {
+    const noPhoto = document.createElement("small");
+    noPhoto.className = "dashboard-hazard-popup-no-photo";
+    noPhoto.textContent = "No photo attached";
+    container.appendChild(noPhoto);
+  }
+
+  return container;
+}
+
 function getGeometryBounds(geometry) {
   if (!geometry) return null;
 
@@ -164,6 +215,7 @@ function DashboardMap({
 }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const hazardMarkersRef = useRef([]);
 
   const [mapLoaded, setMapLoaded] = useState(false);
 
@@ -195,6 +247,8 @@ function DashboardMap({
     flood: false,
     landslide: false,
   });
+  const [hazardReports, setHazardReports] = useState([]);
+  const [showReports, setShowReports] = useState(true);
 
   const [sogodBoundary, setSogodBoundary] = useState(null);
   const [roads, setRoads] = useState(null);
@@ -445,6 +499,55 @@ function DashboardMap({
     };
   }, [mapLoaded, roads]);
 
+  useEffect(() => {
+    api
+      .getPublicHazardReports()
+      .then((response) => {
+        const reports = Array.isArray(response)
+          ? response
+          : Array.isArray(response?.reports)
+          ? response.reports
+          : [];
+        setHazardReports(reports.filter(isValidatedReport));
+      })
+      .catch((error) => console.error("Hazard reports error:", error));
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    hazardMarkersRef.current.forEach((marker) => marker.remove());
+    hazardMarkersRef.current = [];
+    if (!showReports) return;
+
+    hazardReports.forEach((report) => {
+      const lng = Number(report.longitude ?? report.lng);
+      const lat = Number(report.latitude ?? report.lat);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+
+      const element = createReportMarker(report);
+      if (drawMode !== "none") element.style.pointerEvents = "none";
+
+      const marker = new mapboxgl.Marker({ element, anchor: "bottom" })
+        .setLngLat([lng, lat])
+        .setPopup(
+          new mapboxgl.Popup({
+            offset: [0, -52],
+            className: "ew-popup",
+            maxWidth: "290px",
+          }).setDOMContent(createReportPopup(report))
+        )
+        .addTo(map);
+      hazardMarkersRef.current.push(marker);
+    });
+
+    return () => {
+      hazardMarkersRef.current.forEach((marker) => marker.remove());
+      hazardMarkersRef.current = [];
+    };
+  }, [mapLoaded, hazardReports, showReports, drawMode]);
+
   /*
    * Hazard zones
    */
@@ -507,6 +610,92 @@ function DashboardMap({
         "line-width": 1.5,
       },
     });
+  }, [mapLoaded, hazardZones, visibleLayers]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map || !mapLoaded || !hazardZones) return;
+
+    hazardMarkersRef.current.forEach((marker) => marker.remove());
+    hazardMarkersRef.current = [];
+
+    const visibleFeatures = (hazardZones.features || []).filter(
+      (feature) => visibleLayers[feature.properties?.hazard_type] === true
+    );
+
+    visibleFeatures.forEach((feature) => {
+      const bounds = getGeometryBounds(feature.geometry);
+      if (!bounds) return;
+
+      const coordinates = [
+        (bounds[0][0] + bounds[1][0]) / 2,
+        (bounds[0][1] + bounds[1][1]) / 2,
+      ];
+      const properties = feature.properties || {};
+      const hazardType = String(properties.hazard_type || "hazard").toLowerCase();
+      const riskLevel = String(properties.risk_level || "unknown").toLowerCase();
+      const element = document.createElement("button");
+      element.type = "button";
+      element.className = `dashboard-hazard-marker risk-${riskLevel}`;
+      element.setAttribute(
+        "aria-label",
+        `View ${hazardType} hazard: ${properties.name || "Hazard zone"}`
+      );
+
+      const badge = document.createElement("span");
+      badge.className = "dashboard-hazard-marker-icon";
+      badge.innerHTML = icon(
+        hazardType === "flood" ? faWater : hazardType === "landslide" ? faMountain : faTriangleExclamation
+      ).html.join("");
+
+      const label = document.createElement("span");
+      label.className = "dashboard-hazard-marker-label";
+      label.textContent = properties.name || `${hazardType} hazard`;
+      element.append(badge, label);
+
+      const marker = new mapboxgl.Marker({ element, anchor: "bottom" })
+        .setLngLat(coordinates)
+        .setPopup(
+          new mapboxgl.Popup({ offset: 12 }).setDOMContent(
+            createHazardPopup(properties)
+          )
+        )
+        .addTo(map);
+
+      hazardMarkersRef.current.push(marker);
+    });
+
+    const handleHazardClick = (event) => {
+      const feature = event.features?.[0];
+      if (!feature) return;
+
+      new mapboxgl.Popup({ offset: 10 })
+        .setLngLat(event.lngLat)
+        .setDOMContent(createHazardPopup(feature.properties || {}))
+        .addTo(map);
+    };
+
+    const handleMouseEnter = () => {
+      map.getCanvas().style.cursor = "pointer";
+    };
+    const handleMouseLeave = () => {
+      map.getCanvas().style.cursor = "";
+    };
+
+    if (map.getLayer("hazard-zones-fill")) {
+      map.on("click", "hazard-zones-fill", handleHazardClick);
+      map.on("mouseenter", "hazard-zones-fill", handleMouseEnter);
+      map.on("mouseleave", "hazard-zones-fill", handleMouseLeave);
+    }
+
+    return () => {
+      hazardMarkersRef.current.forEach((marker) => marker.remove());
+      hazardMarkersRef.current = [];
+      map.off("click", "hazard-zones-fill", handleHazardClick);
+      map.off("mouseenter", "hazard-zones-fill", handleMouseEnter);
+      map.off("mouseleave", "hazard-zones-fill", handleMouseLeave);
+    };
   }, [mapLoaded, hazardZones, visibleLayers]);
 
   /*
@@ -1583,6 +1772,16 @@ function DashboardMap({
           <FontAwesomeIcon icon={faMountain} />
           <span>Landslide</span>
         </button>
+
+        <button
+          onClick={() => setShowReports((visible) => !visible)}
+          className={`layer-tab ${showReports ? "layer-tab-reports-active" : ""}`}
+          aria-pressed={showReports}
+          title={showReports ? "Hide validated hazard reports" : "Show validated hazard reports"}
+        >
+          <FontAwesomeIcon icon={faTriangleExclamation} />
+          <span>Reports</span>
+        </button>
       </div>
 
       {/* =====================================================
@@ -1814,6 +2013,7 @@ function DashboardMap({
           </footer>
         </aside>
       )}
+
     </div>
   );
 }

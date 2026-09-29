@@ -1,0 +1,236 @@
+/* ---------- Stage: sky, drifting clouds, rolling water ---------- */
+.ew-stage {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, #dbe8f8 0%, var(--paper) 75%);
+}
+.ew-stage > * { position: relative; z-index: 2; }
+.ew-cloud {
+  position: absolute !important;
+  z-index: 1 !important;
+  width: 420px;
+  height: 130px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 70%);
+  animation: ew-drift 46s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+.ew-cloud-a { top: 4%; left: -6%; }
+.ew-cloud-b { top: 30%; right: -8%; width: 520px; animation-duration: 62s; animation-direction: alternate-reverse; }
+@keyframes ew-drift { to { transform: translateX(160px); } }
+
+.ew-waves {
+  position: absolute !important;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 70px;
+  z-index: 1 !important;
+  pointer-events: none;
+}
+.ew-wave {
+  position: absolute;
+  inset: 0;
+  background-repeat: repeat-x;
+  background-size: 1200px 60px;
+  background-position: 0 bottom;
+  animation: ew-roll 18s linear infinite;
+}
+.ew-wave-1 {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 60'%3E%3Cpath d='M0 30Q300 -10 600 30T1200 30V60H0Z' fill='%230a9fb5' fill-opacity='.22'/%3E%3C/svg%3E");
+  animation-duration: 26s;
+  animation-direction: reverse;
+}
+.ew-wave-2 {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 60'%3E%3Cpath d='M0 30Q300 -10 600 30T1200 30V60H0Z' fill='%231b5fc1' fill-opacity='.16'/%3E%3C/svg%3E");
+  transform: translateY(8px);
+  animation-duration: 20s;
+}
+.ew-wave-3 {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 60'%3E%3Cpath d='M0 30Q300 -10 600 30T1200 30V60H0Z' fill='%23ffffff'/%3E%3C/svg%3E");
+  transform: translateY(16px);
+  animation-duration: 32s;
+}
+@keyframes ew-roll { to { background-position-x: 1200px; } }
+
+.ew-hero { padding-bottom: 6.5rem; }
+
+/* ---------- One orchestrated page-load sequence ---------- */
+.ew-hero-copy > * { animation: ew-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.ew-hero-copy > :nth-child(1) { animation-delay: 0.1s; }
+.ew-hero-copy > :nth-child(2) { animation-delay: 0.3s; }
+.ew-hero-copy > :nth-child(3) { animation-delay: 0.5s; }
+@keyframes ew-rise {
+  from { opacity: 0; transform: translateY(22px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------- Living map ---------- */
+.ew-map-wrap { position: relative; }
+.ew-map { box-shadow: 0 30px 60px -28px rgba(14, 31, 58, 0.45); }
+
+.m-ripples path {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 3;
+  animation: ew-ripple 5s linear infinite;
+}
+.m-ripples path:nth-child(2) { animation-duration: 7s; animation-direction: reverse; }
+.m-ripples path:nth-child(3) { animation-duration: 6s; }
+@keyframes ew-ripple { to { transform: translateX(150px); } }
+.m-flood { animation: ew-breathe 4s ease-in-out infinite; }
+@keyframes ew-breathe { 50% { fill: rgba(10, 159, 181, 0.42); } }
+
+.m-closed { animation: ew-march 1.2s linear infinite; }
+@keyframes ew-march { to { stroke-dashoffset: -18; } }
+.m-x { stroke: var(--alert); stroke-width: 6; stroke-linecap: round; }
+.m-sign { fill: #fff; stroke: var(--alert); stroke-width: 3; }
+
+.m-flow {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 1 16;
+  opacity: 0;
+  animation: ew-appear 0.4s ease-out 2.7s forwards, ew-flow 1.4s linear 2.7s infinite;
+}
+@keyframes ew-flow { to { stroke-dashoffset: -17; } }
+.m-walker { fill: #fff; stroke: var(--brand); stroke-width: 5; }
+
+.m-rain line {
+  stroke: rgba(27, 95, 193, 0.38);
+  stroke-width: 2;
+  stroke-linecap: round;
+  animation: ew-rain 1.7s linear infinite;
+  animation-delay: var(--d);
+}
+@keyframes ew-rain {
+  from { transform: translate(0, -60px); }
+  to { transform: translate(-30px, 780px); }
+}
+
+/* Floating status chips */
+.ew-chip {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 28px -12px rgba(14, 31, 58, 0.35);
+  opacity: 0;
+  animation: ew-chip-in 0.6s ease-out forwards, ew-bob 5s ease-in-out infinite;
+}
+.ew-chip i { width: 10px; height: 10px; border-radius: 50%; }
+.ew-chip-a { top: 12%; left: -9%; animation-delay: 1.2s, 1.8s; }
+.ew-chip-a i { background: var(--flood); }
+.ew-chip-b { top: 46%; right: -6%; animation-delay: 1.8s, 2.4s; }
+.ew-chip-b i { background: var(--alert); }
+.ew-chip-c { bottom: 8%; right: 6%; animation-delay: 2.6s, 3s; }
+.ew-chip-c i { background: var(--brand); }
+@keyframes ew-chip-in { to { opacity: 1; } }
+@keyframes ew-bob { 50% { transform: translateY(-8px); } }
+
+/* ---------- How it works: a real sequence, so numbered ---------- */
+.ew-steps { background: #fff; padding: 3.5rem 0 4rem; }
+.ew-steps h2 {
+  margin: 0 0 2.5rem;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.ew-steps-list {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ew-steps-list::before {
+  content: "";
+  position: absolute;
+  top: 34px;
+  left: 68px;
+  right: 68px;
+  border-top: 3px dashed var(--brand);
+  opacity: 0.35;
+  animation: ew-dash 1s linear infinite;
+}
+.ew-step { position: relative; }
+.ew-step-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  margin-bottom: 1rem;
+  border-radius: 20px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+.ew-step-n {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  font: 700 0.82rem "Public Sans", system-ui, sans-serif;
+  color: #fff;
+  background: var(--brand);
+  border-radius: 50%;
+}
+.ew-step h3 { margin: 0 0 0.3rem; font-size: 1.1rem; }
+.ew-step p { margin: 0; max-width: 34ch; color: var(--muted); }
+.s-pulse {
+  fill: rgba(27, 95, 193, 0.3);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ew-pulse 2s ease-out infinite;
+}
+.s-flood { fill: rgba(10, 159, 181, 0.3); stroke: var(--flood); stroke-width: 2; animation: ew-breathe 3s ease-in-out infinite; }
+.s-route {
+  fill: none;
+  stroke: var(--brand);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-dasharray: 5 6;
+  animation: ew-dash 1s linear infinite;
+}
+@keyframes ew-dash { to { stroke-dashoffset: -11; } }
+
+/* ---------- Section rhythm ---------- */
+.ew-key { background: var(--paper); border-top: 0; }
+.ew-account { background: #fff; border-top: 1px solid var(--line); }
+.ew-footer { background: #fff; }
+
+.ew-btn-primary { box-shadow: 0 10px 24px -10px rgba(27, 95, 193, 0.7); }
+.ew-btn-primary:hover { transform: translateY(-2px); }
+
+/* ---------- Small screens ---------- */
+@media (max-width: 860px) {
+  .ew-chip-a { left: 2%; }
+  .ew-chip-b { right: 2%; }
+  .ew-steps-list { grid-template-columns: 1fr; gap: 1.75rem; }
+  .ew-steps-list::before { display: none; }
+  .ew-hero { padding-bottom: 5rem; }
+}
+
+/* ---------- Reduced motion: everything settles ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .ew-cloud, .ew-wave, .ew-hero-copy > *, .m-ripples path, .m-flood, .m-closed,
+  .m-rain line, .ew-chip, .s-pulse, .s-flood, .s-route, .ew-steps-list::before {
+    animation: none;
+  }
+  .ew-hero-copy > *, .ew-chip { opacity: 1; }
+  .m-flow, .m-rain, .m-walker { display: none; }
+}

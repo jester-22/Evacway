@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 
 from flask import Flask
@@ -29,7 +30,11 @@ app.config.from_object(Config)
 
 # IMPORTANT:
 # Change this secret before deploying the system.
-app.config["JWT_SECRET_KEY"] = "evacway-dev-secret-change-this-later"
+app.config["JWT_SECRET_KEY"] = (
+    os.environ.get("JWT_SECRET_KEY")
+    or app.config.get("JWT_SECRET_KEY")
+    or "evacway-dev-secret-change-this-later"
+)
 
 # Keep the user logged in for 7 days before the access token
 # expires.

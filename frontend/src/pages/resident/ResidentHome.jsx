@@ -5,6 +5,8 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import { Link } from "react-router-dom";
 import { api, BASE_URL } from "../../services/api";
 import HazardReportModal from "../../components/HazardReportModal";
+import { MapLegend } from "../../components/MapOverlays";
+import { createReportPopup } from "../../components/mapReports";
 
 import { useHazardData } from "../../hooks/useHazardData";
 import { useEvacuationData } from "../../hooks/useEvacuationData";
@@ -22,8 +24,6 @@ import {
   faMountain,
   faHome,
   faPersonWalking,
-  faMotorcycle,
-  faCar,
   faXmark,
   faSliders,
   faUser,
@@ -32,12 +32,15 @@ import {
   faBuildingColumns,
   faDoorOpen,
   faChevronRight,
+  faArrowUp,
   faTriangleExclamation,
   faBan,
 } from "@fortawesome/free-solid-svg-icons";
 
 import "../../components_css/MyLocationMarker.css";
+import "../../components_css/MapOverlays.css";
 import "./ResidentHome.css";
+import "./ResidentHome.motion.css";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -86,6 +89,80 @@ function estimateTravelTimes(distanceKm) {
     walking: Math.round((distanceKm / TRAVEL_SPEEDS.walking) * 60),
     motorcycle: Math.round((distanceKm / TRAVEL_SPEEDS.motorcycle) * 60),
     car: Math.round((distanceKm / TRAVEL_SPEEDS.car) * 60),
+  };
+}
+
+function getDistanceMeters(first, second) {
+  const radians = (degrees) => (degrees * Math.PI) / 180;
+  const latitudeDelta = radians(second[0] - first[0]);
+  const longitudeDelta = radians(second[1] - first[1]);
+  const firstLatitude = radians(first[0]);
+  const secondLatitude = radians(second[0]);
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(firstLatitude) *
+      Math.cos(secondLatitude) *
+      Math.sin(longitudeDelta / 2) ** 2;
+
+  return 6371000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+function getDistanceFromRoute(location, routeCoordinates = []) {
+  if (routeCoordinates.length === 0) return Infinity;
+
+  return Math.min(
+    ...routeCoordinates.map((point) => getDistanceMeters(location, point))
+  );
+}
+
+function getManeuverRotation(modifier = "") {
+  const normalized = modifier.toLowerCase();
+  if (normalized.includes("uturn")) return 180;
+  if (normalized.includes("sharp left")) return -135;
+  if (normalized.includes("sharp right")) return 135;
+  if (normalized.includes("slight left")) return -45;
+  if (normalized.includes("slight right")) return 45;
+  if (normalized.includes("left")) return -90;
+  if (normalized.includes("right")) return 90;
+  return 0;
+}
+
+async function getWalkingDirections(start, destination) {
+  const accessToken = mapboxgl.accessToken;
+  if (!accessToken) throw new Error("Walking directions require a Mapbox access token.");
+
+  const [startLat, startLng] = start;
+  const destinationCoordinates = getValidCoordinates([
+    destination.longitude ?? destination.lng,
+    destination.latitude ?? destination.lat,
+  ]);
+  if (!destinationCoordinates) {
+    throw new Error("The evacuation center does not have valid map coordinates.");
+  }
+
+  const [destinationLng, destinationLat] = destinationCoordinates;
+  const url =
+    `https://api.mapbox.com/directions/v5/mapbox/walking/` +
+    `${startLng},${startLat};${destinationLng},${destinationLat}` +
+    `?steps=true&overview=full&geometries=geojson&access_token=${encodeURIComponent(accessToken)}`;
+  const response = await fetch(url);
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.routes?.[0]) {
+    throw new Error(data.message || "Walking directions are unavailable for this destination.");
+  }
+
+  const walkingRoute = data.routes[0];
+  const coordinates = walkingRoute.geometry?.coordinates || [];
+  const steps = walkingRoute.legs?.flatMap((leg) => leg.steps || []) || [];
+
+  return {
+    route: coordinates.map(([lng, lat]) => [lat, lng]),
+    walking_steps: steps,
+    walking_distance_meters: walkingRoute.distance,
+    walking_duration_seconds: walkingRoute.duration,
+    distance_km: walkingRoute.distance / 1000,
+    estimated_time_min: Math.ceil(walkingRoute.duration / 60),
   };
 }
 
@@ -573,6 +650,7 @@ const ResidentHome = () => {
 
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const flowFrameRef = useRef(null);
 
   const hazardMarkersRef = useRef([]);
   const evacuationMarkersRef = useRef([]);
@@ -607,8 +685,7 @@ const ResidentHome = () => {
     routeError, 
     setRouteError, 
     findingRoute, 
-    setFindingRoute, 
-    findRoute 
+    setFindingRoute
   } = useRouting();
 
   // --------------------------------------------------
@@ -640,6 +717,18 @@ const ResidentHome = () => {
 
   const [myLocation, setMyLocation] = useState(null);
   const [locating, setLocating] = useState(false);
+  const [navigationActive, setNavigationActive] = useState(false);
+  const [navigationStatus, setNavigationStatus] = useState("");
+  const [navigationAccuracy, setNavigationAccuracy] = useState(null);
+  const [navigationRemainingMeters, setNavigationRemainingMeters] = useState(null);
+  const [navigationRemainingSeconds, setNavigationRemainingSeconds] = useState(null);
+  const [activeWalkingStep, setActiveWalkingStep] = useState(0);
+  const activeWalkingStepRef = useRef(0);
+  const navigationWatchIdRef = useRef(null);
+  const navigationActiveRef = useRef(false);
+  const routeDataRef = useRef(route);
+  const lastRerouteAtRef = useRef(0);
+  const reroutingRef = useRef(false);
 
   // --------------------------------------------------
   // "My evacuation center" (name verification)
@@ -674,6 +763,17 @@ const ResidentHome = () => {
   useEffect(() => {
     pickingLocationRef.current = pickingLocation;
   }, [pickingLocation]);
+
+  useEffect(() => {
+    routeDataRef.current = route;
+  }, [route]);
+
+  useEffect(() => () => {
+    navigationActiveRef.current = false;
+    if (navigationWatchIdRef.current != null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(navigationWatchIdRef.current);
+    }
+  }, []);
 
   // --------------------------------------------------
   // Load remaining data
@@ -843,8 +943,16 @@ const ResidentHome = () => {
       const marker = new mapboxgl.Marker({ element, anchor: "bottom" })
         .setLngLat(coordinates)
         .setPopup(
-          new mapboxgl.Popup({ offset: 12 }).setDOMContent(
-            createHazardPopup(report, closedRoadNames)
+          new mapboxgl.Popup({
+            className: "ew-popup",
+            maxWidth: "460px",
+          }).setDOMContent(
+            createReportPopup({
+              ...report,
+              closed_roads: closedRoadNames.length > 0
+                ? closedRoadNames
+                : report.closed_roads,
+            })
           )
         )
         .addTo(map);
@@ -853,6 +961,8 @@ const ResidentHome = () => {
     });
 
     return () => {
+      cancelAnimationFrame(flowFrameRef.current);
+      flowFrameRef.current = null;
       hazardMarkersRef.current.forEach((marker) => marker.remove());
       hazardMarkersRef.current = [];
     };
@@ -965,25 +1075,7 @@ const ResidentHome = () => {
       [SOGOD_BOUNDS[1][1], SOGOD_BOUNDS[1][0]],
     ]);
 
-    map.on("load", () => {
-      setMapLoaded(true);
-
-      // Show building footprints at an earlier zoom level
-      if (!map.getLayer("evacway-buildings")) {
-        map.addLayer({
-          id: "evacway-buildings",
-          type: "fill",
-          source: "composite",
-          "source-layer": "building",
-          minzoom: 12,
-          paint: {
-            "fill-color": "#d6d3d1",
-            "fill-opacity": 0.65,
-            "fill-outline-color": "#b8b5b2",
-          },
-        });
-      }
-    });
+    map.on("load", () => setMapLoaded(true));
 
     map.on("error", (event) => {
       console.error("Mapbox error:", event);
@@ -1027,6 +1119,26 @@ const ResidentHome = () => {
       mapRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
+    if (map.getLayer("evacway-buildings")) return;
+
+    map.addLayer({
+      id: "evacway-buildings",
+      type: "fill",
+      source: "composite",
+      "source-layer": "building",
+      minzoom: 12,
+      paint: {
+        "fill-color": "#d6d3d1",
+        "fill-opacity": 0.65,
+        "fill-outline-color": "#b8b5b2",
+      },
+    });
+  }, [mapLoaded]);
 
   // --------------------------------------------------
   // Change map style
@@ -1693,6 +1805,14 @@ const ResidentHome = () => {
 
     const sourceId = "evacuation-route";
     const layerId = "evacuation-route-line";
+    const flowLayerId = "evacuation-route-flow";
+
+    cancelAnimationFrame(flowFrameRef.current);
+    flowFrameRef.current = null;
+
+    if (map.getLayer(flowLayerId)) {
+      map.removeLayer(flowLayerId);
+    }
 
     if (map.getLayer(layerId)) {
       map.removeLayer(layerId);
@@ -1786,6 +1906,19 @@ const ResidentHome = () => {
       return;
     }
 
+    map.addLayer({
+      id: flowLayerId,
+      type: "line",
+      source: sourceId,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#ffffff",
+        "line-width": 2,
+        "line-opacity": 0.85,
+        "line-dasharray": [0, 4, 3],
+      },
+    });
+
     const destinationElement = createSimpleMarker(
       "evacuation-destination-marker"
     );
@@ -1821,17 +1954,6 @@ const ResidentHome = () => {
 
     const coordinates = [destinationCoordinates, ...routeCoordinates];
 
-    if (myLocation) {
-      const userCoordinates = getValidCoordinates([
-        myLocation.lng,
-        myLocation.lat,
-      ]);
-
-      if (userCoordinates) {
-        coordinates.push(userCoordinates);
-      }
-    }
-
     if (coordinates.length > 0) {
       const bounds = new mapboxgl.LngLatBounds();
 
@@ -1845,7 +1967,42 @@ const ResidentHome = () => {
         maxZoom: 16,
       });
     }
-  }, [route, mapLoaded, myLocation]);
+
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const sequence = [
+        [0, 4, 3], [0.5, 4, 2.5], [1, 4, 2], [1.5, 4, 1.5],
+        [2, 4, 1], [2.5, 4, 0.5], [3, 4, 0], [0, 0.5, 3, 3.5],
+        [0, 1, 3, 3], [0, 1.5, 3, 2.5], [0, 2, 3, 2],
+        [0, 2.5, 3, 1.5], [0, 3, 3, 1], [0, 3.5, 3, 0.5],
+      ];
+      let lastFrame = -1;
+
+      const animateRoute = (timestamp) => {
+        if (mapRef.current !== map || !map.isStyleLoaded() || !map.getLayer(flowLayerId)) {
+          flowFrameRef.current = null;
+          return;
+        }
+
+        const frame = Math.floor(timestamp / 60) % sequence.length;
+        if (frame !== lastFrame) {
+          map.setPaintProperty(flowLayerId, "line-dasharray", sequence[frame]);
+          lastFrame = frame;
+        }
+
+        flowFrameRef.current = requestAnimationFrame(animateRoute);
+      };
+
+      flowFrameRef.current = requestAnimationFrame(animateRoute);
+    }
+
+    return () => {
+      cancelAnimationFrame(flowFrameRef.current);
+      flowFrameRef.current = null;
+      if (map.getLayer(flowLayerId)) {
+        map.removeLayer(flowLayerId);
+      }
+    };
+  }, [route, mapLoaded]);
 
   // --------------------------------------------------
   // Enable browser location
@@ -1898,6 +2055,8 @@ const ResidentHome = () => {
   function handleFindRoute() {
     setRouteError("");
     setRoute(null);
+    routeDataRef.current = null;
+    stopWalkingNavigation("");
 
     if (!navigator.geolocation) {
       setRouteError("Your browser doesn't support location access.");
@@ -1931,7 +2090,32 @@ const ResidentHome = () => {
 
           setRouteIsMine(assignedCenterId != null);
 
-          setRoute(result);
+          let routeToDisplay = result;
+          if (result.evacuation_center) {
+            try {
+              routeToDisplay = {
+                ...result,
+                ...(await getWalkingDirections(
+                  [pos.coords.latitude, pos.coords.longitude],
+                  result.evacuation_center
+                )),
+              };
+            } catch (directionsError) {
+              setRouteError(
+                directionsError.message ||
+                  "Turn-by-turn directions are unavailable. Showing the available evacuation route."
+              );
+            }
+          } else {
+            setRouteError("Walking directions are unavailable for this route.");
+          }
+
+          routeDataRef.current = routeToDisplay;
+          setRoute(routeToDisplay);
+          activeWalkingStepRef.current = 0;
+          setActiveWalkingStep(0);
+          setNavigationRemainingMeters(routeToDisplay.walking_distance_meters ?? null);
+          setNavigationRemainingSeconds(routeToDisplay.walking_duration_seconds ?? null);
 
           setLocationPermission("granted");
         } catch (err) {
@@ -1963,18 +2147,182 @@ const ResidentHome = () => {
     );
   }
 
+  function stopWalkingNavigation(status = "Navigation stopped.") {
+    navigationActiveRef.current = false;
+    setNavigationActive(false);
+    setNavigationStatus(status);
+
+    if (navigationWatchIdRef.current != null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(navigationWatchIdRef.current);
+      navigationWatchIdRef.current = null;
+    }
+  }
+
+  function handleStartWalkingNavigation() {
+    const currentRoute = routeDataRef.current || route;
+    const destination = currentRoute?.evacuation_center;
+
+    if (!navigator.geolocation) {
+      setRouteError("Your browser doesn't support live location tracking.");
+      return;
+    }
+
+    if (!destination) {
+      setRouteError("This route has no evacuation-center destination.");
+      return;
+    }
+
+    if (navigationWatchIdRef.current != null) {
+      navigator.geolocation.clearWatch(navigationWatchIdRef.current);
+    }
+
+    setRouteError("");
+    navigationActiveRef.current = true;
+    setNavigationActive(true);
+    setNavigationStatus("Waiting for GPS...");
+    lastRerouteAtRef.current = 0;
+
+    navigationWatchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        if (!navigationActiveRef.current) return;
+
+        const location = [position.coords.latitude, position.coords.longitude];
+        const accuracy = Math.round(position.coords.accuracy || 0);
+        setMyLocation({ lat: location[0], lng: location[1] });
+        setNavigationAccuracy(accuracy);
+        setLocationPermission("granted");
+
+        const map = mapRef.current;
+        if (map) {
+          map.easeTo({
+            center: [location[1], location[0]],
+            zoom: Math.max(map.getZoom(), 16),
+            pitch: 40,
+            bearing:
+              Number.isFinite(position.coords.heading) && position.coords.heading >= 0
+                ? position.coords.heading
+                : map.getBearing(),
+            duration: 500,
+            essential: true,
+          });
+        }
+
+        const latestRoute = routeDataRef.current || currentRoute;
+        const target = latestRoute?.evacuation_center || destination;
+        const targetCoordinates = getValidCoordinates([
+          target.longitude ?? target.lng,
+          target.latitude ?? target.lat,
+        ]);
+
+        if (targetCoordinates) {
+          const targetLatLng = [targetCoordinates[1], targetCoordinates[0]];
+          if (getDistanceMeters(location, targetLatLng) <= 25) {
+            setNavigationRemainingMeters(0);
+            setNavigationRemainingSeconds(0);
+            stopWalkingNavigation("Arrived at the evacuation center.");
+            return;
+          }
+        }
+
+        const steps = latestRoute?.walking_steps || [];
+        let closestStep = activeWalkingStepRef.current;
+        let closestDistance = Infinity;
+        steps.forEach((step, index) => {
+          if (index < activeWalkingStepRef.current) return;
+          const maneuver = step.maneuver?.location;
+          if (!Array.isArray(maneuver)) return;
+
+          const distance = getDistanceMeters(location, [maneuver[1], maneuver[0]]);
+          if (distance < closestDistance) {
+            closestDistance = distance;
+            closestStep = index;
+          }
+        });
+
+        if (steps.length > 0) {
+          activeWalkingStepRef.current = closestStep;
+          setActiveWalkingStep(closestStep);
+          const remainingSteps = steps.slice(closestStep);
+          setNavigationRemainingMeters(
+            remainingSteps.reduce((total, step) => total + Number(step.distance || 0), 0)
+          );
+          setNavigationRemainingSeconds(
+            remainingSteps.reduce((total, step) => total + Number(step.duration || 0), 0)
+          );
+          setNavigationStatus(
+            steps[closestStep]?.maneuver?.instruction || "Continue along the route."
+          );
+        } else {
+          setNavigationStatus("Follow the highlighted route to the center.");
+        }
+
+        const offRouteDistance = getDistanceFromRoute(location, latestRoute?.route || []);
+        const now = Date.now();
+        if (
+          offRouteDistance > 60 &&
+          !reroutingRef.current &&
+          now - lastRerouteAtRef.current > 15000
+        ) {
+          reroutingRef.current = true;
+          lastRerouteAtRef.current = now;
+          setNavigationStatus("Off route. Recalculating...");
+
+          getWalkingDirections(location, target)
+            .then((walkingDirections) => {
+              const updatedRoute = { ...latestRoute, ...walkingDirections };
+              routeDataRef.current = updatedRoute;
+              setRoute(updatedRoute);
+              activeWalkingStepRef.current = 0;
+              setActiveWalkingStep(0);
+              setNavigationRemainingMeters(walkingDirections.walking_distance_meters);
+              setNavigationRemainingSeconds(walkingDirections.walking_duration_seconds);
+            })
+            .catch((error) => {
+              setNavigationStatus(error.message || "Unable to recalculate route.");
+            })
+            .finally(() => {
+              reroutingRef.current = false;
+            });
+        }
+      },
+      (error) => {
+        const messages = {
+          1: "Location access was denied. Allow location access to navigate.",
+          2: "GPS signal was lost. Check Location Services and try again.",
+          3: "GPS update timed out. Keep navigation open and try again.",
+        };
+        stopWalkingNavigation("GPS tracking stopped.");
+        setRouteError(messages[error.code] || "Live location tracking failed.");
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 1000,
+      }
+    );
+  }
+
   // --------------------------------------------------
   // Clear route
   // --------------------------------------------------
 
   function handleClearRoute() {
+    stopWalkingNavigation("");
     setRoute(null);
+    routeDataRef.current = null;
     setRouteError("");
+
+    cancelAnimationFrame(flowFrameRef.current);
+    flowFrameRef.current = null;
 
     const map = mapRef.current;
 
     if (!map) {
       return;
+    }
+
+    if (map.getLayer("evacuation-route-flow")) {
+      map.removeLayer("evacuation-route-flow");
     }
 
     if (map.getLayer("evacuation-route-line")) {
@@ -2415,6 +2763,8 @@ const ResidentHome = () => {
   // --------------------------------------------------
 
   const firstName = myCenter?.household_head_name?.split(" ")[0] || "";
+  const currentWalkingManeuver =
+    route?.walking_steps?.[activeWalkingStep]?.maneuver || null;
 
   return (
     <div className="resident-home">
@@ -2738,7 +3088,11 @@ const ResidentHome = () => {
       </button>
 
       {/* Bottom action bar */}
-      <div className={isMobile ? "bottom-bar mobile" : "bottom-bar"}>
+      <div
+        className={`bottom-bar ${isMobile ? "mobile" : ""} ${
+          navigationActive ? "navigation-active" : ""
+        }`}
+      >
         <button onClick={handleReportMapClick} className="action-btn">
           <FontAwesomeIcon icon={faMapPin} />
 
@@ -2784,7 +3138,7 @@ const ResidentHome = () => {
 
       {/* Route panel */}
       {route && (
-        <div className="route-panel">
+        <div className={`route-panel ${navigationActive ? "is-navigating" : ""}`}>
           <button
             onClick={handleClearRoute}
             className="route-panel-close"
@@ -2805,29 +3159,65 @@ const ResidentHome = () => {
             </div>
           )}
 
-          <div className="route-panel-distance">{route.distance_km} km away</div>
+          <div className="route-panel-distance">
+            {navigationActive && navigationRemainingMeters != null
+              ? `${(navigationRemainingMeters / 1000).toFixed(1)} km remaining · ${Math.ceil(
+                  (navigationRemainingSeconds || 0) / 60
+                )} min`
+              : `${Number(route.distance_km || 0).toFixed(1)} km by walking`}
+          </div>
 
           <div className="route-modes">
-            <div className="route-mode">
+            <div className="route-mode route-mode-walking">
               <FontAwesomeIcon icon={faPersonWalking} />
-
-              <span>{estimateTravelTimes(route.distance_km).walking} min</span>
-            </div>
-
-            <div className="route-mode">
-              <FontAwesomeIcon icon={faMotorcycle} />
-
               <span>
-                {estimateTravelTimes(route.distance_km).motorcycle} min
+                {route.estimated_time_min ??
+                  estimateTravelTimes(route.distance_km || 0).walking} min
               </span>
             </div>
+          </div>
 
-            <div className="route-mode">
-              <FontAwesomeIcon icon={faCar} />
-
-              <span>{estimateTravelTimes(route.distance_km).car} min</span>
+          <div className="route-guidance">
+            <div className="route-turn-arrow" aria-hidden="true">
+              <FontAwesomeIcon
+                icon={faArrowUp}
+                style={{
+                  transform: `rotate(${getManeuverRotation(
+                    currentWalkingManeuver?.modifier
+                  )}deg)`,
+                }}
+              />
+            </div>
+            <div className="route-guidance-copy">
+              <span>{navigationActive ? "NEXT INSTRUCTION" : "WALKING DIRECTIONS"}</span>
+              <strong>
+                {currentWalkingManeuver?.instruction ||
+                  (navigationActive
+                    ? navigationStatus || "Follow the highlighted route."
+                    : "Start navigation to get live turn-by-turn guidance.")}
+              </strong>
+              {navigationActive && navigationAccuracy != null && (
+                <small>GPS accuracy approximately {navigationAccuracy} m</small>
+              )}
             </div>
           </div>
+
+          {navigationStatus && (
+            <div className="route-navigation-status">{navigationStatus}</div>
+          )}
+
+          <button
+            type="button"
+            className={`walking-navigation-button ${navigationActive ? "is-active" : ""}`}
+            onClick={
+              navigationActive
+                ? () => stopWalkingNavigation()
+                : handleStartWalkingNavigation
+            }
+          >
+            <FontAwesomeIcon icon={navigationActive ? faXmark : faPersonWalking} />
+            {navigationActive ? "Stop navigation" : "Start walking navigation"}
+          </button>
         </div>
       )}
 
@@ -3000,6 +3390,17 @@ const ResidentHome = () => {
           onSubmitted={handleReportSubmitted}
         />
       )}
+
+      <MapLegend
+        bottomOffset={100}
+        items={[
+          { id: "report", label: "Hazard report" },
+          { id: "blocked", label: "Road blocked" },
+          { id: "closed", label: "Closed road" },
+          { id: "center", label: "Evacuation center" },
+          { id: "room", label: "Room" },
+        ]}
+      />
     </div>
   );
 };

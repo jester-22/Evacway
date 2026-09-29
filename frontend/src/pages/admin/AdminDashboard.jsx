@@ -38,6 +38,8 @@ function AdminDashboard() {
   const [centers, setCenters] = useState(null);
   const [hazardZones, setHazardZones] = useState(null);
   const [logs, setLogs] = useState([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState("");
 
   const { user, logout } = useAuth();
   const isMobile = useIsMobile();
@@ -53,10 +55,16 @@ function AdminDashboard() {
 
   useEffect(() => {
     if (tab === "settings") {
+      setLogsLoading(true);
+      setLogsError("");
       api
         .getLogs()
         .then(setLogs)
-        .catch(() => {});
+        .catch((error) => {
+          setLogs([]);
+          setLogsError(error.message || "Could not load activity logs.");
+        })
+        .finally(() => setLogsLoading(false));
     }
   }, [tab]);
 
@@ -105,7 +113,14 @@ function AdminDashboard() {
         )}
 
         {/* SYSTEM & LOGS */}
-        {tab === "settings" && <SystemAndLogs logs={logs} user={user} />}
+        {tab === "settings" && (
+          <SystemAndLogs
+            logs={logs}
+            user={user}
+            loading={logsLoading}
+            error={logsError}
+          />
+        )}
       </div>
     </div>
   );

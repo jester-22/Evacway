@@ -460,6 +460,10 @@
   max-width: none;
 }
 
+.bottom-bar.navigation-active {
+  display: none;
+}
+
 .bottom-bar.mobile .action-btn,
 .bottom-bar.mobile .action-btn-primary {
   flex: 1;
@@ -632,6 +636,107 @@
 .route-mode svg {
   color: var(--brand);
   font-size: 15px;
+}
+
+.route-mode-walking {
+  flex-direction: row;
+  justify-content: center;
+  gap: 9px;
+  padding: 9px 12px;
+  color: var(--brand-dark);
+  background: var(--tint);
+}
+
+.route-guidance {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border-left: 3px solid var(--brand);
+  background: #f3f7fc;
+  text-align: left;
+}
+
+.route-turn-arrow {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 42px;
+  border-radius: 9px;
+  color: var(--brand);
+  background: #e1edfb;
+  font-size: 21px;
+}
+
+.route-turn-arrow svg {
+  transition: transform 180ms ease;
+}
+
+.route-guidance-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.route-guidance-copy > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.route-guidance-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.route-guidance-copy small,
+.route-navigation-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.route-navigation-status {
+  margin-top: 7px;
+  text-align: left;
+}
+
+.walking-navigation-button {
+  width: 100%;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--brand);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.walking-navigation-button:hover {
+  background: var(--brand-dark);
+}
+
+.walking-navigation-button.is-active {
+  background: #b42318;
+}
+
+.walking-navigation-button.is-active:hover {
+  background: #912018;
+}
+
+.route-panel.is-navigating {
+  width: min(380px, calc(100% - 28px));
 }
 
 
@@ -1278,10 +1383,16 @@
 
   .route-panel {
     top: auto;
-    bottom: 92px;
+    bottom: 16px;
 
     width: calc(100% - 24px);
     min-width: 0;
+  }
+
+  .route-panel.is-navigating {
+    width: calc(100% - 24px);
+    max-height: 62vh;
+    overflow-y: auto;
   }
 
   .toast-error,

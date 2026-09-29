@@ -10,6 +10,8 @@ import {
   faClock,
   faMagnifyingGlassPlus,
   faRoad,
+  faWater,
+  faMountain,
   faLockOpen,
   faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
@@ -28,6 +30,21 @@ function statusMeta(status) {
   return STATUS_META[status] || { label: status, color: "#6b7280", bg: "#f3f4f6" };
 }
 
+function reportIcon(reportType = "") {
+  const type = reportType.toLowerCase();
+  if (type.includes("road") || type.includes("block") || type.includes("obstruct")) return faRoad;
+  if (type.includes("flood")) return faWater;
+  if (type.includes("landslide")) return faMountain;
+  return faTriangleExclamation;
+}
+
+function reportPhotoUrl(path) {
+  if (!path) return "";
+  return /^https?:\/\//i.test(path)
+    ? path
+    : `${BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
 function HazardReportReview() {
   const [reports, setReports] = useState([]);
   const [statusFilter, setStatusFilter] = useState("pending");
@@ -36,6 +53,9 @@ function HazardReportReview() {
   const [loading, setLoading] = useState(true);
   const [lightbox, setLightbox] = useState(false);
   const [reopening, setReopening] = useState(false);
+  const [barangayName, setBarangayName] = useState("");
+  const [barangayLoading, setBarangayLoading] = useState(false);
+  const [photoError, setPhotoError] = useState(false);
 
   useEffect(() => {
     load();
@@ -49,9 +69,74 @@ function HazardReportReview() {
       .finally(() => setLoading(false));
   }
 
+  useEffect(() => {
+    if (!selected) {
+      setBarangayName("");
+      setBarangayLoading(false);
+      return;
+    }
+
+    const knownBarangay =
+      selected.barangay_name ||
+      selected.barangay ||
+      selected.location?.barangay ||
+      selected.address?.barangay;
+
+    if (knownBarangay) {
+      setBarangayName(knownBarangay);
+      setBarangayLoading(false);
+      return;
+    }
+
+    const latitude = Number(selected.latitude);
+    const longitude = Number(selected.longitude);
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !token) {
+      setBarangayName("");
+      setBarangayLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setBarangayLoading(true);
+
+    const url =
+      `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${longitude}` +
+      `&latitude=${latitude}&types=locality,neighborhood,place&access_token=${encodeURIComponent(token)}`;
+
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) throw new Error("Barangay lookup failed.");
+        return response.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const properties = data.features?.[0]?.properties;
+        const context = properties?.context || {};
+        const resolvedName =
+          context.neighborhood?.name ||
+          context.locality?.name ||
+          context.place?.name ||
+          properties?.name ||
+          "";
+        setBarangayName(resolvedName);
+      })
+      .catch(() => {
+        if (!cancelled) setBarangayName("");
+      })
+      .finally(() => {
+        if (!cancelled) setBarangayLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
+
   function openReport(r) {
     setSelected(r);
     setResponseNotes(r.response_notes || "");
+    setPhotoError(false);
   }
 
   function backToList() {
@@ -64,6 +149,7 @@ function HazardReportReview() {
     try {
       const result = await api.validateHazardReport(selected.id, status, responseNotes);
       setSelected(null);
+      setPhotoError(false);
       setResponseNotes("");
       setLightbox(false);
       load();
@@ -92,6 +178,7 @@ function HazardReportReview() {
       // that doesn't exist on the model. This is what keeps the detail
       // panel and the list in sync with what really happened server-side.
       setSelected(result);
+      setPhotoError(false);
       setReports((prev) => prev.map((r) => (r.id === result.id ? result : r)));
 
       if (result.reopened_roads?.length) {
@@ -156,10 +243,9 @@ function HazardReportReview() {
                   className={`hr-row ${selected?.id === r.id ? "is-selected" : ""}`}
                   style={{ borderLeftColor: meta.color }}
                 >
-                  <div
-                    className="hr-thumb"
-                    style={{ backgroundImage: `url(${BASE_URL}${r.photo_url})` }}
-                  />
+                  <span className="hr-row-icon" aria-hidden="true">
+                    <FontAwesomeIcon icon={reportIcon(r.report_type)} />
+                  </span>
                   <div className="hr-row-body">
                     <div className="hr-row-top">
                       <strong className="hr-row-title">{r.report_type}</strong>
@@ -167,7 +253,9 @@ function HazardReportReview() {
                         {meta.label}
                       </span>
                     </div>
-                    <div className="hr-row-desc">{r.description.slice(0, 60)}</div>
+                    <div className="hr-row-desc">
+                      {(r.description || "No description provided").slice(0, 60)}
+                    </div>
                     <div className="hr-row-meta">
                       {new Date(r.submitted_at).toLocaleString()}
                       {r.status === "validated" && (
@@ -202,6 +290,10 @@ function HazardReportReview() {
             <div className="hr-detail">
               <div className="hr-detail-header">
                 <h3 className="hr-detail-title">
+                  <FontAwesomeIcon
+                    icon={reportIcon(selected.report_type)}
+                    className="hr-detail-type-icon"
+                  />
                   {selected.report_type} <span className="hr-detail-id">#{selected.id}</span>
                 </h3>
                 <span
@@ -242,25 +334,66 @@ function HazardReportReview() {
                 </div>
               )}
 
-              <button className="hr-photo-btn" onClick={() => setLightbox(true)}>
-                <img src={`${BASE_URL}${selected.photo_url}`} alt="hazard report" className="hr-photo" />
-                <span className="hr-photo-zoom">
-                  <FontAwesomeIcon icon={faMagnifyingGlassPlus} /> View full size
-                </span>
-              </button>
+              {selected.photo_url && !photoError ? (
+                <button className="hr-photo-btn" onClick={() => setLightbox(true)}>
+                  <img
+                    src={reportPhotoUrl(selected.photo_url)}
+                    alt={`${selected.report_type || "Hazard"} report`}
+                    className="hr-photo"
+                    onError={() => setPhotoError(true)}
+                  />
+                  <span className="hr-photo-zoom">
+                    <FontAwesomeIcon icon={faMagnifyingGlassPlus} /> View full size
+                  </span>
+                </button>
+              ) : (
+                <div className="hr-photo-missing">
+                  <FontAwesomeIcon icon={reportIcon(selected.report_type)} />
+                  <span>{photoError ? "Report photo unavailable" : "No photo attached"}</span>
+                </div>
+              )}
 
-              <p className="hr-description">{selected.description}</p>
+              <p className="hr-description">
+                {selected.description || "No additional description provided."}
+              </p>
 
-              <div className="hr-meta-box">
-                <FontAwesomeIcon icon={faLocationDot} className="hr-meta-icon" />
-                <span>
-                  {selected.latitude.toFixed(5)}, {selected.longitude.toFixed(5)}
-                </span>
+              <div className="hr-detail-facts">
+                <div className="hr-detail-fact hr-detail-fact--location">
+                  <FontAwesomeIcon icon={faLocationDot} />
+                  <span>Barangay</span>
+                  <strong>
+                    {barangayLoading
+                      ? "Finding barangay..."
+                      : barangayName || "Barangay not available"}
+                  </strong>
+                </div>
+                <div className="hr-detail-fact">
+                  <FontAwesomeIcon icon={faLocationDot} />
+                  <span>Coordinates</span>
+                  <strong>
+                    {Number.isFinite(Number(selected.latitude)) &&
+                    Number.isFinite(Number(selected.longitude))
+                      ? `${Number(selected.latitude).toFixed(5)}, ${Number(selected.longitude).toFixed(5)}`
+                      : "Location unavailable"}
+                  </strong>
+                </div>
+                <div className="hr-detail-fact">
+                  <FontAwesomeIcon icon={faClock} />
+                  <span>Submitted</span>
+                  <strong>
+                    {selected.submitted_at
+                      ? new Date(selected.submitted_at).toLocaleString()
+                      : "Time unavailable"}
+                  </strong>
+                </div>
               </div>
-              <div className="hr-meta-box">
-                <FontAwesomeIcon icon={faClock} className="hr-meta-icon" />
-                <span>{new Date(selected.submitted_at).toLocaleString()}</span>
-              </div>
+
+              {selected.response_notes && (
+                <div className="hr-response-notes">
+                  <span>Previous response notes</span>
+                  <p>{selected.response_notes}</p>
+                </div>
+              )}
 
               <label className="hr-label">Response notes</label>
               <textarea
@@ -285,13 +418,13 @@ function HazardReportReview() {
         </div>
       </div>
 
-      {lightbox && selected && (
+      {lightbox && selected?.photo_url && !photoError && (
         <div className="hr-overlay" onClick={() => setLightbox(false)}>
           <button className="hr-lightbox-close" onClick={() => setLightbox(false)} aria-label="Close">
             <FontAwesomeIcon icon={faXmark} />
           </button>
           <img
-            src={`${BASE_URL}${selected.photo_url}`}
+            src={reportPhotoUrl(selected.photo_url)}
             alt="hazard report full size"
             className="hr-lightbox-img"
             onClick={(e) => e.stopPropagation()}
@@ -764,6 +897,306 @@ const CSS = `
   .hr-back-btn { display: inline-flex; }
   .hr-detail-panel { padding: 16px; }
   .hr-photo-btn { max-width: 100%; }
+}
+
+/* Hazard review workspace */
+.hr-page {
+  --hr-blue: #1759a6;
+  --hr-blue-deep: #103d78;
+  --hr-blue-pale: #edf4fc;
+  --hr-ink: #18314d;
+  --hr-muted: #6c7d92;
+  --hr-line: #d9e3ee;
+  height: 100%;
+  color: var(--hr-ink);
+  background: #f2f6fb;
+  font-family: "Public Sans", "Segoe UI", sans-serif;
+}
+
+.hr-shell {
+  border-color: #dce5ef;
+  border-radius: 7px;
+  box-shadow: 0 3px 12px rgba(23, 55, 91, 0.06);
+}
+
+.hr-list-panel {
+  width: 350px;
+  border-right-color: var(--hr-line);
+  background: #fbfcfe;
+}
+
+.hr-filter-row {
+  gap: 5px;
+  padding: 12px;
+  border-bottom-color: var(--hr-line);
+  background: #fff;
+}
+
+.hr-filter-btn {
+  min-height: 31px;
+  padding: 5px 10px;
+  border-color: #d5dfeb;
+  border-radius: 5px;
+  color: #566b83;
+  font-size: 11px;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.hr-filter-btn:hover {
+  border-color: #86acd7;
+  color: var(--hr-blue);
+  background: #f4f8fd;
+}
+
+.hr-filter-btn.is-active {
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(20, 65, 117, 0.16);
+}
+
+.hr-row {
+  position: relative;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px;
+  border-bottom-color: #e8edf3;
+  transition: background 140ms ease, box-shadow 140ms ease;
+  animation: hr-row-enter 260ms both;
+}
+
+.hr-row:nth-child(2) { animation-delay: 30ms; }
+.hr-row:nth-child(3) { animation-delay: 60ms; }
+.hr-row:nth-child(4) { animation-delay: 90ms; }
+
+.hr-row:hover {
+  background: #f1f6fc;
+}
+
+.hr-row.is-selected {
+  background: #eaf3ff;
+  box-shadow: inset 3px 0 0 #1f66ad;
+}
+
+.hr-row-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 42px;
+  border: 1px solid #d5e3f2;
+  border-radius: 6px;
+  color: var(--hr-blue);
+  background: #edf4fc;
+  font-size: 16px;
+  transition: color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.hr-row:hover .hr-row-icon {
+  color: #fff;
+  background: var(--hr-blue);
+  transform: translateY(-1px);
+}
+
+.hr-row-body { flex: 1; }
+
+.hr-row-title {
+  color: #173858;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.hr-row-desc {
+  color: #5f7084;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.hr-row-meta {
+  color: #8090a3;
+  font-size: 10px;
+}
+
+.hr-pill {
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.hr-detail-panel {
+  padding: 22px 26px;
+  background: #fff;
+}
+
+.hr-detail-header {
+  align-items: center;
+  padding-bottom: 13px;
+  border-bottom: 1px solid #e5ebf2;
+  animation: hr-detail-enter 300ms ease both;
+}
+
+.hr-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #173858;
+  font-size: 18px;
+}
+
+.hr-detail-type-icon {
+  color: var(--hr-blue);
+  font-size: 16px;
+}
+
+.hr-road-banner,
+.hr-resolved-banner {
+  border-radius: 5px;
+  animation: hr-detail-enter 240ms ease both;
+}
+
+.hr-photo-btn {
+  max-width: 560px;
+  max-height: 360px;
+  margin: 16px 0 12px;
+  border-radius: 6px;
+  background: #eaf0f6;
+  animation: hr-photo-enter 360ms ease both;
+}
+
+.hr-photo {
+  max-height: 360px;
+  object-fit: cover;
+}
+
+.hr-photo-missing {
+  width: min(100%, 560px);
+  min-height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin: 16px 0 12px;
+  border: 1px dashed #c9d6e5;
+  border-radius: 6px;
+  color: #71849b;
+  background: #f6f9fc;
+  font-size: 12px;
+}
+
+.hr-photo-missing svg { color: var(--hr-blue); }
+
+.hr-description {
+  max-width: 680px;
+  margin: 12px 0;
+  color: #405670;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.hr-detail-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.hr-detail-fact {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 4px;
+  padding: 10px;
+  border: 1px solid #e0e8f1;
+  border-radius: 5px;
+  background: #f8fafd;
+}
+
+.hr-detail-fact > svg {
+  grid-row: span 2;
+  margin-top: 2px;
+  color: var(--hr-blue);
+  font-size: 12px;
+}
+
+.hr-detail-fact > span,
+.hr-response-notes > span {
+  color: #78899d;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.hr-detail-fact strong {
+  overflow-wrap: anywhere;
+  color: #304963;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.hr-response-notes {
+  max-width: 680px;
+  padding: 11px 12px;
+  border-left: 3px solid #7398c3;
+  background: #f4f7fb;
+}
+
+.hr-response-notes p {
+  margin: 5px 0 0;
+  color: #405670;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hr-back-btn { color: var(--hr-blue); }
+
+.hr-back-btn:hover { color: var(--hr-blue-deep); }
+
+.hr-actions { gap: 8px; }
+
+.hr-approve-btn,
+.hr-reject-btn,
+.hr-unblock-btn {
+  min-height: 37px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.hr-approve-btn:hover,
+.hr-reject-btn:hover,
+.hr-unblock-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+@keyframes hr-row-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hr-detail-enter {
+  from { opacity: 0; transform: translateX(7px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes hr-photo-enter {
+  from { opacity: 0; transform: scale(0.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 768px) {
+  .hr-list-panel { width: 100%; }
+  .hr-detail-facts { grid-template-columns: 1fr; }
+  .hr-detail-panel { padding: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hr-page *,
+  .hr-page *::before,
+  .hr-page *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 `;
 

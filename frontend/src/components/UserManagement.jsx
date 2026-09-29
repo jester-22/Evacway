@@ -26,11 +26,13 @@ function UserManagement() {
   const [form, setForm] = useState({
     name: "",
     email: "",
-    password: "",
     contact_number: "",
     role: "lgu_personnel",
   });
   const [error, setError] = useState("");
+  const [emailError, setEmailError] = useState("");
+  const [emailAvailable, setEmailAvailable] = useState(null);
+  const [emailChecking, setEmailChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
 
@@ -45,6 +47,30 @@ function UserManagement() {
 
   function loadLogs() {
     api.getLogs().then(setLogs).catch(() => setLogs([]));
+  }
+
+  async function checkEmailAvailability(value) {
+    const email = value.trim().toLowerCase();
+    if (!email) {
+      setEmailError("");
+      setEmailAvailable(null);
+      return false;
+    }
+
+    setEmailChecking(true);
+    try {
+      const result = await api.checkUserEmailAvailability(email);
+      const exists = Boolean(result.exists);
+      setEmailAvailable(!exists);
+      setEmailError(exists ? "This email is already registered." : "");
+      return !exists;
+    } catch (err) {
+      setEmailAvailable(null);
+      setEmailError(err.message || "Could not verify this email address.");
+      return false;
+    } finally {
+      setEmailChecking(false);
+    }
   }
 
   function getUserActivities(user) {
@@ -73,15 +99,8 @@ function UserManagement() {
     setResettingPassword(true);
 
     try {
-      if (api.resetUserPassword) {
-        await api.resetUserPassword(user.id);
-      } else if (api.resetPassword) {
-        await api.resetPassword(user.id);
-      } else {
-        alert(`Password reset request created for ${user.name}.`);
-      }
-
-      alert(`Password reset sent for ${user.name}.`);
+      const result = await api.resetUserPassword(user.id);
+      alert(result.message || `Password setup email sent to ${user.email}.`);
     } catch (err) {
       alert(err.message || "Unable to reset password right now.");
     } finally {
@@ -94,16 +113,27 @@ function UserManagement() {
     setSaving(true);
     setError("");
     try {
-      await api.createUser(form);
+      const email = form.email.trim().toLowerCase();
+      const isAvailable = await checkEmailAvailability(email);
+      if (!isAvailable) {
+        setError("Use an email address that is not already registered.");
+        return;
+      }
+
+      const result = await api.createUser({
+        ...form,
+        name: form.name.trim(),
+        email,
+      });
       setForm({
         name: "",
         email: "",
-        password: "",
         contact_number: "",
         role: "lgu_personnel",
       });
       setShowForm(false);
       load();
+      alert(result.message || `Account setup email sent to ${email}.`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -125,6 +155,8 @@ function UserManagement() {
   function closeModal() {
     setShowForm(false);
     setError("");
+    setEmailError("");
+    setEmailAvailable(null);
   }
 
   function closeUserModal() {
@@ -338,10 +370,26 @@ function UserManagement() {
                     type="email"
                     placeholder="name@lgu.gov.ph"
                     value={form.email}
-                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                    onChange={(e) => {
+                      setForm({ ...form, email: e.target.value });
+                      setEmailError("");
+                      setEmailAvailable(null);
+                    }}
+                    onBlur={(e) => checkEmailAvailability(e.target.value)}
                     className="um-input"
                     required
                   />
+                  <small
+                    className={`um-email-hint ${
+                      emailError ? "is-error" : emailAvailable ? "is-available" : ""
+                    }`}
+                  >
+                    {emailChecking
+                      ? "Checking email availability..."
+                      : emailError || (emailAvailable
+                        ? "Email is available. A secure setup link will be sent."
+                        : "We will email a secure password setup link.")}
+                  </small>
                 </label>
 
                 <label className="um-field">
@@ -356,17 +404,6 @@ function UserManagement() {
                   />
                 </label>
 
-                <label className="um-field um-field--full">
-                  <span className="um-label">Temporary password</span>
-                  <input
-                    type="password"
-                    placeholder="Shared with the user privately"
-                    value={form.password}
-                    onChange={(e) => setForm({ ...form, password: e.target.value })}
-                    className="um-input"
-                    required
-                  />
-                </label>
               </div>
 
               <div className="um-modal-actions">
@@ -374,7 +411,7 @@ function UserManagement() {
                   Cancel
                 </button>
                 <button type="submit" disabled={saving} className="um-save-btn">
-                  {saving ? "Creating account…" : "Create account"}
+                  {saving ? "Creating account…" : "Create & email setup link"}
                 </button>
               </div>
             </form>
@@ -437,7 +474,7 @@ function UserManagement() {
                   onClick={() => handleResetPassword(selectedUser)}
                   disabled={resettingPassword}
                 >
-                  {resettingPassword ? "Resetting..." : "Reset password"}
+                  {resettingPassword ? "Sending email..." : "Email password reset"}
                 </button>
               </div>
 
@@ -969,6 +1006,20 @@ const CSS = `
   font-size: 12px;
   font-weight: 700;
   color: #64748b;
+}
+
+.um-email-hint {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.um-email-hint.is-error {
+  color: #b42318;
+}
+
+.um-email-hint.is-available {
+  color: #18704f;
 }
 
 .um-input {

@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import {
+  faClock,
+  faDownload,
+  faRotate,
+  faTriangleExclamation,
+} from "@fortawesome/free-solid-svg-icons";
 import "./SystemAndLogs.css";
 
-function SystemAndLogs({ logs = [], user = null }) {
+function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) {
   const isPersonnel = user?.role === "lgu_personnel";
   const [showOnlyMyLogs, setShowOnlyMyLogs] = useState(isPersonnel);
 
@@ -92,7 +99,13 @@ function SystemAndLogs({ logs = [], user = null }) {
               </div>
             )}
 
-            <button type="button" className="sal-export-btn" onClick={handleExport}>
+            <button
+              type="button"
+              className="sal-export-btn"
+              onClick={handleExport}
+              disabled={loading || totalLogs === 0}
+            >
+              <FontAwesomeIcon icon={faDownload} />
               Export CSV
             </button>
           </div>
@@ -101,17 +114,17 @@ function SystemAndLogs({ logs = [], user = null }) {
         <div className="sal-summary-grid">
           <div className="sal-stat-card">
             <span>{showOnlyMyLogs ? "My events" : "Total events"}</span>
-            <strong>{totalLogs}</strong>
+            <strong>{loading ? "..." : totalLogs}</strong>
           </div>
 
           <div className="sal-stat-card is-accent">
             <span>Latest activity</span>
-            <strong>{lastActivity}</strong>
+            <strong>{loading ? "Syncing activity" : lastActivity}</strong>
           </div>
 
           <div className="sal-stat-card">
             <span>Status</span>
-            <strong>{totalLogs > 0 ? "Online" : "Idle"}</strong>
+            <strong>{loading ? "Loading" : totalLogs > 0 ? "Online" : "Idle"}</strong>
           </div>
         </div>
 
@@ -121,9 +134,31 @@ function SystemAndLogs({ logs = [], user = null }) {
             <span>{totalLogs} entries</span>
           </div>
 
-          {filteredLogs.length === 0 ? (
+          {loading ? (
+            <div className="sal-loading" role="status" aria-live="polite">
+              <div className="sal-loading-indicator">
+                <FontAwesomeIcon icon={faRotate} spin />
+              </div>
+              <div className="sal-loading-copy">
+                <strong>Loading activity</strong>
+                <span>Synchronizing recent system events</span>
+              </div>
+              <div className="sal-skeleton-list" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+          ) : error ? (
+            <div className="sal-error-state" role="alert">
+              <FontAwesomeIcon icon={faTriangleExclamation} />
+              <span>{error}</span>
+            </div>
+          ) : filteredLogs.length === 0 ? (
             <div className="sal-empty">
-              <div className="sal-empty-icon">◎</div>
+              <div className="sal-empty-icon">
+                <FontAwesomeIcon icon={faClock} />
+              </div>
               <p>
                 {showOnlyMyLogs
                   ? "No activity has been recorded for your account yet."

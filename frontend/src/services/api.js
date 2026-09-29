@@ -153,6 +153,9 @@ export const api = {
   getUsers: () =>
     request("/api/users"),
 
+  checkUserEmailAvailability: (email) =>
+    request(`/api/users/check-email?email=${encodeURIComponent(email)}`),
+
   createUser: (payload) =>
     request("/api/users", {
       method: "POST",
@@ -175,6 +178,12 @@ export const api = {
   resetPassword: (id) =>
     request(`/api/users/${id}/reset-password`, {
       method: "POST",
+    }),
+
+  completePasswordSetup: (token, password) =>
+    request("/api/auth/password/setup", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
     }),
 
   getLogs: () =>

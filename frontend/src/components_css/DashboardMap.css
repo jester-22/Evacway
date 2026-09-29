@@ -819,3 +819,215 @@
     border-radius: 16px 16px 0 0;
   }
 }
+
+.dashboard-layer-tabs {
+  gap: 7px;
+}
+
+.layer-tab {
+  border: 1px solid rgba(190, 207, 226, 0.9);
+  color: #244768;
+  box-shadow: 0 3px 12px rgba(19, 47, 79, 0.16);
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.layer-tab-flood-active {
+  border-color: #1684b8;
+  color: #07577d;
+  background: #ccefff;
+}
+
+.layer-tab-landslide-active {
+  border-color: #c78426;
+  color: #71430c;
+  background: #ffedc9;
+}
+
+.dashboard-hazard-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  animation: dashboard-hazard-appear 220ms ease both;
+}
+
+.dashboard-hazard-marker-icon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  background: #d48a18;
+  box-shadow: 0 3px 9px rgba(21, 42, 66, 0.3);
+  font-size: 15px;
+}
+
+.dashboard-hazard-marker-icon::after {
+  position: absolute;
+  inset: -5px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: 0;
+  content: "";
+  animation: dashboard-hazard-pulse 2.2s ease-out infinite;
+}
+
+.dashboard-hazard-marker.risk-high .dashboard-hazard-marker-icon {
+  background: #c53737;
+}
+
+.dashboard-hazard-marker.risk-medium .dashboard-hazard-marker-icon {
+  background: #d48a18;
+}
+
+.dashboard-hazard-marker.risk-low .dashboard-hazard-marker-icon {
+  background: #2477b7;
+}
+
+.dashboard-hazard-marker-label {
+  max-width: 170px;
+  padding: 3px 7px;
+  overflow: hidden;
+  border: 1px solid #d3deea;
+  border-radius: 4px;
+  color: #244360;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(15, 36, 59, 0.2);
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-hazard-marker:hover .dashboard-hazard-marker-icon {
+  border-color: #dbeafe;
+  filter: brightness(0.94);
+}
+
+.dashboard-hazard-marker:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+.dashboard-hazard-popup {
+  min-width: 190px;
+  max-width: 270px;
+  color: #233c55;
+  font: 12px/1.45 "Public Sans", "Segoe UI", sans-serif;
+}
+
+.dashboard-hazard-popup > strong {
+  display: block;
+  margin: 0 20px 5px 0;
+  color: #153e6c;
+  font-size: 14px;
+}
+
+.dashboard-hazard-popup > div + div {
+  margin-top: 3px;
+}
+
+.dashboard-hazard-popup-risk {
+  font-weight: 700;
+}
+
+.dashboard-hazard-popup-risk.risk-high { color: #b42318; }
+.dashboard-hazard-popup-risk.risk-medium { color: #9a5b08; }
+.dashboard-hazard-popup-risk.risk-low { color: #1759a6; }
+
+.dashboard-hazard-popup p {
+  margin: 7px 0 0;
+  white-space: normal;
+}
+
+.dashboard-hazard-popup-photo {
+  display: block;
+  width: 230px;
+  max-width: 100%;
+  max-height: 150px;
+  margin-top: 8px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.dashboard-hazard-popup-no-photo {
+  display: block;
+  margin-top: 7px;
+  color: #718198;
+  font-size: 11px;
+}
+
+.mdp-panel {
+  border: 1px solid #d9e4f0;
+  border-radius: 8px;
+  box-shadow: 0 12px 34px rgba(12, 36, 66, 0.2);
+  animation: dashboard-panel-enter 220ms ease both;
+}
+
+.mdp-header {
+  background: #123e73;
+}
+
+.mdp-badge {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.mdp-section-title {
+  color: #1759a6;
+}
+
+.mdp-list-item {
+  border-radius: 6px;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.mdp-list-item:hover {
+  background: #f0f6fd;
+}
+
+@keyframes dashboard-hazard-appear {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dashboard-hazard-pulse {
+  0% { opacity: 0.45; transform: scale(0.72); }
+  100% { opacity: 0; transform: scale(1.3); }
+}
+
+@keyframes dashboard-panel-enter {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (max-width: 768px) {
+  .dashboard-hazard-marker-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 13px;
+  }
+
+  .dashboard-hazard-marker-label {
+    max-width: 130px;
+    font-size: 9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-hazard-marker,
+  .dashboard-hazard-marker-icon::after,
+  .mdp-panel {
+    animation: none !important;
+    transition: none !important;
+  }
+}

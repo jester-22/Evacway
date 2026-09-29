@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext"; // adjust the path to match where AuthContext lives
 import "./LandingPage.css";
+import "./LandingPage.motion.css"; // must come after LandingPage.css
 
 const MAP_KEY = [
   { id: "flood", label: "Flood-prone areas", text: "Where flooding is most likely." },
@@ -10,6 +11,13 @@ const MAP_KEY = [
   { id: "center", label: "Evacuation centers", text: "Where you can go, with details." },
   { id: "route", label: "Safe route", text: "From your location to a center." },
 ];
+
+const RAIN = Array.from({ length: 16 }, (_, i) => ({
+  x: (i * 71 + 30) % 620,
+  d: `${-((i * 0.41) % 1.7).toFixed(2)}s`,
+}));
+
+const WAVE = "M-150 0q37.5 -12 75 0t75 0t75 0t75 0t75 0t75 0t75 0t75 0t75 0t75 0t75 0t75 0";
 
 function Logo() {
   return (
@@ -25,22 +33,35 @@ function Logo() {
 }
 
 function MapArt() {
+  const routeD = "M110 630C220 600 330 640 410 580C470 535 505 450 500 370C495 290 485 235 480 172";
+  const floodD = "M40 300C90 250 220 260 290 320C340 370 300 450 220 480C140 510 40 470 30 400Z";
   return (
     <svg
       className="ew-mapart"
       viewBox="0 0 600 720"
       role="img"
-      aria-label="Illustration of a map. A green route leads from your location, around a flood zone and a closed road, to an evacuation center."
+      aria-label="Animated map illustration. A blue route leads from your location, around a flood zone and a closed road, to an evacuation center while rain falls."
     >
       <defs>
         <pattern id="ew-hatch" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
           <line x1="0" y1="0" x2="0" y2="9" className="m-hatch" />
         </pattern>
+        <clipPath id="ew-floodclip">
+          <path d={floodD} />
+        </clipPath>
+        <path id="ew-route-path" d={routeD} />
       </defs>
 
       <rect width="600" height="720" className="m-land" />
 
-      <path className="m-flood" d="M40 300C90 250 220 260 290 320C340 370 300 450 220 480C140 510 40 470 30 400Z" />
+      <path className="m-flood" d={floodD} />
+      <g clipPath="url(#ew-floodclip)">
+        <g className="m-ripples">
+          <path d={WAVE} transform="translate(0 330)" />
+          <path d={WAVE} transform="translate(-40 385)" />
+          <path d={WAVE} transform="translate(-90 440)" />
+        </g>
+      </g>
       <path className="m-slide" fill="url(#ew-hatch)" d="M300 50C350 25 400 40 410 90C400 135 350 150 315 125C295 105 290 70 300 50Z" />
 
       <g>
@@ -51,11 +72,16 @@ function MapArt() {
         <path className="m-road" d="M300 260C330 190 380 100 400 0" />
       </g>
       <path className="m-closed" d="M205 450C240 380 270 320 300 260" />
+      <g transform="translate(252 355)">
+        <circle r="15" className="m-sign" />
+        <path className="m-x" d="M-6 -6L6 6M6 -6L-6 6" />
+      </g>
 
-      <path className="m-route" pathLength="1" d="M110 630C220 600 330 640 410 580C470 535 505 450 500 370C495 290 485 235 480 172" />
+      <path className="m-route" pathLength="1" d={routeD} />
+      <path className="m-flow" d={routeD} />
 
       <text x="70" y="335" className="m-label">Flood-prone</text>
-      <text x="252" y="408" className="m-label">Road closed</text>
+      <text x="272" y="408" className="m-label">Road closed</text>
 
       <g transform="translate(110 630)">
         <circle className="m-pulse" r="14" />
@@ -63,14 +89,59 @@ function MapArt() {
       </g>
       <text x="110" y="672" textAnchor="middle" className="m-label">You are here</text>
 
+      <circle className="m-walker" r="7" visibility="hidden">
+        <set attributeName="visibility" to="visible" begin="2.7s" />
+        <animateMotion dur="8s" begin="2.7s" repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear">
+          <mpath href="#ew-route-path" />
+        </animateMotion>
+      </circle>
+
       <g className="m-center-g" transform="translate(480 150)">
         <rect x="-21" y="-21" width="42" height="42" rx="9" className="m-center" />
         <path className="m-house" d="M-10 1L0 -9L10 1M-7 -1V10H7V-1" />
         <text x="0" y="-34" textAnchor="middle" className="m-label">Evacuation center</text>
       </g>
+
+      <g className="m-rain" aria-hidden="true">
+        {RAIN.map((r, i) => (
+          <line key={i} x1={r.x} y1="0" x2={r.x - 8} y2="26" style={{ "--d": r.d }} />
+        ))}
+      </g>
     </svg>
   );
 }
+
+function StepIcon({ kind }) {
+  return (
+    <svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true">
+      {kind === "locate" && (
+        <>
+          <circle className="s-pulse" cx="18" cy="18" r="9" />
+          <circle cx="18" cy="18" r="6" fill="var(--brand)" stroke="#fff" strokeWidth="2" />
+        </>
+      )}
+      {kind === "hazards" && (
+        <>
+          <path className="s-flood" d="M5 22C8 12 20 10 27 15C33 20 28 30 18 31C10 32 4 28 5 22Z" />
+          <path d="M9 24q4-4 8 0t8 0" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" />
+        </>
+      )}
+      {kind === "route" && (
+        <>
+          <path className="s-route" d="M6 29C14 29 12 17 20 17S24 8 30 7" />
+          <circle cx="6" cy="29" r="3.5" fill="var(--brand)" />
+          <rect x="26" y="3" width="8" height="8" rx="2" fill="var(--brand)" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+const STEPS = [
+  { kind: "locate", title: "Share your location", text: "EvacWay finds where you are on the map." },
+  { kind: "hazards", title: "See what is blocked", text: "Flood and landslide areas and closed roads show up in place." },
+  { kind: "route", title: "Follow the route", text: "Head along the safest route to an evacuation center." },
+];
 
 /** Sign-in dialog for LGU personnel and admins. Opens with dialogRef.current.showModal(). */
 function LoginDialog({ dialogRef }) {
@@ -182,29 +253,22 @@ function LoginDialog({ dialogRef }) {
 
 export default function LandingPage() {
   const dialogRef = useRef(null);
-  const { user, logout } = useAuth();
 
   const openLogin = () => dialogRef.current?.showModal();
 
   return (
     <div className="ew">
-      <header className="ew-header">
-        <Logo />
-        {user ? (
-          <div className="ew-session">
-            <span>Signed in as {user.name || user.email}</span>
-            <button type="button" className="ew-btn ew-btn-quiet" onClick={logout}>
-              Log out
-            </button>
-          </div>
-        ) : (
+      <div className="ew-stage">
+        <span className="ew-cloud ew-cloud-a" aria-hidden="true" />
+        <span className="ew-cloud ew-cloud-b" aria-hidden="true" />
+
+        <header className="ew-header">
+          <Logo />
           <button type="button" className="ew-btn ew-btn-quiet" onClick={openLogin}>
             Log in
           </button>
-        )}
-      </header>
+        </header>
 
-      <main>
         <section className="ew-hero">
           <div className="ew-hero-copy">
             <h1>Know where to go before the water rises.</h1>
@@ -220,8 +284,39 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="ew-map">
-            <MapArt />
+          <div className="ew-map-wrap">
+            <div className="ew-map">
+              <MapArt />
+            </div>
+            <span className="ew-chip ew-chip-a" aria-hidden="true"><i />Flood risk: high</span>
+            <span className="ew-chip ew-chip-b" aria-hidden="true"><i />Road closed ahead</span>
+            <span className="ew-chip ew-chip-c" aria-hidden="true"><i />Route found</span>
+          </div>
+        </section>
+
+        <div className="ew-waves" aria-hidden="true">
+          <span className="ew-wave ew-wave-1" />
+          <span className="ew-wave ew-wave-2" />
+          <span className="ew-wave ew-wave-3" />
+        </div>
+      </div>
+
+      <main>
+        <section className="ew-steps" aria-labelledby="ew-steps-title">
+          <div className="ew-wrap">
+            <h2 id="ew-steps-title">Three steps to a safe route</h2>
+            <ol className="ew-steps-list">
+              {STEPS.map((s, i) => (
+                <li key={s.kind} className="ew-step">
+                  <div className="ew-step-icon">
+                    <StepIcon kind={s.kind} />
+                    <span className="ew-step-n">{i + 1}</span>
+                  </div>
+                  <h3>{s.title}</h3>
+                  <p>{s.text}</p>
+                </li>
+              ))}
+            </ol>
           </div>
         </section>
 
@@ -240,19 +335,17 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {!user && (
-          <section className="ew-account">
-            <div className="ew-wrap ew-account-inner">
-              <div>
-                <h2>Logging in is for LGU staff and admins.</h2>
-                <p>Everyone else can open the map and get a route without an account.</p>
-              </div>
-              <button type="button" className="ew-btn ew-btn-outline" onClick={openLogin}>
-                Log in
-              </button>
+        <section className="ew-account">
+          <div className="ew-wrap ew-account-inner">
+            <div>
+              <h2>Logging in is for LGU staff and admins.</h2>
+              <p>Everyone else can open the map and get a route without an account.</p>
             </div>
-          </section>
-        )}
+            <button type="button" className="ew-btn ew-btn-outline" onClick={openLogin}>
+              Log in
+            </button>
+          </div>
+        </section>
       </main>
 
       <footer className="ew-footer">

@@ -1,0 +1,110 @@
+/* Import AFTER BarangayManager.css. CSS only: no changes to your logic.
+   Selectors are prefixed with .barangay-page so they win over the
+   "workspace refresh" block already in your stylesheet. */
+
+/* ---------- Layout fixes ---------- */
+
+/* JSX uses .room-stat (Capacity / Assigned / Available) but the CSS only
+   styled .room-capacity, so those three blocks were unstyled. */
+.barangay-page .room-stat {
+  min-width: 58px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.barangay-page .room-stat span { color: #6b7280; font-size: 9px; }
+.barangay-page .room-stat strong { color: #24425f; font-size: 11px; }
+
+/* Cards show 4 stats (Population, Families, Residents, Centers) in a
+   3-column grid, which pushed "Centers" onto its own row. */
+.barangay-page .card-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.barangay-page .card-stat { padding: 0 7px; }
+
+/* ---------- Keyframes ---------- */
+@keyframes bg-rise { from { opacity: 0; translate: 0 14px; } to { opacity: 1; translate: 0 0; } }
+@keyframes bg-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bg-drop { from { opacity: 0; translate: 0 -6px; } to { opacity: 1; translate: 0 0; } }
+@keyframes bg-pop { from { opacity: 0; scale: 0.96; translate: 0 10px; } to { opacity: 1; scale: 1; translate: 0 0; } }
+@keyframes bg-grow { from { scale: 0 1; } to { scale: 1 1; } }
+@keyframes bg-bob { 50% { translate: 0 -3px; } }
+
+/* ---------- One orchestrated moment: the barangay list arrives ---------- */
+.barangay-page .barangay-card {
+  animation: bg-rise 0.5s cubic-bezier(0.2, 0.75, 0.2, 1) both;
+}
+.barangay-page .barangay-card:nth-child(1) { animation-delay: 0.05s; }
+.barangay-page .barangay-card:nth-child(2) { animation-delay: 0.1s; }
+.barangay-page .barangay-card:nth-child(3) { animation-delay: 0.15s; }
+.barangay-page .barangay-card:nth-child(4) { animation-delay: 0.2s; }
+.barangay-page .barangay-card:nth-child(5) { animation-delay: 0.25s; }
+.barangay-page .barangay-card:nth-child(6) { animation-delay: 0.3s; }
+.barangay-page .barangay-card:nth-child(7) { animation-delay: 0.35s; }
+.barangay-page .barangay-card:nth-child(8) { animation-delay: 0.4s; }
+.barangay-page .barangay-card:nth-child(n + 9) { animation-delay: 0.45s; }
+
+/* ---------- Hover: answers the pointer ---------- */
+.barangay-page .barangay-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 26px -14px rgba(23, 89, 166, 0.45);
+}
+.barangay-page .barangay-card:hover .barangay-icon {
+  background: #dcecff;
+  border-color: #a9c9ec;
+}
+.barangay-page .view-button svg { transition: translate 0.18s ease; }
+.barangay-page .view-button:hover svg { translate: 4px 0; }
+.barangay-page .back-button svg { transition: translate 0.18s ease; }
+.barangay-page .back-button:hover svg { translate: -3px 0; }
+
+/* ---------- Switching views: what changed shows up ---------- */
+.barangay-page .barangay-detail { animation: bg-fade 0.3s ease-out both; }
+.barangay-page .detail-header-card { animation: bg-rise 0.4s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+.barangay-page .stat-box { animation: bg-rise 0.45s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+.barangay-page .stat-box:nth-child(1) { animation-delay: 0.1s; }
+.barangay-page .stat-box:nth-child(2) { animation-delay: 0.16s; }
+.barangay-page .stat-box:nth-child(3) { animation-delay: 0.22s; }
+.barangay-page .stat-box:nth-child(4) { animation-delay: 0.28s; }
+.barangay-page .barangay-tab-content { animation: bg-fade 0.25s ease-out both; }
+.barangay-page .barangay-tab.active::after {
+  transform-origin: left center;
+  animation: bg-grow 0.28s ease-out both;
+}
+
+.barangay-page .evacuation-center-card { animation: bg-rise 0.4s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+.barangay-page .evacuation-center-card:nth-child(2) { animation-delay: 0.08s; }
+.barangay-page .evacuation-center-card:nth-child(3) { animation-delay: 0.16s; }
+.barangay-page .evacuation-center-card:nth-child(n + 4) { animation-delay: 0.24s; }
+
+/* Room dropdown opens with a soft slide */
+.barangay-page .room-dropdown-content { animation: bg-drop 0.22s ease-out both; }
+.barangay-page .room-family { animation: bg-fade 0.3s ease-out both; }
+
+/* ---------- Modals ---------- */
+.barangay-page .modal-overlay { animation: bg-fade 0.2s ease-out both; }
+.barangay-page .import-modal,
+.barangay-page .family-modal { animation: bg-pop 0.28s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+.barangay-page .member-card { animation: bg-rise 0.35s ease-out both; }
+.barangay-page .member-card:nth-child(2) { animation-delay: 0.06s; }
+.barangay-page .member-card:nth-child(3) { animation-delay: 0.12s; }
+.barangay-page .member-card:nth-child(n + 4) { animation-delay: 0.18s; }
+
+/* Upload zone reacts before a file is chosen */
+.barangay-page .file-upload:hover .upload-icon { animation: bg-bob 1s ease-in-out infinite; }
+.barangay-page .file-upload { transition: border-color 0.15s, background 0.15s; }
+
+/* Alerts arrive rather than appear */
+.barangay-page .alert { animation: bg-drop 0.25s ease-out both; }
+
+/* Empty states settle in */
+.barangay-page .empty-state { animation: bg-rise 0.45s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .barangay-page *,
+  .barangay-page *::before,
+  .barangay-page *::after { animation: none !important; }
+  .barangay-page .barangay-card:hover { transform: none; }
+}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../services/api";
 import "../components_css/BarangayManager.css";
-
+import "../components_css/BarangayManager.motion.css";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPlus,

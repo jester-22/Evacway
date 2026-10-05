@@ -9,7 +9,7 @@
   width: 14px;
   height: 14px;
   margin: -7px 0 0 -7px;
-  background: #2563eb;
+  background: var(--brand);
   border: 3px solid white;
   border-radius: 50%;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
@@ -23,7 +23,7 @@
   width: 24px;
   height: 24px;
   margin: -12px 0 0 -12px;
-  background: rgba(37, 99, 235, 0.35);
+  background: rgba(27, 95, 193, 0.3);
   border-radius: 50%;
   animation: pulse 2s ease-out infinite;
   z-index: 1;

@@ -3637,3 +3637,34 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+.barangay-workspace-tabs {
+  width: fit-content;
+  display: flex;
+  gap: 4px;
+  margin: 0 0 18px;
+  padding: 4px;
+  border: 1px solid #d3dcea;
+  border-radius: 7px;
+  background: #e7edf5;
+}
+
+.barangay-workspace-tabs button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 5px;
+  color: #4a5a73;
+  background: transparent;
+  font: 600 12px "Public Sans", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.barangay-workspace-tabs button.active {
+  color: #0f3f8c;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(14, 31, 58, 0.12);
+}

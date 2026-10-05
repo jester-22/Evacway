@@ -2,7 +2,8 @@ from functools import wraps
 
 from flask import jsonify
 
-from flask_jwt_extended import verify_jwt_in_request, get_jwt
+from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
+from models import User, db
 
 
 def role_required(*allowed_roles):
@@ -15,9 +16,9 @@ def role_required(*allowed_roles):
             try:
                 verify_jwt_in_request()
 
-                claims = get_jwt()
+                user = db.session.get(User, get_jwt_identity())
 
-                if claims.get("role") not in allowed_roles:
+                if not user or not user.is_active or user.role not in allowed_roles:
                     return jsonify({
                         "error": "You don't have permission to do this"
                     }), 403

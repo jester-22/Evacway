@@ -192,8 +192,8 @@
 }
 
 .layer-tab-flood-active {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: #e6eefb;
+  color: var(--brand-dark);
 }
 
 .layer-tab-landslide-active {
@@ -232,7 +232,7 @@
   align-items: center;
   justify-content: center;
 
-  background: #2563eb;
+  background: var(--brand);
   color: #ffffff;
 
   border: 2px solid #ffffff;
@@ -278,13 +278,13 @@
 }
 
 .evacway-room-marker:hover .evacway-room-icon {
-  background: #1d4ed8;
+  background: var(--brand-dark);
 
   box-shadow: 0 3px 9px rgba(0, 0, 0, 0.45);
 }
 
 .evacway-room-marker:hover .evacway-room-label {
-  color: #2563eb;
+  color: var(--brand-dark);
 }
 
 /* ==========================================
@@ -382,7 +382,8 @@
   flex-direction: column;
 
   background: #ffffff;
-  border-radius: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.22);
 
   overflow: hidden;
@@ -395,7 +396,7 @@
 
   padding: 14px;
 
-  background: #1e3a8a;
+  background: var(--brand-dark);
   color: #ffffff;
 
   flex-shrink: 0;
@@ -586,8 +587,8 @@
 
   border-radius: 8px;
 
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: #e6eefb;
+  color: var(--brand-dark);
 
   font-size: 13px;
   font-weight: 700;
@@ -656,7 +657,7 @@
   border: none;
   background: none;
 
-  color: #2563eb;
+  color: var(--brand-dark);
 
   font: inherit;
   font-size: 12.5px;
@@ -702,7 +703,7 @@
 
 .mdp-bar-fill {
   height: 100%;
-  background: #2563eb;
+  background: var(--brand);
   transition: width 0.25s ease;
 }
 
@@ -748,13 +749,13 @@
 }
 
 .mdp-btn-primary {
-  border-color: #2563eb;
-  background: #2563eb;
+  border-color: var(--brand);
+  background: var(--brand);
   color: #ffffff;
 }
 
 .mdp-btn-primary:hover {
-  background: #1d4ed8;
+  background: var(--brand-dark);
 }
 
 /* ==========================================

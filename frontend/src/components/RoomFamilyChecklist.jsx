@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
+import { displayEntityName } from "../utils/displayEntityName";
 
 function RoomFamilyChecklist({
   room,
@@ -163,7 +164,7 @@ function RoomFamilyChecklist({
                   </strong>
 
                   <div>
-                    {family.barangay}
+                    {displayEntityName(family.barangay, "Barangay not set")}
                   </div>
 
                   <small>

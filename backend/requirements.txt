@@ -12,7 +12,9 @@ Jinja2==3.1.6
 MarkupSafe==3.0.3
 networkx==3.6.1
 numpy==2.5.2
+openpyxl>=3.1,<4
 packaging==26.3
+pywebpush>=2.0,<3.0
 psycopg2-binary==2.9.12
 PyJWT==2.13.0
 shapely==2.1.2

@@ -4,7 +4,7 @@
 }
 .leaflet-container{
   width:100%; height:100%;
-  background:#e9e9e9 !important;
+  background:#dbe6f3 !important;
 }
 .leaflet-popup-content-wrapper{
   background:var(--bg-2); color:var(--text-0);
@@ -21,13 +21,13 @@
 
 .legend{
   position:absolute; left:16px; bottom:16px;
-  background:rgba(22,27,34,0.92);
+  background:rgba(255,255,255,0.96);
   border:1px solid var(--line);
   border-radius:var(--radius);
   padding:12px 14px;
   font-family:var(--font-mono);
   font-size:11px;
-  color:var(--text-1);
+  color:var(--text-0);
   backdrop-filter:blur(6px);
   z-index:400;
 }

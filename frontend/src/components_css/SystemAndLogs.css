@@ -215,12 +215,12 @@
 }
 
 .sal-page {
-  --sal-blue: #1759a6;
-  --sal-blue-deep: #103d78;
-  --sal-ink: #18314d;
-  --sal-muted: #6c7d92;
-  --sal-line: #d9e3ee;
-  background: #f3f6fa;
+  --sal-blue: var(--brand);
+  --sal-blue-deep: var(--brand-dark);
+  --sal-ink: var(--ink);
+  --sal-muted: var(--muted);
+  --sal-line: var(--line);
+  background: var(--paper);
   color: var(--sal-ink);
 }
 

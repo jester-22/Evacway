@@ -24,6 +24,9 @@ class Config:
     MAIL_FROM_ADDRESS = os.environ.get("MAIL_FROM_ADDRESS", "")
     MAIL_FROM_NAME = os.environ.get("MAIL_FROM_NAME", "EvacWay System")
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+    VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+    VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+    VAPID_CLAIMS_SUB = os.environ.get("VAPID_CLAIMS_SUB", "")
     PASSWORD_SETUP_TOKEN_MAX_AGE = int(
         os.environ.get("PASSWORD_SETUP_TOKEN_MAX_AGE", "3600")
     )

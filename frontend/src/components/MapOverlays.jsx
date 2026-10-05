@@ -4,9 +4,10 @@ import {
   faChevronDown,
   faChevronUp,
   faCircle,
-  faMapLocationDot,
   faTriangleExclamation,
   faRoad,
+  faWater,
+  faMountain,
   faBuildingColumns,
   faDoorOpen,
 } from "@fortawesome/free-solid-svg-icons";
@@ -31,6 +32,8 @@ const LEGEND_ICONS = {
   "risk-high": faCircle,
   "risk-medium": faCircle,
   "risk-low": faCircle,
+  "flood-zone": faWater,
+  "landslide-zone": faMountain,
 };
 
 export function MapLegend({ items = DEFAULT_ITEMS, bottomOffset = 18 }) {

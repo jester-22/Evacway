@@ -395,6 +395,55 @@ class SystemLog(db.Model):
 
 
 # ---------------------------------------------------------
+# STAFF NOTIFICATIONS
+# ---------------------------------------------------------
+class StaffNotification(db.Model):
+    __tablename__ = 'staff_notifications'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    event_type = db.Column(db.String(32), nullable=False)
+    resource_type = db.Column(db.String(24), nullable=False)
+    resource_id = db.Column(db.Integer, nullable=False)
+    title = db.Column(db.String(120), nullable=False)
+    message = db.Column(db.String(240), nullable=False)
+    is_emergency = db.Column(db.Boolean, nullable=False, default=False)
+    is_read = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=philippines_now, index=True)
+
+
+# ---------------------------------------------------------
+# RESIDENT RESCUE REQUESTS
+# ---------------------------------------------------------
+class RescueRequest(db.Model):
+    __tablename__ = 'rescue_requests'
+
+    id = db.Column(db.Integer, primary_key=True)
+    description = db.Column(db.Text, nullable=False)
+    location_description = db.Column(db.String(255))
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    status_updated_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, nullable=False, default=philippines_now, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=philippines_now, onupdate=philippines_now)
+
+
+# ---------------------------------------------------------
+# WEB PUSH SUBSCRIPTIONS
+# ---------------------------------------------------------
+class PushSubscription(db.Model):
+    __tablename__ = 'push_subscriptions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    endpoint = db.Column(db.String(2048), nullable=False, unique=True)
+    p256dh = db.Column(db.String(255), nullable=False)
+    auth = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=philippines_now)
+
+
+# ---------------------------------------------------------
 # BARANGAYS
 # ---------------------------------------------------------
 class Barangay(db.Model):

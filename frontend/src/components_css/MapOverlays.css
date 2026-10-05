@@ -327,6 +327,8 @@
 .mo-closed { color: #c73535; }
 .mo-center { color: #20845c; }
 .mo-room { color: #2563eb; }
+.mo-flood-zone { color: #0a9fb5; }
+.mo-landslide-zone { color: #8b5e34; }
 
 .mo-stats {
   position: absolute;

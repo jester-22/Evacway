@@ -21,6 +21,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api, BASE_URL } from "../services/api";
+import { displayEntityName } from "../utils/displayEntityName";
 import "../components_css/DashboardMap.css";
 import { isValidatedReport, createReportMarker, createReportPopup } from "./mapReports";
 import "../components_css/MapOverlays.css";
@@ -212,6 +213,7 @@ function DashboardMap({
   rooms = EMPTY_ARRAY,
   onRoomClick,
   pendingRoomLocation = null,
+  focusLocation = null,
 }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -308,6 +310,20 @@ function DashboardMap({
         console.error("Boundary error:", err);
       });
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !focusLocation) return;
+    const latitude = Number(focusLocation.latitude);
+    const longitude = Number(focusLocation.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+
+    map.flyTo({
+      center: [longitude, latitude],
+      zoom: Math.max(map.getZoom(), 15),
+      duration: 900,
+    });
+  }, [mapLoaded, focusLocation]);
 
   /*
    * Load roads
@@ -582,14 +598,19 @@ function DashboardMap({
       paint: {
         "fill-color": [
           "match",
-          ["get", "risk_level"],
-          "high",
-          "#dc2626",
-          "medium",
-          "#f59e0b",
-          "#facc15",
+          ["get", "hazard_type"],
+          "flood",
+          "#0a9fb5",
+          "landslide",
+          "#8b5e34",
+          "#c8372d",
         ],
-        "fill-opacity": 0.3,
+        "fill-opacity": [
+          "match", ["get", "risk_level"],
+          "high", 0.34,
+          "medium", 0.25,
+          0.18,
+        ],
       },
     });
 
@@ -600,14 +621,46 @@ function DashboardMap({
       paint: {
         "line-color": [
           "match",
-          ["get", "risk_level"],
-          "high",
-          "#dc2626",
-          "medium",
-          "#f59e0b",
-          "#facc15",
+          ["get", "hazard_type"],
+          "flood",
+          "#087e99",
+          "landslide",
+          "#684323",
+          "#a82e27",
         ],
-        "line-width": 1.5,
+        "line-width": 2.5,
+      },
+    });
+
+    map.addLayer({
+      id: "hazard-zones-labels",
+      type: "symbol",
+      source: "hazard-zones",
+      minzoom: 10,
+      maxzoom: 14,
+      layout: {
+        "text-field": [
+          "concat",
+          ["case", ["==", ["get", "hazard_type"], "flood"], "Flood zone", "Landslide zone"],
+          " · ",
+          ["to-string", ["get", "risk_level"]],
+        ],
+        "text-font": ["Open Sans Semibold", "Arial Unicode MS Regular"],
+        "text-size": 12,
+        "text-max-width": 12,
+        "text-padding": 8,
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+      },
+      paint: {
+        "text-color": [
+          "match", ["get", "hazard_type"],
+          "flood", "#075b70",
+          "landslide", "#553719",
+          "#81251f",
+        ],
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.5,
       },
     });
   }, [mapLoaded, hazardZones, visibleLayers]);
@@ -1406,13 +1459,14 @@ function DashboardMap({
          */
         if (centers?.features) {
           centers.features.forEach((center) => {
-            const name =
-              center.properties?.name ||
-              center.properties?.center_name ||
-              "Evacuation Center";
+            const name = displayEntityName(
+              center.properties?.name ?? center.properties?.center_name,
+              "Evacuation Center"
+            );
 
-            const address =
-              center.properties?.address || center.properties?.location || "";
+            const address = displayEntityName(
+              center.properties?.address ?? center.properties?.location
+            );
 
             const searchValue = `${name} ${address}`.toLowerCase();
 
@@ -1582,17 +1636,16 @@ function DashboardMap({
     null;
 
   const selectedCenterName =
-    selectedCenterProperties.name ||
-    selectedCenterProperties.center_name ||
-    "Evacuation Center";
+    displayEntityName(
+      selectedCenterProperties.name ?? selectedCenterProperties.center_name,
+      "Evacuation Center"
+    );
 
   const selectedCenterAddress =
-    selectedCenterProperties.address || selectedCenterProperties.location || null;
+    displayEntityName(selectedCenterProperties.address ?? selectedCenterProperties.location) || null;
 
   const selectedCenterBarangay =
-    selectedCenterProperties.barangay_name ||
-    selectedCenterProperties.barangay ||
-    null;
+    displayEntityName(selectedCenterProperties.barangay_name ?? selectedCenterProperties.barangay) || null;
 
   const selectedCenterCapacity =
     selectedCenterProperties.capacity ??
@@ -1882,7 +1935,7 @@ function DashboardMap({
                         <strong>{headName}</strong>
                         <small>
                           {members} {members === 1 ? "member" : "members"}
-                          {family.barangay ? `, ${family.barangay}` : ""}
+                          {displayEntityName(family.barangay) ? `, ${displayEntityName(family.barangay)}` : ""}
                         </small>
                         {family.address && <small>{family.address}</small>}
                       </span>

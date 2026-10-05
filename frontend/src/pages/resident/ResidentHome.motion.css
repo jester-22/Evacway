@@ -23,7 +23,7 @@
 
 /* ---------- Chrome polish ---------- */
 .top-bar {
-  background: linear-gradient(100deg, var(--navy) 0%, #0e4aa8 100%);
+  background: rgba(255, 255, 255, 0.97);
 }
 .bottom-bar {
   backdrop-filter: blur(14px) saturate(1.4);

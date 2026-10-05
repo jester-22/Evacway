@@ -1,19 +1,66 @@
-@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-:root{
-  --radius:10px;
-  --font-display:'Oswald',sans-serif;
-  --font-body:'Inter',sans-serif;
-  --font-mono:'JetBrains Mono',monospace;
+:root {
+  --paper: #eef3fa;
+  --ink: #0e1f3a;
+  --muted: #4a5a73;
+  --brand: #1b5fc1;
+  --brand-dark: #0f3f8c;
+  --flood: #0a9fb5;
+  --slide: #8b5e34;
+  --alert: #c8372d;
+  --line: #d3dcea;
+
+  --radius: 8px;
+  --font-display: 'Bricolage Grotesque', 'Public Sans', sans-serif;
+  --font-body: 'Public Sans', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --bg-0: var(--paper);
+  --bg-1: #ffffff;
+  --bg-2: #f7f9fc;
+  --text-0: var(--ink);
+  --text-1: #334967;
+  --text-2: var(--muted);
+  --safe: #26805e;
+  --safe-dim: #e8f6ef;
+  --danger: var(--alert);
+  --danger-dim: #fcebe9;
+  --caution: #8b5e34;
+  --info: var(--brand);
 }
 
-*{box-sizing:border-box; margin:0; padding:0;}
-html,body,#root{height:100%;}
-body{
-  background:var(--bg-0);
-  color:var(--text-0);
-  font-family:var(--font-body);
-  overflow:auto;
+* { box-sizing: border-box; }
+html, body, #root { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: var(--font-body);
+  overflow: auto;
 }
-::selection{background:var(--danger); color:#fff;}
-button, input, textarea{font-family:inherit;}
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+}
+
+::selection { background: var(--brand); color: #fff; }
+button, input, textarea, select { font-family: inherit; }
+
+.network-status {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 6000;
+  max-width: calc(100vw - 24px);
+  padding: 9px 14px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--brand-dark);
+  box-shadow: 0 8px 24px rgba(14, 31, 58, 0.2);
+  font-size: 13px;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.network-status.is-offline { background: var(--alert); }
+.network-status.is-online { background: #26805e; }

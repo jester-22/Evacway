@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../services/api";
 import "../components_css/BarangayManager.css";
 import "../components_css/BarangayManager.motion.css";
+import FamilyManagement from "./FamilyManagement";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPlus,
@@ -31,6 +32,7 @@ function BarangayManager() {
   const [barangays, setBarangays] = useState([]);
   const [selectedBarangay, setSelectedBarangay] = useState(null);
   const [selectedFamily, setSelectedFamily] = useState(null);
+  const [workspaceTab, setWorkspaceTab] = useState("barangays");
 
   const [activeTab, setActiveTab] = useState("residents");
 
@@ -113,6 +115,7 @@ function BarangayManager() {
 
   async function openBarangay(id) {
     try {
+      setWorkspaceTab("barangays");
       setError("");
       setDetailLoading(true);
 
@@ -366,23 +369,27 @@ function BarangayManager() {
 
         <div>
           <h2 className="barangay-title">
-            Barangays
+            {workspaceTab === "families" ? "Families" : "Barangays"}
           </h2>
 
           <p className="barangay-subtitle">
-            Manage barangays, residents, and evacuation centers.
+            {workspaceTab === "families"
+              ? "Registered households and their evacuation assignments."
+              : "Manage barangays, residents, and evacuation centers."}
           </p>
         </div>
 
         <div className="barangay-header-actions">
 
-          <button
-            className="btn btn-primary"
-            onClick={openImportModal}
-          >
-            <FontAwesomeIcon icon={faPlus} />
-            Import Excel
-          </button>
+          {workspaceTab === "barangays" && (
+            <button
+              className="btn btn-primary"
+              onClick={openImportModal}
+            >
+              <FontAwesomeIcon icon={faPlus} />
+              Import Excel
+            </button>
+          )}
 
           <button
             className="btn btn-secondary"
@@ -394,6 +401,27 @@ function BarangayManager() {
 
         </div>
 
+      </div>
+
+      <div className="barangay-workspace-tabs" role="tablist" aria-label="Barangay workspace">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={workspaceTab === "barangays"}
+          className={workspaceTab === "barangays" ? "active" : ""}
+          onClick={() => setWorkspaceTab("barangays")}
+        >
+          <FontAwesomeIcon icon={faLocationDot} /> Barangays
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={workspaceTab === "families"}
+          className={workspaceTab === "families" ? "active" : ""}
+          onClick={() => setWorkspaceTab("families")}
+        >
+          <FontAwesomeIcon icon={faUsers} /> Families
+        </button>
       </div>
 
       {/* ERROR */}
@@ -416,7 +444,9 @@ function BarangayManager() {
           BARANGAY DETAIL
       ===================================================== */}
 
-      {selectedBarangay ? (
+      {workspaceTab === "families" ? (
+        <FamilyManagement barangays={barangays} />
+      ) : selectedBarangay ? (
 
         <div className="barangay-detail">
 

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext"; // adjust the path to match where AuthContext lives
+import { api } from "../services/api";
 import "./LandingPage.css";
 import "./LandingPage.motion.css"; // must come after LandingPage.css
 
@@ -152,6 +153,9 @@ function LoginDialog({ dialogRef }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState("");
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
 
   function close() {
     dialogRef.current?.close();
@@ -161,6 +165,29 @@ function LoginDialog({ dialogRef }) {
     setPassword("");
     setShowPassword(false);
     setError("");
+    setRecoveryMode(false);
+    setRecoveryMessage("");
+  }
+
+  function openRecovery() {
+    setError("");
+    setRecoveryMessage("");
+    setRecoveryMode(true);
+  }
+
+  async function handleRecoverySubmit(event) {
+    event.preventDefault();
+    setError("");
+    setRecoveryMessage("");
+    setRecoveryLoading(true);
+    try {
+      const result = await api.requestPasswordReset(email.trim());
+      setRecoveryMessage(result.message || "If an account matches that email, a password reset link has been sent.");
+    } catch (requestError) {
+      setError(requestError.message || "Unable to request a password reset right now.");
+    } finally {
+      setRecoveryLoading(false);
+    }
   }
 
   async function handleSubmit(e) {
@@ -186,20 +213,30 @@ function LoginDialog({ dialogRef }) {
       onClose={handleClose}
       onClick={(e) => e.target === dialogRef.current && close()}
     >
-      <form className="ew-login" onSubmit={handleSubmit}>
+      <form className="ew-login" onSubmit={recoveryMode ? handleRecoverySubmit : handleSubmit}>
         <div className="ew-login-head">
-          <h2 id="ew-login-title">EvacWay login</h2>
+          <h2 id="ew-login-title">{recoveryMode ? "Reset your password" : "EvacWay login"}</h2>
           <button type="button" className="ew-icon-btn" onClick={close} aria-label="Close">
             <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
               <path d="M4 4l10 10M14 4L4 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </button>
         </div>
-        <p className="ew-login-sub">For LGU personnel and admin accounts only.</p>
+        <p className="ew-login-sub">
+          {recoveryMode
+            ? "Enter the email address linked to your EvacWay account."
+            : "For LGU personnel and admin accounts only."}
+        </p>
 
         {error && (
           <p className="ew-error" role="alert">
             {error}
+          </p>
+        )}
+
+        {recoveryMessage && (
+          <p className="ew-recovery-message" role="status">
+            {recoveryMessage}
           </p>
         )}
 
@@ -216,36 +253,67 @@ function LoginDialog({ dialogRef }) {
           />
         </label>
 
-        <label className="ew-field">
-          <span>Password</span>
-          <div className="ew-password">
-            <input
-              type={showPassword ? "text" : "password"}
-              name="password"
-              autoComplete="current-password"
-              placeholder="Enter password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-            <button
-              type="button"
-              className="ew-toggle"
-              onClick={() => setShowPassword((v) => !v)}
-              aria-pressed={showPassword}
-            >
-              {showPassword ? "Hide" : "Show"}
-            </button>
-          </div>
-        </label>
+        {!recoveryMode && (
+          <>
+            <label className="ew-field">
+              <span>Password</span>
+              <div className="ew-password">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  name="password"
+                  autoComplete="current-password"
+                  placeholder="Enter password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+                <button
+                  type="button"
+                  className="ew-toggle"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-pressed={showPassword}
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+            </label>
+            <p className="ew-login-help">
+              <button type="button" className="ew-text-btn" onClick={openRecovery}>
+                Forgot password?
+              </button>
+            </p>
+          </>
+        )}
 
-        <button type="submit" className="ew-btn ew-btn-primary ew-btn-block" disabled={loading}>
-          {loading ? "Logging in…" : "Log in"}
+        <button
+          type="submit"
+          className="ew-btn ew-btn-primary ew-btn-block"
+          disabled={recoveryMode ? recoveryLoading : loading}
+        >
+          {recoveryMode
+            ? recoveryLoading ? "Sending link…" : "Send password reset link"
+            : loading ? "Logging in…" : "Log in"}
         </button>
 
-        <p className="ew-login-alt">
-          Just need a route? <Link to="/map">Open the map without logging in</Link>
-        </p>
+        {recoveryMode && (
+          <button
+            type="button"
+            className="ew-text-btn ew-recovery-back"
+            onClick={() => {
+              setRecoveryMode(false);
+              setRecoveryMessage("");
+              setError("");
+            }}
+          >
+            Back to login
+          </button>
+        )}
+
+        {!recoveryMode && (
+          <p className="ew-login-alt">
+            Just need a route? <Link to="/map">Open the map without logging in</Link>
+          </p>
+        )}
       </form>
     </dialog>
   );

@@ -1,0 +1,18 @@
+{
+  "name": "EvacWay",
+  "short_name": "EvacWay",
+  "description": "Safe evacuation routes and local hazard reports for Sogod.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#eef3fa",
+  "theme_color": "#1b5fc1",
+  "icons": [
+    {
+      "src": "/evacway-icon.svg",
+      "sizes": "192x192 512x512 any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

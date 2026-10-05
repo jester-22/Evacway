@@ -5,12 +5,14 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import { Link } from "react-router-dom";
 import { api, BASE_URL } from "../../services/api";
 import HazardReportModal from "../../components/HazardReportModal";
+import RescueAlertModal from "../../components/RescueAlertModal";
 import { MapLegend } from "../../components/MapOverlays";
 import { createReportPopup } from "../../components/mapReports";
 
 import { useHazardData } from "../../hooks/useHazardData";
 import { useEvacuationData } from "../../hooks/useEvacuationData";
 import { useRouting } from "../../hooks/useRouting";
+import { displayEntityName } from "../../utils/displayEntityName";
 
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { icon } from "@fortawesome/fontawesome-svg-core";
@@ -710,6 +712,7 @@ const ResidentHome = () => {
   const pickingLocationRef = useRef(false);
 
   const [pendingReportLocation, setPendingReportLocation] = useState(null);
+  const [rescueAlertOpen, setRescueAlertOpen] = useState(false);
 
   const [reportConfirmation, setReportConfirmation] = useState("");
 
@@ -835,12 +838,17 @@ const ResidentHome = () => {
         paint: {
           "fill-color": [
             "match",
-            ["get", "risk_level"],
-            "high", "#d94736",
-            "medium", "#e29a32",
-            "#e5bd43",
+            ["get", "hazard_type"],
+            "flood", "#0a9fb5",
+            "landslide", "#8b5e34",
+            "#c8372d",
           ],
-          "fill-opacity": 0.28,
+          "fill-opacity": [
+            "match", ["get", "risk_level"],
+            "high", 0.34,
+            "medium", 0.25,
+            0.18,
+          ],
         },
       });
     }
@@ -853,12 +861,46 @@ const ResidentHome = () => {
         paint: {
           "line-color": [
             "match",
-            ["get", "risk_level"],
-            "high", "#b83228",
-            "medium", "#bd7418",
-            "#a88a20",
+            ["get", "hazard_type"],
+            "flood", "#087e99",
+            "landslide", "#684323",
+            "#a82e27",
           ],
-          "line-width": 2,
+          "line-width": 2.5,
+        },
+      });
+    }
+
+    if (!map.getLayer("resident-hazard-labels")) {
+      map.addLayer({
+        id: "resident-hazard-labels",
+        type: "symbol",
+        source: sourceId,
+        minzoom: 10,
+        maxzoom: 14,
+        layout: {
+          "text-field": [
+            "concat",
+            ["case", ["==", ["get", "hazard_type"], "flood"], "Flood zone", "Landslide zone"],
+            " · ",
+            ["to-string", ["get", "risk_level"]],
+          ],
+          "text-font": ["Open Sans Semibold", "Arial Unicode MS Regular"],
+          "text-size": 12,
+          "text-max-width": 12,
+          "text-padding": 8,
+          "text-allow-overlap": false,
+          "text-ignore-placement": false,
+        },
+        paint: {
+          "text-color": [
+            "match", ["get", "hazard_type"],
+            "flood", "#075b70",
+            "landslide", "#553719",
+            "#81251f",
+          ],
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
         },
       });
     }
@@ -2557,8 +2599,8 @@ const ResidentHome = () => {
           evacCenters.features.forEach((center) => {
             const properties = center.properties || {};
 
-            const name = properties.name || "Evacuation Center";
-            const barangay = properties.barangay || "";
+            const name = displayEntityName(properties.name, "Evacuation Center");
+            const barangay = displayEntityName(properties.barangay);
 
             const searchValue = `${name} ${barangay}`.toLowerCase();
 
@@ -2721,17 +2763,17 @@ const ResidentHome = () => {
   const selectedCenterId = selectedCenterProperties.id ?? null;
 
   const selectedCenterName =
-    selectedCenterProperties.name || "Evacuation Center";
+    displayEntityName(selectedCenterProperties.name, "Evacuation Center");
 
-  const selectedCenterBarangay = selectedCenterProperties.barangay || null;
+  const selectedCenterBarangay = displayEntityName(selectedCenterProperties.barangay) || null;
 
   const selectedCenterCapacity = selectedCenterProperties.capacity ?? null;
 
   const selectedCenterBuildingMaterial =
-    selectedCenterProperties.building_material || null;
+    displayEntityName(selectedCenterProperties.building_material) || null;
 
   const selectedCenterAccessibility =
-    selectedCenterProperties.accessibility_notes || null;
+    displayEntityName(selectedCenterProperties.accessibility_notes) || null;
 
   const selectedCenterIsMine =
     myCenter?.evacuation_center?.id != null &&
@@ -3087,6 +3129,16 @@ const ResidentHome = () => {
         <FontAwesomeIcon icon={faLocationCrosshairs} spin={locating} />
       </button>
 
+      {navigationActive && (
+        <button
+          type="button"
+          className="rescue-floating-action"
+          onClick={() => setRescueAlertOpen(true)}
+        >
+          <FontAwesomeIcon icon={faTriangleExclamation} /> Request Rescue
+        </button>
+      )}
+
       {/* Bottom action bar */}
       <div
         className={`bottom-bar ${isMobile ? "mobile" : ""} ${
@@ -3097,6 +3149,17 @@ const ResidentHome = () => {
           <FontAwesomeIcon icon={faMapPin} />
 
           <span>{pickingLocation ? "Tap the map..." : "Report Hazard"}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setRescueAlertOpen(true)}
+          className="action-btn-rescue"
+          title="Request emergency rescue"
+          aria-label="Request emergency rescue"
+        >
+          <FontAwesomeIcon icon={faTriangleExclamation} />
+          {!isMobile && <span>Request Rescue</span>}
         </button>
 
         <button
@@ -3150,7 +3213,7 @@ const ResidentHome = () => {
           <div className="route-panel-title">
             <FontAwesomeIcon icon={faRoute} />
 
-            {route.evacuation_center?.name || "Evacuation Center"}
+            {displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
           </div>
 
           {routeIsMine && myCenter?.room?.room_number && (
@@ -3383,6 +3446,17 @@ const ResidentHome = () => {
       )}
 
       {/* Hazard report modal */}
+      {rescueAlertOpen && (
+        <RescueAlertModal
+          onClose={() => setRescueAlertOpen(false)}
+          onSubmitted={() => {
+            setRescueAlertOpen(false);
+            setReportConfirmation("Rescue alert sent to response staff.");
+            window.setTimeout(() => setReportConfirmation(""), 5000);
+          }}
+        />
+      )}
+
       {pendingReportLocation && (
         <HazardReportModal
           location={pendingReportLocation}
@@ -3394,6 +3468,8 @@ const ResidentHome = () => {
       <MapLegend
         bottomOffset={100}
         items={[
+          { id: "flood-zone", label: "Flood hazard" },
+          { id: "landslide-zone", label: "Landslide hazard" },
           { id: "report", label: "Hazard report" },
           { id: "blocked", label: "Road blocked" },
           { id: "closed", label: "Closed road" },

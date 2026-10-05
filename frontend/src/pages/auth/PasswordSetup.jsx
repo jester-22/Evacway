@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
-  faShieldHalved,
   faCheck,
   faTriangleExclamation,
   faEye,
@@ -29,8 +28,14 @@ function PasswordSetup() {
       setError("This password link is missing its security token. Request a new email.");
       return;
     }
-    if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
-      setError("Use at least 8 characters, including an uppercase letter, a lowercase letter, and a number.");
+    if (
+      password.length < 8 ||
+      !/[A-Z]/.test(password) ||
+      !/[a-z]/.test(password) ||
+      !/[0-9]/.test(password) ||
+      !/[^A-Za-z0-9\s]/.test(password)
+    ) {
+      setError("Use at least 8 characters, including an uppercase letter, a lowercase letter, a number, and a special character.");
       return;
     }
     if (password !== confirmation) {
@@ -56,7 +61,11 @@ function PasswordSetup() {
       <section className="password-setup-panel" aria-labelledby="password-setup-title">
         <div className="password-setup-brand">
           <span className="password-setup-brand-icon">
-            <FontAwesomeIcon icon={faShieldHalved} />
+            <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
+              <rect width="30" height="30" rx="8" fill="var(--brand)" />
+              <path d="M7 22c6 0 5-9 9-9s3-4 7-4" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" />
+              <circle cx="7" cy="22" r="2.4" fill="#fff" />
+            </svg>
           </span>
           <span>EvacWay</span>
         </div>
@@ -127,7 +136,7 @@ function PasswordSetup() {
               </div>
 
               <p className="password-setup-hint">
-                At least 8 characters with uppercase, lowercase, and a number.
+                At least 8 characters, with one uppercase letter, one lowercase letter, one number, and one special character.
               </p>
 
               <button className="password-setup-submit" type="submit" disabled={submitting}>

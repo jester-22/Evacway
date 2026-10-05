@@ -6,7 +6,7 @@ import {
   faRotate,
   faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
-import "./SystemAndLogs.css";
+import "../components_css/SystemAndLogs.css";
 
 function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) {
   const isPersonnel = user?.role === "lgu_personnel";

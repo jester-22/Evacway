@@ -20,7 +20,7 @@
 .brand-mark{
   width:26px; height:26px;
   border-radius:6px;
-  background:var(--danger);
+  background:var(--brand);
   position:relative;
   flex-shrink:0;
 }
@@ -37,7 +37,7 @@
   letter-spacing:0.5px;
   text-transform:uppercase;
 }
-.brand-name span{ color:var(--danger); }
+.brand-name span{ color:var(--brand); }
 
 .status-cluster{ display:flex; align-items:center; gap:22px; }
 .status-pill{
@@ -169,12 +169,12 @@
   background:var(--danger-dim); border-radius:6px; padding:8px 10px; margin-bottom:12px;
 }
 .modal-submit{
-  width:100%; background:var(--danger); color:#fff; border:none; border-radius:8px;
+  width:100%; background:var(--brand); color:#fff; border:none; border-radius:8px;
   padding:13px; font-family:var(--font-display); font-weight:600; font-size:14px;
   text-transform:uppercase; letter-spacing:0.6px; cursor:pointer; margin-top:2px;
   transition:opacity .12s ease;
 }
-.modal-submit:hover{ opacity:0.9; }
+.modal-submit:hover{ background:var(--brand-dark); }
 .modal-submit:disabled{ opacity:0.5; cursor:not-allowed; }
 .modal-note{
   font-family:var(--font-mono); font-size:10px; color:var(--text-2);

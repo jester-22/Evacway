@@ -399,6 +399,29 @@
   color: var(--brand-dark);
   font-weight: 600;
 }
+.ew-login-help {
+  margin: -0.55rem 0 0;
+  text-align: right;
+}
+.ew-text-btn {
+  padding: 0;
+  border: 0;
+  color: var(--brand-dark);
+  background: transparent;
+  font: 600 0.9rem "Public Sans", system-ui, sans-serif;
+  cursor: pointer;
+}
+.ew-text-btn:hover { text-decoration: underline; }
+.ew-recovery-back { align-self: center; }
+.ew-recovery-message {
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  border-left: 4px solid #26805e;
+  border-radius: 6px;
+  color: #185b40;
+  background: #e8f6ef;
+  font-size: 0.92rem;
+}
 
 /* Small screens */
 @media (max-width: 860px) {

@@ -10,6 +10,10 @@ from shapely.geometry import mapping, Point
 from flask_jwt_extended import get_jwt_identity
 from utils import role_required
 from datetime import datetime
+from services.notifications import (
+    create_staff_notifications,
+    send_staff_push_notifications,
+)
 
 
 reports_bp = Blueprint('reports', __name__)
@@ -124,7 +128,16 @@ def submit_hazard_report():
         geom=from_shape(point, srid=4326)
     )
     db.session.add(report)
+    db.session.flush()
+    notifications = create_staff_notifications(
+        event_type='hazard_report',
+        resource_type='hazard_report',
+        resource_id=report.id,
+        title='New hazard report',
+        message=f'A resident submitted a {report_type or "hazard"} report for review.',
+    )
     db.session.commit()
+    send_staff_push_notifications(notifications)
 
     return jsonify(report_to_dict(report)), 201
 

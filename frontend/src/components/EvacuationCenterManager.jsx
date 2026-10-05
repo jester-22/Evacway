@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../services/api";
 import DashboardMap from "./DashboardMap";
+import { displayEntityName } from "../utils/displayEntityName";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPlus,
@@ -18,6 +19,7 @@ import {
   faMapLocationDot,
   faCircleInfo,
 } from "@fortawesome/free-solid-svg-icons";
+import "../components_css/EvacuationCenterManager.css";
 
 const MOBILE_BREAKPOINT = 640;
 
@@ -106,6 +108,7 @@ function EvacuationCenterManager({
   hazardZones,
   onRefresh,
   canDeactivate,
+  focusLocation,
 }) {
   const [step, setStep] = useState("idle");
 
@@ -172,12 +175,12 @@ function EvacuationCenterManager({
   }
 
   function getBarangayName(barangay) {
-    return (
+    return displayEntityName(
       barangay?.name ??
-      barangay?.barangay ??
-      barangay?.barangay_name ??
-      barangay?.label ??
-      ""
+        barangay?.barangay ??
+        barangay?.barangay_name ??
+        barangay?.label ??
+        barangay
     );
   }
 
@@ -190,13 +193,13 @@ function EvacuationCenterManager({
   }
 
   function getCenterName(center) {
-    return getCenterProperties(center).name || "Unnamed Center";
+    return displayEntityName(getCenterProperties(center).name, "Unnamed Center");
   }
 
   function getCenterBarangay(center) {
     const properties = getCenterProperties(center);
 
-    return properties.barangay || properties.barangay_name || "";
+    return displayEntityName(properties.barangay ?? properties.barangay_name);
   }
 
   function getCenterBarangayId(center) {
@@ -915,7 +918,7 @@ function EvacuationCenterManager({
         height: "100%",
       }}
     >
-      <style>{FORM_CSS}</style>
+      
 
       <div
         style={{
@@ -935,6 +938,7 @@ function EvacuationCenterManager({
           rooms={rooms}
           onRoomClick={handleRoomClick}
           pendingRoomLocation={roomLocation}
+          focusLocation={focusLocation}
         />
 
         {showMobileCenterToolbar && (
@@ -1731,7 +1735,7 @@ function EvacuationCenterManager({
                 </div>
 
                 {roomLocation && (
-                  <div style={{ marginTop: 4, color: "#555" }}>
+                  <div style={{ marginTop: 4, color: "var(--muted)" }}>
                     Latitude: {roomLocation.lat.toFixed(6)}
 
                     <br />
@@ -1805,108 +1809,7 @@ function EvacuationCenterManager({
   );
 }
 
-const FORM_CSS = `
-.ecm-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(17, 24, 39, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  z-index: 2000;
-}
 
-.ecm-modal {
-  width: 100%;
-  max-width: 460px;
-  max-height: 88vh;
-  background: #ffffff;
-  border-radius: 16px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  box-shadow: 0 20px 60px rgba(17, 24, 39, 0.25);
-}
-
-.ecm-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px 20px;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-.ecm-modal-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.ecm-modal-title h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: #111827;
-}
-
-.ecm-modal-title-icon {
-  color: #2563eb;
-}
-
-.ecm-close-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 999px;
-  border: none;
-  background: #f3f4f6;
-  color: #6b7280;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.ecm-modal-body {
-  padding: 20px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.ecm-error {
-  background: #fee2e2;
-  color: #991b1b;
-  padding: 10px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  margin-bottom: 14px;
-}
-
-.ecm-modal-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 20px;
-  border-top: 1px solid #f0f0f0;
-}
-
-.ecm-footer-spacer {
-  flex: 1;
-}
-
-@media (max-width: 640px) {
-  .ecm-overlay {
-    padding: 0;
-    align-items: flex-end;
-  }
-
-  .ecm-modal {
-    max-width: 100%;
-    max-height: 92vh;
-    border-radius: 16px 16px 0 0;
-  }
-}
-`;
 
 const styles = {
   addBtn: {

@@ -50,7 +50,7 @@ def request_password_reset():
 
     if re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
         user = User.query.filter(func.lower(User.email) == email).first()
-        if user:
+        if user and user.is_active:
             try:
                 token = create_password_setup_token(user)
                 send_password_setup_email(user, token, purpose="reset")
@@ -75,9 +75,10 @@ def complete_password_setup():
         or not re.search(r"[A-Z]", password)
         or not re.search(r"[a-z]", password)
         or not re.search(r"[0-9]", password)
+        or not re.search(r"[^A-Za-z0-9\s]", password)
     ):
         return jsonify({
-            "error": "Password must have at least 8 characters, including an uppercase letter, a lowercase letter, and a number"
+            "error": "Password must have at least 8 characters, including an uppercase letter, a lowercase letter, a number, and a special character"
         }), 400
 
     payload, token_error = read_password_setup_token(token)

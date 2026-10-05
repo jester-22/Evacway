@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../services/api";
 import { useAuth } from "../context/AuthContext";
+import "../components_css/UserManagement.css";
 
 const ROLE_LABELS = {
   admin: "Admin",
@@ -22,6 +23,10 @@ function UserManagement() {
   const [logs, setLogs] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [editingUser, setEditingUser] = useState(null);
+  const [editForm, setEditForm] = useState({ name: "", email: "", contact_number: "", role: "lgu_personnel" });
+  const [editError, setEditError] = useState("");
+  const [savingUser, setSavingUser] = useState(false);
   const [showActivities, setShowActivities] = useState(false);
   const [form, setForm] = useState({
     name: "",
@@ -152,6 +157,39 @@ function UserManagement() {
     load();
   }
 
+  function startEditingUser(user) {
+    setEditForm({
+      name: user.name || "",
+      email: user.email || "",
+      contact_number: user.contact_number || "",
+      role: user.role || "lgu_personnel",
+    });
+    setEditError("");
+    setEditingUser(user);
+  }
+
+  async function handleUpdateUser(event) {
+    event.preventDefault();
+    if (!editingUser) return;
+    setSavingUser(true);
+    setEditError("");
+    try {
+      const updated = await api.updateUser(editingUser.id, {
+        ...editForm,
+        name: editForm.name.trim(),
+        email: editForm.email.trim().toLowerCase(),
+        contact_number: editForm.contact_number.trim(),
+      });
+      setSelectedUser(updated);
+      setEditingUser(null);
+      load();
+    } catch (requestError) {
+      setEditError(requestError.message || "Account details could not be updated.");
+    } finally {
+      setSavingUser(false);
+    }
+  }
+
   function closeModal() {
     setShowForm(false);
     setError("");
@@ -193,7 +231,7 @@ function UserManagement() {
 
   return (
     <div className="um-page">
-      <style>{CSS}</style>
+      
 
       <div className="um-root">
         <div className="um-header">
@@ -464,6 +502,12 @@ function UserManagement() {
 
               <div className="um-action-row">
                 <button
+                  className="um-secondary-action"
+                  onClick={() => startEditingUser(selectedUser)}
+                >
+                  Edit details
+                </button>
+                <button
                   className="um-primary-action"
                   onClick={() => setShowActivities((prev) => !prev)}
                 >
@@ -505,633 +549,48 @@ function UserManagement() {
           </div>
         </div>
       )}
+
+      {editingUser && (
+        <div className="um-overlay um-edit-overlay" onClick={() => setEditingUser(null)}>
+          <div className="um-modal um-modal--edit" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="um-edit-title">
+            <div className="um-modal-header">
+              <h4 className="um-modal-title" id="um-edit-title">Edit account details</h4>
+              <button type="button" onClick={() => setEditingUser(null)} className="um-modal-close" aria-label="Close edit account">×</button>
+            </div>
+            <form className="um-form" onSubmit={handleUpdateUser}>
+              {editError && <div className="um-error" role="alert">{editError}</div>}
+              <div className="um-edit-fields">
+                <label className="um-field">
+                  <span className="um-label">Full name</span>
+                  <input className="um-input" value={editForm.name} required maxLength={100} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} />
+                </label>
+                <label className="um-field">
+                  <span className="um-label">Email</span>
+                  <input className="um-input" type="email" value={editForm.email} required onChange={(event) => setEditForm({ ...editForm, email: event.target.value })} />
+                </label>
+                <label className="um-field">
+                  <span className="um-label">Contact number</span>
+                  <input className="um-input" value={editForm.contact_number} maxLength={20} onChange={(event) => setEditForm({ ...editForm, contact_number: event.target.value })} />
+                </label>
+                <label className="um-field">
+                  <span className="um-label">Role</span>
+                  <select className="um-input" value={editForm.role} onChange={(event) => setEditForm({ ...editForm, role: event.target.value })}>
+                    <option value="lgu_personnel">LGU Personnel</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </label>
+              </div>
+              <div className="um-modal-actions">
+                <button type="button" onClick={() => setEditingUser(null)} className="um-cancel-btn">Cancel</button>
+                <button type="submit" className="um-save-btn" disabled={savingUser}>{savingUser ? "Saving…" : "Save details"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-const CSS = ` 
-.um-page {
-  display: flex;
-  justify-content: center;
-  min-height: 100%;
-  padding-bottom: 28px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: linear-gradient(180deg, #f8fafc 0%, #eef4ff 100%);
-  overflow-y: auto;
-}
 
-.um-root {
-  width: 100%;
-  padding: 24px;
-  max-width: 1100px;
-}
-
-.um-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 18px;
-  flex-wrap: wrap;
-}
-
-.um-kicker {
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: #7c8aa5;
-}
-
-.um-title {
-  margin: 0;
-  color: #101828;
-  font-size: clamp(24px, 2vw, 30px);
-  font-weight: 800;
-  letter-spacing: -0.04em;
-}
-
-.um-add-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 18px;
-  border: none;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
-  color: white;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.22);
-  transition: transform 0.15s ease, filter 0.15s ease;
-}
-.um-add-btn:hover {
-  filter: brightness(1.03);
-}
-.um-add-btn:active {
-  transform: translateY(1px);
-}
-
-.um-add-icon {
-  font-size: 16px;
-  line-height: 1;
-}
-
-.um-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(140px, 1fr));
-  gap: 14px;
-  margin-bottom: 22px;
-}
-
-.um-stat-card {
-  padding: 18px 18px 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
-}
-.um-stat-card span {
-  display: block;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-.um-stat-card strong {
-  display: block;
-  margin-top: 8px;
-  color: #0f172a;
-  font-size: clamp(20px, 2vw, 28px);
-  font-weight: 800;
-}
-.um-stat-card.is-primary {
-  background: linear-gradient(135deg, #eef4ff, #dfeafe);
-  border-color: rgba(96, 165, 250, 0.28);
-}
-
-.um-profile-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 18px;
-}
-
-.um-profile-card {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 18px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  box-shadow: 0 18px 32px rgba(15, 23, 42, 0.06);
-}
-
-.um-card-top {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-
-.um-avatar {
-  width: 52px;
-  height: 52px;
-  border-radius: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-size: 16px;
-  font-weight: 800;
-  flex-shrink: 0;
-}
-.um-avatar.is-admin { background: linear-gradient(135deg, #2563eb, #1d4ed8); }
-.um-avatar.is-personnel { background: linear-gradient(135deg, #16a34a, #15803d); }
-
-.um-card-meta {
-  flex: 1;
-  min-width: 0;
-}
-
-.um-role-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 5px 9px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-.um-role-badge.is-admin {
-  background: rgba(37, 99, 235, 0.1);
-  color: #1d4ed8;
-}
-.um-role-badge.is-personnel {
-  background: rgba(22, 163, 74, 0.12);
-  color: #15803d;
-}
-
-.um-card-meta h4 {
-  margin: 8px 0 4px;
-  color: #111827;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-.um-card-meta p {
-  margin: 0;
-  color: #64748b;
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.um-status-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 7px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  border: 1px solid transparent;
-}
-.um-status-pill.is-active {
-  background: rgba(34, 197, 94, 0.12);
-  color: #166534;
-  border-color: rgba(34, 197, 94, 0.2);
-}
-.um-status-pill.is-inactive {
-  background: rgba(239, 68, 68, 0.1);
-  color: #991b1b;
-  border-color: rgba(239, 68, 68, 0.18);
-}
-
-.um-profile-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.um-summary-block {
-  padding: 12px 12px 10px;
-  border-radius: 14px;
-  background: #f8fafc;
-  border: 1px solid #edf2f7;
-}
-.um-summary-block span {
-  display: block;
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-.um-summary-block strong {
-  display: block;
-  margin-top: 8px;
-  color: #111827;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.um-activity-panel {
-  padding: 12px 14px 14px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #f8fafc 0%, #eef4ff 100%);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-}
-
-.um-activity-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.um-activity-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: #22c55e;
-  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
-}
-.um-activity-header small {
-  color: #475569;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-.um-activity-panel p {
-  margin: 0;
-  color: #334155;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.um-card-footer {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.um-toggle-btn {
-  padding: 8px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 999px;
-  background: white;
-  color: #111827;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-.um-toggle-btn:hover {
-  background: #f8fafc;
-  border-color: rgba(100, 116, 139, 0.8);
-}
-
-.um-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  z-index: 50;
-  animation: um-fade-in 0.15s ease;
-}
-
-.um-modal {
-  width: 100%;
-  max-width: 480px;
-  max-height: 90vh;
-  overflow-y: auto;
-  background: #ffffff;
-  border-radius: 18px;
-  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
-  animation: um-pop-in 0.15s ease;
-}
-
-.um-modal--wide {
-  max-width: 540px;
-}
-
-@keyframes um-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes um-pop-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.um-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px 20px;
-  border-bottom: 1px solid #eef2f7;
-}
-
-.um-modal-title {
-  margin: 0;
-  color: #111827;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.um-modal-close {
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 999px;
-  background: #f8fafc;
-  color: #475569;
-  font-size: 20px;
-  cursor: pointer;
-}
-
-.um-modal-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.um-user-detail-body {
-  padding: 18px 20px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.um-user-detail-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: #f8fafc;
-  border: 1px solid #edf2f7;
-}
-
-.um-user-meta {
-  flex: 1;
-  min-width: 0;
-}
-
-.um-user-meta p {
-  margin: 10px 0 4px;
-  color: #111827;
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.um-user-meta small {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.um-action-row {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.um-primary-action,
-.um-secondary-action {
-  flex: 1;
-  min-width: 150px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: none;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.um-primary-action {
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
-  color: white;
-}
-
-.um-secondary-action {
-  background: #e2e8f0;
-  color: #0f172a;
-}
-
-.um-secondary-action:disabled {
-  opacity: 0.7;
-  cursor: progress;
-}
-
-.um-activity-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #f8fafc 0%, #eef4ff 100%);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-}
-
-.um-activity-item {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(148, 163, 184, 0.15);
-}
-
-.um-activity-item strong {
-  color: #111827;
-  font-size: 13px;
-}
-
-.um-activity-item span {
-  color: #475569;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.um-empty-state {
-  padding: 12px 10px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.7);
-  color: #64748b;
-  font-size: 13px;
-  text-align: center;
-}
-
-.um-cancel-btn {
-  flex: 1;
-  padding: 11px;
-  border-radius: 10px;
-  border: 1px solid #d5d9e2;
-  background: white;
-  color: #111827;
-  font-weight: 600;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.um-form {
-  padding: 18px 20px 20px;
-}
-
-.um-field-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.um-field--full {
-  grid-column: 1 / -1;
-}
-
-.um-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.um-label {
-  font-size: 12px;
-  font-weight: 700;
-  color: #64748b;
-}
-
-.um-email-hint {
-  color: #64748b;
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.um-email-hint.is-error {
-  color: #b42318;
-}
-
-.um-email-hint.is-available {
-  color: #18704f;
-}
-
-.um-input {
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid #d5d9e2;
-  font-size: 14px;
-  background: #ffffff;
-  color: #111827;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.um-input:focus {
-  outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
-}
-
-.um-save-btn {
-  flex: 1;
-  padding: 11px;
-  border-radius: 10px;
-  border: none;
-  background: #16a34a;
-  color: white;
-  font-weight: 700;
-  font-size: 14px;
-  cursor: pointer;
-}
-.um-save-btn:hover:not(:disabled) {
-  background: #15803d;
-}
-.um-save-btn:disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-
-.um-error {
-  background: #fee2e2;
-  color: #991b1b;
-  padding: 10px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  margin-bottom: 12px;
-}
-
-.um-empty {
-  margin-top: 28px;
-  padding: 40px 20px;
-  text-align: center;
-  border: 1px dashed #cbd5e1;
-  border-radius: 18px;
-  background: rgba(248, 250, 252, 0.8);
-}
-.um-empty-icon {
-  width: 42px;
-  height: 42px;
-  margin: 0 auto 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: rgba(37, 99, 235, 0.08);
-  color: #2563eb;
-  font-size: 20px;
-}
-.um-empty-title {
-  margin: 0;
-  color: #111827;
-  font-weight: 700;
-  font-size: 15px;
-}
-.um-empty-text {
-  margin: 6px 0 0;
-  color: #64748b;
-  font-size: 13px;
-}
-
-@media (max-width: 640px) {
-  .um-root {
-    padding: 18px 14px 30px;
-  }
-
-  .um-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .um-profile-summary,
-  .um-field-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .um-card-top {
-    flex-wrap: wrap;
-  }
-
-  .um-overlay {
-    padding: 0;
-    align-items: flex-end;
-  }
-
-  .um-modal {
-    max-width: 100%;
-    max-height: 85vh;
-    border-radius: 18px 18px 0 0;
-    animation: um-slide-up 0.2s ease;
-  }
-}
-
-@keyframes um-slide-up {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
-}
-`;
 
 export default UserManagement;

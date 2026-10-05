@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { api } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 
@@ -8,6 +9,7 @@ import HazardReportReview from "../../components/HazardReportReview";
 import UserManagement from "../../components/UserManagement";
 import BarangayManager from "../../components/BarangayManager";
 import SystemAndLogs from "../../components/SystemAndLogs";
+import RescueRequestManager from "../../components/RescueRequestManager";
 
 const MOBILE_BREAKPOINT = 720;
 
@@ -34,7 +36,12 @@ function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
 }
 
 function AdminDashboard() {
-  const [tab, setTab] = useState("centers");
+  const location = useLocation();
+  const requestedTab = new URLSearchParams(location.search).get("tab");
+  const [tab, setTab] = useState(["reports", "rescue"].includes(requestedTab) ? requestedTab : "centers");
+  const [focusedReportId, setFocusedReportId] = useState(null);
+  const [focusedRescueId, setFocusedRescueId] = useState(null);
+  const [mapFocusLocation, setMapFocusLocation] = useState(null);
   const [centers, setCenters] = useState(null);
   const [hazardZones, setHazardZones] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -52,6 +59,52 @@ function AdminDashboard() {
       .then(setHazardZones)
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const notificationId = new URLSearchParams(location.search).get("notificationId");
+    if (!notificationId) return undefined;
+
+    let cancelled = false;
+    api.getNotifications().then((result) => {
+      if (cancelled) return;
+      const notification = result.notifications?.find((item) => String(item.id) === notificationId);
+      if (!notification) return;
+      api.markNotificationRead(notification.id).catch(() => {});
+      if (notification.resource_type === "hazard_report") {
+        setFocusedReportId(notification.resource_id);
+        setFocusedRescueId(null);
+        setTab("reports");
+      } else {
+        setFocusedRescueId(notification.resource_id);
+        setFocusedReportId(null);
+        setTab("rescue");
+      }
+    }).catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [location.search]);
+
+  function handleNotificationSelect(notification) {
+    if (notification.resource_type === "hazard_report") {
+      setFocusedReportId(notification.resource_id);
+      setFocusedRescueId(null);
+      setTab("reports");
+    } else {
+      setFocusedRescueId(notification.resource_id);
+      setFocusedReportId(null);
+      setTab("rescue");
+    }
+  }
+
+  function openMapLocation(item) {
+    if (!Number.isFinite(Number(item.latitude)) || !Number.isFinite(Number(item.longitude))) return;
+    setMapFocusLocation({
+      latitude: Number(item.latitude),
+      longitude: Number(item.longitude),
+      requestedAt: Date.now(),
+    });
+    setTab("centers");
+  }
 
   useEffect(() => {
     if (tab === "settings") {
@@ -83,6 +136,7 @@ function AdminDashboard() {
         user={user}
         logout={logout}
         isMobile={isMobile}
+        onSelectNotification={handleNotificationSelect}
       />
 
       {/* CONTENT */}
@@ -94,6 +148,7 @@ function AdminDashboard() {
             hazardZones={hazardZones}
             onRefresh={refreshCenters}
             canDeactivate={true}
+            focusLocation={mapFocusLocation}
           />
         )}
 
@@ -104,7 +159,11 @@ function AdminDashboard() {
 
         {/* HAZARD REPORTS */}
         {tab === "reports" && (
-          <HazardReportReview />
+          <HazardReportReview focusReportId={focusedReportId} onOpenMap={openMapLocation} />
+        )}
+
+        {tab === "rescue" && (
+          <RescueRequestManager key={focusedRescueId ?? "rescue-queue"} initialRequestId={focusedRescueId} onOpenMap={openMapLocation} />
         )}
 
         {/* MANAGE USERS */}

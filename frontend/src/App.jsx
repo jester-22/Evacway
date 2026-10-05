@@ -7,12 +7,14 @@ import ResidentHome from "./pages/resident/ResidentHome";
 import LguDashboard from "./pages/lgu/LguDashboard";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import PasswordSetup from "./pages/auth/PasswordSetup";
+import NetworkStatus from "./components/NetworkStatus";
 
 function App() {
   return (
     
     <BrowserRouter>
       <AuthProvider>
+        <NetworkStatus />
         <Routes>
           {/* Public — no login required, per the proposal */}
           <Route path="/" element={<LandingPage />} />

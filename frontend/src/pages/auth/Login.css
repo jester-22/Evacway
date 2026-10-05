@@ -3,16 +3,18 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg, #f0f2f5);
-  font-family: 'Inter', sans-serif;
+  padding: 24px;
+  background: linear-gradient(180deg, #dbe8f8 0%, var(--paper) 55%);
+  font-family: var(--font-body);
 }
 
 .login-card {
-  background: var(--surface, #fff);
+  background: #fff;
   padding: 36px 32px 28px;
-  border-radius: 12px;
-  width: 360px;
-  box-shadow: 0 10px 35px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  width: min(100%, 420px);
+  box-shadow: 0 24px 60px -28px rgba(14, 31, 58, 0.35);
   display: flex;
   flex-direction: column;
 }
@@ -21,7 +23,7 @@
   width: 48px;
   height: 48px;
   border-radius: 12px;
-  background: var(--primary, #2563eb);
+  background: var(--brand);
   color: #fff;
   display: flex;
   align-items: center;
@@ -31,7 +33,7 @@
 }
 
 .login-title {
-  font-family: 'Oswald', sans-serif;
+  font-family: var(--font-display);
   font-size: 20px;
   font-weight: 600;
   text-align: center;
@@ -39,7 +41,7 @@
 }
 
 .login-subtitle {
-  color: var(--text-muted, #666);
+  color: var(--muted);
   font-size: 13px;
   text-align: center;
   margin: 0 0 22px;
@@ -62,7 +64,7 @@
   font-weight: 600;
   margin-top: 12px;
   margin-bottom: 6px;
-  color: var(--text, #1e293b);
+  color: var(--ink);
 }
 
 .login-input-wrap {
@@ -82,15 +84,15 @@
   width: 100%;
   padding: 11px 12px 11px 34px;
   border-radius: 6px;
-  border: 1px solid var(--border, #ccc);
+  border: 1px solid var(--line);
   font-size: 14px;
-  font-family: 'Inter', sans-serif;
+  font-family: var(--font-body);
   outline: none;
   transition: border-color 0.15s ease;
 }
 
 .login-input:focus {
-  border-color: var(--primary, #2563eb);
+  border-color: var(--brand);
 }
 
 .login-button {
@@ -98,7 +100,7 @@
   padding: 12px;
   border-radius: 6px;
   border: none;
-  background: var(--primary, #2563eb);
+  background: var(--brand);
   color: #fff;
   font-weight: 600;
   font-size: 14px;
@@ -107,11 +109,12 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: opacity 0.15s ease;
+  transition: background-color 0.15s ease, transform 0.15s ease;
 }
 
 .login-button:hover:not(:disabled) {
-  opacity: 0.9;
+  background: var(--brand-dark);
+  transform: translateY(-1px);
 }
 
 .login-button:disabled {
@@ -123,7 +126,7 @@
   margin-top: 18px;
   font-size: 13px;
   text-align: center;
-  color: var(--primary, #2563eb);
+  color: var(--brand-dark);
   text-decoration: none;
   display: flex;
   align-items: center;

@@ -101,6 +101,56 @@
 /* Empty states settle in */
 .barangay-page .empty-state { animation: bg-rise 0.45s cubic-bezier(0.2, 0.75, 0.2, 1) both; }
 
+/* Shared EvacWay surfaces and controls */
+.barangay-page {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+
+.barangay-page :is(.barangay-title, .detail-heading h3, .section-header h3, .center-title h3) {
+  color: var(--ink);
+  font-family: var(--font-display);
+}
+
+.barangay-page :is(.barangay-card, .detail-header-card, .table-card, .evacuation-center-card, .room-item) {
+  border-color: var(--line);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(14, 31, 58, 0.08);
+}
+
+.barangay-page :is(.btn-primary, .view-button, .barangay-tab.active, .member-count-button) {
+  color: var(--brand-dark);
+}
+
+.barangay-page .btn-primary {
+  border-color: var(--brand);
+  color: #fff;
+  background: var(--brand);
+}
+
+.barangay-page .btn-primary:hover:not(:disabled) {
+  border-color: var(--brand-dark);
+  background: var(--brand-dark);
+}
+
+.barangay-page :is(.barangay-icon, .small-avatar, .room-icon) {
+  border-color: var(--line);
+  color: var(--brand-dark);
+  background: #e6eefb;
+}
+
+.barangay-page :is(.view-button:hover, .member-count-button:hover, .barangay-tab.active) {
+  border-color: var(--line);
+  background: var(--paper);
+}
+
+.barangay-page :is(input, select, textarea):focus-visible,
+.barangay-page button:focus-visible {
+  outline: 3px solid rgba(27, 95, 193, 0.35);
+  outline-offset: 2px;
+}
+
 /* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   .barangay-page *,

@@ -214,6 +214,9 @@ function DashboardMap({
   onRoomClick,
   pendingRoomLocation = null,
   focusLocation = null,
+  selectedCenter: selectedCenterProp = undefined,
+  hideInternalPanel = false,
+  hideSearch = false,
 }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -231,8 +234,42 @@ function DashboardMap({
   /*
    * Selected center / room for the details panels
    */
-  const [selectedCenter, setSelectedCenter] = useState(null);
+  const [selectedCenter, setSelectedCenter] = useState(selectedCenterProp || null);
   const [selectedRoom, setSelectedRoom] = useState(null);
+
+  useEffect(() => {
+    if (selectedCenterProp !== undefined) {
+      setSelectedCenter(selectedCenterProp);
+    }
+  }, [selectedCenterProp]);
+
+  /*
+   * Auto-center map on selectedCenterProp when requested
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !selectedCenterProp) return;
+
+    const feature =
+      selectedCenterProp.geometry
+        ? selectedCenterProp
+        : (centers?.features || []).find(
+            (c) =>
+              String(c.properties?.id) ===
+              String(selectedCenterProp.id ?? selectedCenterProp.properties?.id)
+          );
+
+    if (feature?.geometry) {
+      const bounds = getGeometryBounds(feature.geometry);
+      if (bounds) {
+        map.fitBounds(bounds, {
+          padding: 100,
+          maxZoom: 17,
+          duration: 900,
+        });
+      }
+    }
+  }, [mapLoaded, selectedCenterProp, centers]);
 
   /*
    * Families assigned to the selected room
@@ -826,6 +863,9 @@ function DashboardMap({
 
       setSelectedRoom(null);
       setSelectedCenter(originalCenter);
+      if (onCenterClick) {
+        onCenterClick(originalCenter);
+      }
     };
 
     const handleMouseEnter = () => {
@@ -1142,6 +1182,9 @@ function DashboardMap({
 
           setSelectedRoom(null);
           setSelectedCenter(center);
+          if (onCenterClick) {
+            onCenterClick(center);
+          }
         });
 
         const marker = new mapboxgl.Marker({
@@ -1748,61 +1791,63 @@ function DashboardMap({
       <div ref={mapContainerRef} className="dashboard-map-container" />
 
       {/* Search */}
-      <div className="map-search-container">
-        <div className="map-search-box">
-          <FontAwesomeIcon icon={faSearch} className="map-search-icon" />
+      {!hideSearch && (
+        <div className="map-search-container">
+          <div className="map-search-box">
+            <FontAwesomeIcon icon={faSearch} className="map-search-icon" />
 
-          <input
-            type="text"
-            value={searchText}
-            onChange={(e) => {
-              setSearchText(e.target.value);
-              setShowSearchResults(true);
-            }}
-            onFocus={() => {
-              if (searchResults.length > 0) {
+            <input
+              type="text"
+              value={searchText}
+              onChange={(e) => {
+                setSearchText(e.target.value);
                 setShowSearchResults(true);
-              }
-            }}
-            placeholder="Search barangay or evacuation center"
-            className="map-search-input"
-          />
+              }}
+              onFocus={() => {
+                if (searchResults.length > 0) {
+                  setShowSearchResults(true);
+                }
+              }}
+              placeholder="Search barangay or evacuation center"
+              className="map-search-input"
+            />
 
-          {searching && <div className="map-search-loading">Searching...</div>}
-        </div>
-
-        {showSearchResults && searchResults.length > 0 && (
-          <div className="map-search-results">
-            {searchResults.map((result, index) => (
-              <button
-                key={`${result.type}-${result.name}-${index}`}
-                className="map-search-result"
-                onClick={() => zoomToSearchResult(result)}
-              >
-                <div className="map-search-result-icon">
-                  <FontAwesomeIcon
-                    icon={result.type === "barangay" ? faLocationDot : faMapPin}
-                  />
-                </div>
-
-                <div className="map-search-result-text">
-                  <strong>{result.name}</strong>
-                  <span>{result.subtitle}</span>
-                </div>
-              </button>
-            ))}
+            {searching && <div className="map-search-loading">Searching...</div>}
           </div>
-        )}
 
-        {showSearchResults &&
-          !searching &&
-          searchText.trim().length >= 2 &&
-          searchResults.length === 0 && (
-            <div className="map-search-no-results">
-              No barangay or evacuation center found.
+          {showSearchResults && searchResults.length > 0 && (
+            <div className="map-search-results">
+              {searchResults.map((result, index) => (
+                <button
+                  key={`${result.type}-${result.name}-${index}`}
+                  className="map-search-result"
+                  onClick={() => zoomToSearchResult(result)}
+                >
+                  <div className="map-search-result-icon">
+                    <FontAwesomeIcon
+                      icon={result.type === "barangay" ? faLocationDot : faMapPin}
+                    />
+                  </div>
+
+                  <div className="map-search-result-text">
+                    <strong>{result.name}</strong>
+                    <span>{result.subtitle}</span>
+                  </div>
+                </button>
+              ))}
             </div>
           )}
-      </div>
+
+          {showSearchResults &&
+            !searching &&
+            searchText.trim().length >= 2 &&
+            searchResults.length === 0 && (
+              <div className="map-search-no-results">
+                No barangay or evacuation center found.
+              </div>
+            )}
+        </div>
+      )}
 
       {/* Hazard Layer Buttons */}
       <div className="dashboard-layer-tabs">
@@ -1840,7 +1885,7 @@ function DashboardMap({
       {/* =====================================================
           ROOM DETAILS
           ===================================================== */}
-      {selectedCenter && selectedRoom && (
+      {!hideInternalPanel && selectedCenter && selectedRoom && (
         <aside className="mdp-panel">
           <header className="mdp-header">
             <div className="mdp-badge">
@@ -1951,7 +1996,7 @@ function DashboardMap({
       {/* =====================================================
           CENTER DETAILS
           ===================================================== */}
-      {selectedCenter && !selectedRoom && (
+      {!hideInternalPanel && selectedCenter && !selectedRoom && (
         <aside className="mdp-panel">
           <header className="mdp-header">
             <div className="mdp-badge">

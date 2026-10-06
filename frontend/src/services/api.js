@@ -120,14 +120,24 @@ export const api = {
   // EVACUATION CENTERS
   // -------------------------------------------------------
 
-  getEvacuationCenters: (includeInactive = false) =>
-    request(
-      `/api/evacuation-centers${
-        includeInactive
-          ? "?include_inactive=true"
-          : ""
-      }`
-    ),
+  getEvacuationCenters: (filters = false) => {
+    if (typeof filters === "boolean") {
+      return request(
+        `/api/evacuation-centers${filters ? "?include_inactive=true" : ""}`
+      );
+    }
+    const params = new URLSearchParams();
+    Object.entries(filters || {}).forEach(([key, val]) => {
+      if (val !== undefined && val !== null && val !== "") {
+        params.set(key, val);
+      }
+    });
+    const query = params.toString();
+    return request(`/api/evacuation-centers${query ? `?${query}` : ""}`);
+  },
+
+  getEvacuationCenter: (id) =>
+    request(`/api/evacuation-centers/${id}`),
 
   createEvacuationCenter: (payload) =>
     request("/api/evacuation-centers", {
@@ -148,6 +158,11 @@ export const api = {
         method: "PATCH",
       }
     ),
+
+  deleteEvacuationCenter: (id) =>
+    request(`/api/evacuation-centers/${id}`, {
+      method: "DELETE",
+    }),
 
 
   // -------------------------------------------------------
@@ -319,6 +334,22 @@ export const api = {
       `/api/evacuation-centers/${centerId}/rooms`
     ),
 
+  updateRoom: (roomId, data) =>
+    request(`/api/rooms/${roomId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  toggleRoomActive: (roomId) =>
+    request(`/api/rooms/${roomId}/toggle-active`, {
+      method: "PATCH",
+    }),
+
+  deleteRoom: (roomId) =>
+    request(`/api/rooms/${roomId}`, {
+      method: "DELETE",
+    }),
+
   updateRoomLocation: (roomId, data) =>
     request(`/api/rooms/${roomId}/location`, {
       method: "PUT",
@@ -337,17 +368,22 @@ export const api = {
 
   assignFamilies: (
     roomId,
-    residentIds
+    familyIds
   ) =>
     request(
       `/api/rooms/${roomId}/assign-families`,
       {
         method: "POST",
         body: JSON.stringify({
-          resident_ids: residentIds,
+          family_ids: familyIds,
         }),
       }
     ),
+
+  removeFamilyFromRoom: (roomId, familyOrResidentId) =>
+    request(`/api/rooms/${roomId}/families/${familyOrResidentId}`, {
+      method: "DELETE",
+    }),
 
 
   // -------------------------------------------------------
@@ -365,7 +401,7 @@ export const api = {
       `/api/barangays/${barangayId}/evacuation-centers`
     ),
 
-  // NEW: one family with its members (loaded when the modal opens)
+  // Families
   getFamily: (familyId) =>
     request(`/api/families/${familyId}`),
 
@@ -381,6 +417,34 @@ export const api = {
     request("/api/families", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  updateFamily: (familyId, payload) =>
+    request(`/api/families/${familyId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteFamily: (familyId) =>
+    request(`/api/families/${familyId}`, {
+      method: "DELETE",
+    }),
+
+  assignFamily: (familyId, payload) =>
+    request(`/api/families/${familyId}/assign`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  moveFamily: (familyId, payload) =>
+    request(`/api/families/${familyId}/move`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  unassignFamily: (familyId) =>
+    request(`/api/families/${familyId}/unassign`, {
+      method: "POST",
     }),
 
   previewFamilyImport: (file, commit = false) => {

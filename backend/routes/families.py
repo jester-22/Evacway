@@ -93,22 +93,35 @@ def _family_list_rows(families):
     assignment_rows = (
         db.session.query(
             Resident.family_id,
+            EvacuationCenter.id.label('center_id'),
             EvacuationCenter.name,
+            EvacuationCenterRoom.id.label('room_id'),
             EvacuationCenterRoom.room_number,
+            EvacuationCenterRoom.capacity,
             func.count(EvacuationAssignment.id),
         )
         .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
         .join(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
         .join(EvacuationCenter, EvacuationCenterRoom.evacuation_center_id == EvacuationCenter.id)
         .filter(Resident.family_id.in_(family_ids))
-        .group_by(Resident.family_id, EvacuationCenter.name, EvacuationCenterRoom.room_number)
+        .group_by(
+            Resident.family_id,
+            EvacuationCenter.id,
+            EvacuationCenter.name,
+            EvacuationCenterRoom.id,
+            EvacuationCenterRoom.room_number,
+            EvacuationCenterRoom.capacity,
+        )
         .all()
     )
     assignments_by_family = defaultdict(list)
-    for family_id, center_name, room_number, assigned_count in assignment_rows:
+    for family_id, center_id, center_name, room_id, room_number, room_capacity, assigned_count in assignment_rows:
         assignments_by_family[family_id].append({
+            'center_id': center_id,
             'center': center_name,
+            'room_id': room_id,
             'room': room_number,
+            'room_capacity': room_capacity,
             'assigned_members': assigned_count,
         })
 
@@ -117,6 +130,7 @@ def _family_list_rows(families):
         family_members = members_by_family.get(family.id, [])
         assignments = assignments_by_family.get(family.id, [])
         first_member = family_members[0] if family_members else None
+        primary_assignment = assignments[0] if assignments else None
         result.append({
             **family.to_dict(),
             'barangay': family.barangay.name if family.barangay else None,
@@ -127,6 +141,11 @@ def _family_list_rows(families):
             'assignments': assignments,
             'evacuation_center': ', '.join(dict.fromkeys(item['center'] for item in assignments)) or None,
             'rooms': ', '.join(dict.fromkeys(item['room'] for item in assignments)) or None,
+            'current_center_id': primary_assignment['center_id'] if primary_assignment else None,
+            'current_room_id': primary_assignment['room_id'] if primary_assignment else None,
+            'current_center': primary_assignment['center'] if primary_assignment else None,
+            'current_room': primary_assignment['room'] if primary_assignment else None,
+            'current_room_capacity': primary_assignment['room_capacity'] if primary_assignment else None,
             'assigned_members': sum(item['assigned_members'] for item in assignments),
             'evacuation_status': 'Assigned' if assignments else family.evacuation_status or 'Not Assigned',
         })
@@ -459,6 +478,10 @@ def get_family(family_id):
     family = Family.query.get_or_404(family_id)
     result = _family_list_rows([family])[0]
     result['members'] = [member.to_dict() for member in Resident.query.filter_by(family_id=family.id).order_by(Resident.id.asc()).all()]
+    if result.get('current_room_id'):
+        room_occ = EvacuationAssignment.query.filter_by(room_id=result['current_room_id']).count()
+        result['current_room_occupied'] = room_occ
+        result['current_room_available'] = max((result.get('current_room_capacity') or 0) - room_occ, 0)
     return jsonify(result)
 
 
@@ -659,3 +682,296 @@ def get_family_members(family_id):
         member.to_dict()
         for member in members
     ]), 200
+
+
+# =========================================================
+# ASSIGN FAMILY TO EVACUATION CENTER ROOM
+# =========================================================
+@families_bp.route('/api/families/<int:family_id>/assign', methods=['POST'])
+@role_required('admin', 'lgu_personnel')
+def assign_family(family_id):
+    family = Family.query.get_or_404(family_id)
+    data = request.get_json() or {}
+
+    center_id = data.get('center_id')
+    room_id = data.get('room_id')
+
+    if not center_id or not room_id:
+        return jsonify({"error": "Center ID and Room ID are required"}), 400
+
+    center = EvacuationCenter.query.get(center_id)
+    if not center:
+        return jsonify({"error": "Evacuation center not found"}), 404
+    if not center.is_active:
+        return jsonify({"error": "Cannot assign to an inactive evacuation center"}), 400
+
+    room = EvacuationCenterRoom.query.get(room_id)
+    if not room:
+        return jsonify({"error": "Room not found"}), 404
+    if not room.is_active:
+        return jsonify({"error": "Cannot assign to an inactive room"}), 400
+    if room.evacuation_center_id != center.id:
+        return jsonify({"error": "Room does not belong to the selected evacuation center"}), 400
+
+    # A family must not have multiple active room assignments
+    existing_assignment = (
+        db.session.query(EvacuationAssignment)
+        .join(Resident, EvacuationAssignment.resident_id == Resident.id)
+        .filter(Resident.family_id == family.id)
+        .first()
+    )
+    if existing_assignment:
+        return jsonify({"error": "Family already has an active room assignment. Use the move option to change rooms."}), 400
+
+    residents = Resident.query.filter_by(family_id=family.id).all()
+    if not residents:
+        head_resident = Resident(
+            family_id=family.id,
+            first_name=family.head_name.split()[0] if family.head_name else "Head",
+            last_name=" ".join(family.head_name.split()[1:]) if family.head_name and len(family.head_name.split()) > 1 else "",
+            household_head_name=family.head_name,
+            barangay=family.barangay.name if family.barangay else "",
+            contact_number=family.contact_number,
+            family_members=family.member_count or 1
+        )
+        db.session.add(head_resident)
+        db.session.flush()
+        residents = [head_resident]
+
+    needed_spaces = len(residents)
+    current_occupancy = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    remaining = max(room.capacity - current_occupancy, 0)
+
+    if current_occupancy + needed_spaces > room.capacity:
+        return jsonify({
+            "error": f"Room does not have enough capacity. Available: {remaining}, Needed: {needed_spaces}",
+            "capacity": room.capacity,
+            "occupied": current_occupancy,
+            "available": remaining,
+            "needed": needed_spaces
+        }), 400
+
+    for resident in residents:
+        db.session.add(EvacuationAssignment(resident_id=resident.id, room_id=room.id))
+
+    family.evacuation_status = "Assigned"
+    user_id = get_jwt_identity()
+    db.session.add(SystemLog(
+        user_id=user_id,
+        action=f"Assigned family '{family.head_name}' ({family.family_code}) to {center.name} - Room {room.room_number}"
+    ))
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Family '{family.head_name}' successfully assigned to Room {room.room_number}.",
+        "family_id": family.id,
+        "center_id": center.id,
+        "center_name": center.name,
+        "room_id": room.id,
+        "room_number": room.room_number,
+        "room_capacity": room.capacity,
+        "room_occupied": current_occupancy + needed_spaces,
+        "room_available": max(room.capacity - (current_occupancy + needed_spaces), 0)
+    }), 200
+
+
+# =========================================================
+# MOVE FAMILY TO ANOTHER ROOM / CENTER
+# =========================================================
+@families_bp.route('/api/families/<int:family_id>/move', methods=['POST'])
+@role_required('admin', 'lgu_personnel')
+def move_family(family_id):
+    family = Family.query.get_or_404(family_id)
+    data = request.get_json() or {}
+
+    new_room_id = data.get('room_id')
+    new_center_id = data.get('center_id')
+
+    if not new_room_id:
+        return jsonify({"error": "Target room ID is required"}), 400
+
+    new_room = EvacuationCenterRoom.query.get(new_room_id)
+    if not new_room:
+        return jsonify({"error": "Target room not found"}), 404
+    if not new_room.is_active:
+        return jsonify({"error": "Cannot move to an inactive room"}), 400
+
+    target_center = EvacuationCenter.query.get(new_room.evacuation_center_id)
+    if not target_center or not target_center.is_active:
+        return jsonify({"error": "Target evacuation center is inactive or not found"}), 400
+
+    if new_center_id and int(new_center_id) != target_center.id:
+        return jsonify({"error": "Target room does not belong to the selected evacuation center"}), 400
+
+    current_assignments = (
+        db.session.query(EvacuationAssignment)
+        .join(Resident, EvacuationAssignment.resident_id == Resident.id)
+        .filter(Resident.family_id == family.id)
+        .all()
+    )
+    if not current_assignments:
+        return jsonify({"error": "Family has no active assignments to move. Use assign instead."}), 400
+
+    if current_assignments[0].room_id == new_room.id:
+        return jsonify({"error": "Family is already in this room."}), 400
+
+    old_room = EvacuationCenterRoom.query.get(current_assignments[0].room_id)
+
+    members_count = len(current_assignments)
+    target_occupancy = EvacuationAssignment.query.filter_by(room_id=new_room.id).count()
+    remaining = max(new_room.capacity - target_occupancy, 0)
+
+    if target_occupancy + members_count > new_room.capacity:
+        return jsonify({
+            "error": f"Target room does not have enough capacity. Available: {remaining}, Needed: {members_count}",
+            "capacity": new_room.capacity,
+            "occupied": target_occupancy,
+            "available": remaining,
+            "needed": members_count
+        }), 400
+
+    for assignment in current_assignments:
+        assignment.room_id = new_room.id
+
+    family.evacuation_status = "Assigned"
+    user_id = get_jwt_identity()
+    old_room_desc = f"Room {old_room.room_number}" if old_room else "previous room"
+    db.session.add(SystemLog(
+        user_id=user_id,
+        action=f"Moved family '{family.head_name}' ({family.family_code}) from {old_room_desc} to {target_center.name} - Room {new_room.room_number}"
+    ))
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Family '{family.head_name}' moved to Room {new_room.room_number} successfully.",
+        "family_id": family.id,
+        "center_id": target_center.id,
+        "center_name": target_center.name,
+        "room_id": new_room.id,
+        "room_number": new_room.room_number,
+        "new_room_occupied": target_occupancy + members_count,
+        "new_room_available": max(new_room.capacity - (target_occupancy + members_count), 0)
+    }), 200
+
+
+# =========================================================
+# UNASSIGN / REMOVE FAMILY FROM ROOM
+# =========================================================
+@families_bp.route('/api/families/<int:family_id>/unassign', methods=['POST', 'DELETE'])
+@role_required('admin', 'lgu_personnel')
+def unassign_family(family_id):
+    family = Family.query.get_or_404(family_id)
+
+    current_assignments = (
+        db.session.query(EvacuationAssignment)
+        .join(Resident, EvacuationAssignment.resident_id == Resident.id)
+        .filter(Resident.family_id == family.id)
+        .all()
+    )
+
+    if not current_assignments:
+        return jsonify({"message": "Family is not currently assigned to any room."}), 200
+
+    room_id = current_assignments[0].room_id
+    room = EvacuationCenterRoom.query.get(room_id)
+    room_number = room.room_number if room else "Room"
+
+    for assignment in current_assignments:
+        db.session.delete(assignment)
+
+    family.evacuation_status = "Not Evacuated"
+
+    user_id = get_jwt_identity()
+    db.session.add(SystemLog(
+        user_id=user_id,
+        action=f"Unassigned family '{family.head_name}' ({family.family_code}) from {room_number}"
+    ))
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Family '{family.head_name}' has been unassigned successfully.",
+        "family_id": family.id
+    }), 200
+
+
+# =========================================================
+# UPDATE FAMILY DETAILS
+# =========================================================
+@families_bp.route('/api/families/<int:family_id>', methods=['PUT'])
+@role_required('admin', 'lgu_personnel')
+def update_family(family_id):
+    family = Family.query.get_or_404(family_id)
+    data = request.get_json() or {}
+
+    head_name = data.get('head_name')
+    if head_name:
+        head_name = re.sub(r'\s+', ' ', str(head_name).strip())
+        if head_name:
+            family.head_name = head_name
+
+    if 'contact_number' in data:
+        family.contact_number = str(data['contact_number'] or '').strip() or None
+
+    if 'barangay_id' in data:
+        try:
+            bid = int(data['barangay_id'])
+            brgy = Barangay.query.get(bid)
+            if brgy:
+                family.barangay_id = brgy.id
+        except (ValueError, TypeError):
+            pass
+
+    address = str(data.get('address') or '').strip() or None
+
+    residents = Resident.query.filter_by(family_id=family.id).all()
+    for resident in residents:
+        if address:
+            resident.address = address
+        if family.barangay:
+            resident.barangay = family.barangay.name
+        if family.head_name:
+            resident.household_head_name = family.head_name
+
+    user_id = get_jwt_identity()
+    db.session.add(SystemLog(
+        user_id=user_id,
+        action=f"Updated family details for '{family.head_name}' ({family.family_code})"
+    ))
+    db.session.commit()
+
+    return jsonify({
+        "message": "Family details updated successfully.",
+        "family": _family_list_rows([family])[0]
+    }), 200
+
+
+# =========================================================
+# DELETE FAMILY (SAFE CHECK)
+# =========================================================
+@families_bp.route('/api/families/<int:family_id>', methods=['DELETE'])
+@role_required('admin', 'lgu_personnel')
+def delete_family(family_id):
+    family = Family.query.get_or_404(family_id)
+
+    active_assignments = (
+        db.session.query(EvacuationAssignment)
+        .join(Resident, EvacuationAssignment.resident_id == Resident.id)
+        .filter(Resident.family_id == family.id)
+        .count()
+    )
+    if active_assignments > 0:
+        return jsonify({
+            "error": "Cannot delete family with active room assignment. Please unassign the family first."
+        }), 400
+
+    Resident.query.filter_by(family_id=family.id).delete()
+    db.session.delete(family)
+
+    user_id = get_jwt_identity()
+    db.session.add(SystemLog(
+        user_id=user_id,
+        action=f"Deleted family '{family.head_name}' ({family.family_code})"
+    ))
+    db.session.commit()
+
+    return jsonify({"message": f"Family '{family.head_name}' deleted successfully."}), 200

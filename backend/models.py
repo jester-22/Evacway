@@ -744,6 +744,13 @@ class EvacuationCenterRoom(db.Model):
         nullable=True
     )
 
+    is_active = db.Column(
+        db.Boolean,
+        default=True,
+        server_default='true',
+        nullable=False
+    )
+
     created_at = db.Column(
         db.DateTime,
         default=philippines_now
@@ -762,6 +769,7 @@ class EvacuationCenterRoom(db.Model):
             "evacuation_center_id": self.evacuation_center_id,
             "room_number": self.room_number,
             "capacity": self.capacity,
+            "is_active": self.is_active,
 
             "latitude": (
                 float(self.latitude)

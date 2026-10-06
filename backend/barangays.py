@@ -113,6 +113,9 @@ def get_barangay(barangay_id):
         EvacuationCenter.barangay_id == barangay.id
     ).count()
 
+    from routes.families import _family_list_rows
+    family_rows = _family_list_rows(families)
+
     return jsonify({
         "id": barangay.id,
         "name": barangay.name,
@@ -120,18 +123,7 @@ def get_barangay(barangay_id):
         "family_count": len(families),
         "resident_count": resident_count,
         "evacuation_center_count": evacuation_center_count,
-
-        "families": [
-            {
-                "id": family.id,
-                "family_code": family.family_code,
-                "head_name": family.head_name,
-                "member_count": family.member_count,
-                "contact_number": family.contact_number,
-                "evacuation_status": family.evacuation_status
-            }
-            for family in families
-        ]
+        "families": family_rows
     }), 200
 
 

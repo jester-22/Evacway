@@ -3,6 +3,7 @@ import { api } from "../services/api";
 import "../components_css/BarangayManager.css";
 import "../components_css/BarangayManager.motion.css";
 import FamilyManagement from "./FamilyManagement";
+import LoadingState from "./LoadingState";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPlus,
@@ -26,6 +27,10 @@ import {
   faDoorOpen,
   faChevronDown,
   faChevronUp,
+  faMagnifyingGlass,
+  faDownload,
+  faTableList,
+  faGrip,
 } from "@fortawesome/free-solid-svg-icons";
 
 function BarangayManager() {
@@ -38,6 +43,13 @@ function BarangayManager() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // Search, filter, view mode and pagination
+  const [barangaySearch, setBarangaySearch] = useState("");
+  const [viewMode, setViewMode] = useState("table");
+  const [brgyPage, setBrgyPage] = useState(1);
+  const [residentSearch, setResidentSearch] = useState("");
+  const [residentPage, setResidentPage] = useState(1);
 
   // NEW: loading states for on-demand data
   const [detailLoading, setDetailLoading] = useState(false);
@@ -217,6 +229,9 @@ function BarangayManager() {
   }
 
   async function handleImport() {
+    // Guard against duplicate submissions (double-click / Enter repeat)
+    if (importing) return;
+
     if (!selectedFile) {
       setImportMessage("Please select an Excel file first.");
       return;
@@ -257,6 +272,50 @@ function BarangayManager() {
     } finally {
       setImporting(false);
     }
+  }
+
+  function exportBarangaysCSV() {
+    const list = filteredBarangays;
+    if (list.length === 0) return;
+    const headers = ["ID", "Barangay Name", "Population", "Families", "Residents", "Evacuation Centers"];
+    const rows = list.map((b) => [
+      b.id,
+      `"${(b.name || "").replace(/"/g, '""')}"`,
+      b.population ?? 0,
+      b.family_count ?? 0,
+      b.resident_count ?? 0,
+      b.evacuation_center_count ?? 0,
+    ]);
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `evacway-barangays-${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  function exportResidentFamiliesCSV() {
+    if (!selectedBarangay) return;
+    const list = filteredFamilies;
+    if (list.length === 0) return;
+    const headers = ["Family Code", "Household Head", "Members", "Contact Number", "Evacuation Status"];
+    const rows = list.map((f) => [
+      `"${(f.family_code || "").replace(/"/g, '""')}"`,
+      `"${(f.head_name || "").replace(/"/g, '""')}"`,
+      f.member_count ?? 0,
+      `"${(f.contact_number || "").replace(/"/g, '""')}"`,
+      `"${(f.evacuation_status || "Not assigned").replace(/"/g, '""')}"`,
+    ]);
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `evacway-${(selectedBarangay.name || "barangay").toLowerCase().replace(/\\s+/g, "-")}-residents-${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 
   function getMemberName(member) {
@@ -349,13 +408,38 @@ function BarangayManager() {
     return 0;
   }
 
+  // Filtered and paginated barangays
+  const filteredBarangays = barangays.filter((b) => {
+    if (!barangaySearch.trim()) return true;
+    const q = barangaySearch.toLowerCase();
+    return (
+      (b.name && b.name.toLowerCase().includes(q)) ||
+      (b.population && String(b.population).includes(q))
+    );
+  });
+  const brgyPerPage = 12;
+  const brgyTotalPages = Math.max(1, Math.ceil(filteredBarangays.length / brgyPerPage));
+  const paginatedBarangays = filteredBarangays.slice((brgyPage - 1) * brgyPerPage, brgyPage * brgyPerPage);
+
+  // Filtered and paginated residents inside selectedBarangay
+  const filteredFamilies = (selectedBarangay?.families || []).filter((fam) => {
+    if (!residentSearch.trim()) return true;
+    const q = residentSearch.toLowerCase();
+    return (
+      (fam.family_code && fam.family_code.toLowerCase().includes(q)) ||
+      (fam.head_name && fam.head_name.toLowerCase().includes(q)) ||
+      (fam.contact_number && fam.contact_number.toLowerCase().includes(q)) ||
+      (fam.evacuation_status && fam.evacuation_status.toLowerCase().includes(q))
+    );
+  });
+  const residentPerPage = 15;
+  const residentTotalPages = Math.max(1, Math.ceil(filteredFamilies.length / residentPerPage));
+  const paginatedFamilies = filteredFamilies.slice((residentPage - 1) * residentPerPage, residentPage * residentPerPage);
+
   if (loading) {
     return (
       <div className="barangay-page">
-        <div className="barangay-loading">
-          <div className="loading-spinner"></div>
-          <p>Loading barangays...</p>
-        </div>
+        <LoadingState message="Loading barangay records..." />
       </div>
     );
   }
@@ -368,6 +452,7 @@ function BarangayManager() {
       <div className="barangay-header">
 
         <div>
+          <p className="barangay-kicker">LGU Records</p>
           <h2 className="barangay-title">
             {workspaceTab === "families" ? "Families" : "Barangays"}
           </h2>
@@ -381,21 +466,40 @@ function BarangayManager() {
 
         <div className="barangay-header-actions">
 
-          {workspaceTab === "barangays" && (
-            <button
-              className="btn btn-primary"
-              onClick={openImportModal}
-            >
-              <FontAwesomeIcon icon={faPlus} />
-              Import Excel
-            </button>
+          {workspaceTab === "barangays" && !selectedBarangay && (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={openImportModal}
+                disabled={importing}
+              >
+                <FontAwesomeIcon
+                  icon={importing ? faRotate : faFileExcel}
+                  spin={importing}
+                />
+                {importing ? "Importing..." : "Import Excel"}
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={exportBarangaysCSV}
+                title="Export Barangays to CSV"
+              >
+                <FontAwesomeIcon icon={faDownload} />
+                Export CSV
+              </button>
+            </>
           )}
 
           <button
+            type="button"
             className="btn btn-secondary"
             onClick={loadBarangays}
+            disabled={loading}
           >
-            <FontAwesomeIcon icon={faRotate} />
+            <FontAwesomeIcon icon={faRotate} spin={loading} />
             Refresh
           </button>
 
@@ -578,35 +682,78 @@ function BarangayManager() {
                   </h3>
 
                   <p>
-                    Residents and families registered under this
-                    barangay.
+                    Residents and families registered under {selectedBarangay.name}.
                   </p>
                 </div>
 
+                {(selectedBarangay.families?.length || 0) > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={exportResidentFamiliesCSV}
+                    title="Export resident records to CSV"
+                  >
+                    <FontAwesomeIcon icon={faDownload} />
+                    Export CSV
+                  </button>
+                )}
+
               </div>
 
-              {selectedBarangay.families?.length > 0 ? (
+              {(selectedBarangay.families?.length || 0) > 0 && (
+                <div className="barangay-filter-bar">
+                  <div className="barangay-search">
+                    <FontAwesomeIcon icon={faMagnifyingGlass} />
+                    <input
+                      type="text"
+                      placeholder="Search household head, code, contact, or status..."
+                      value={residentSearch}
+                      onChange={(e) => {
+                        setResidentSearch(e.target.value);
+                        setResidentPage(1);
+                      }}
+                      aria-label="Search residents"
+                    />
+                    {residentSearch && (
+                      <button
+                        type="button"
+                        className="barangay-search-clear"
+                        onClick={() => {
+                          setResidentSearch("");
+                          setResidentPage(1);
+                        }}
+                        aria-label="Clear search"
+                      >
+                        <FontAwesomeIcon icon={faXmark} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
-                <div className="table-card">
+              {filteredFamilies.length > 0 ? (
 
-                  <div className="table-scroll">
+                <>
+                  <div className="table-card">
 
-                    <table className="barangay-table">
+                    <div className="table-scroll">
 
-                      <thead>
-                        <tr>
-                          <th>Family Code</th>
-                          <th>Household Head</th>
-                          <th>Members</th>
-                          <th>Contact</th>
-                          <th>Evacuation Status</th>
-                        </tr>
-                      </thead>
+                      <table className="barangay-table">
 
-                      <tbody>
+                        <thead>
+                          <tr>
+                            <th>Family Code</th>
+                            <th>Household Head</th>
+                            <th>Members</th>
+                            <th>Contact</th>
+                            <th>Evacuation Status</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
 
-                        {selectedBarangay.families.map(
-                          (family) => (
+                        <tbody>
+
+                          {paginatedFamilies.map((family) => (
 
                             <tr key={family.id}>
 
@@ -620,7 +767,7 @@ function BarangayManager() {
 
                                 <div className="head-cell">
 
-                                  <div className="small-avatar">
+                                  <div className="small-avatar" style={{ background: "#edf4fc", color: "var(--brand, #1b5fc1)" }}>
                                     <FontAwesomeIcon
                                       icon={faUsers}
                                     />
@@ -662,36 +809,114 @@ function BarangayManager() {
                               </td>
 
                               <td>
+                                {(() => {
+                                  const isAssigned = Boolean(
+                                    (family.assigned_members && family.assigned_members > 0) ||
+                                    family.current_room_id ||
+                                    (Array.isArray(family.assignments) && family.assignments.length > 0) ||
+                                    family.current_room ||
+                                    family.current_center ||
+                                    family.evacuation_center ||
+                                    family.rooms ||
+                                    (family.evacuation_status && family.evacuation_status.toLowerCase().includes("assigned"))
+                                  );
+                                  const statusText = isAssigned
+                                    ? ((family.evacuation_status && family.evacuation_status.toLowerCase().includes("evacuated")) ? family.evacuation_status : "Assigned")
+                                    : (family.evacuation_status && !family.evacuation_status.toLowerCase().includes("not assigned") ? family.evacuation_status : "Not assigned");
 
-                                <span
-                                  className={`status-badge ${
-                                    family.evacuation_status
-                                      ?.toLowerCase()
-                                      .includes("assigned")
-                                      ? "status-assigned"
-                                      : family.evacuation_status
-                                          ?.toLowerCase()
-                                          .includes("evacuated")
-                                      ? "status-evacuated"
-                                      : "status-pending"
-                                  }`}
+                                  return (
+                                    <span
+                                      className={`status-badge ${
+                                        isAssigned
+                                          ? "status-assigned"
+                                          : statusText.toLowerCase().includes("evacuated")
+                                          ? "status-evacuated"
+                                          : "status-pending"
+                                      }`}
+                                    >
+                                      {statusText}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
+
+                              <td>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-outline"
+                                  onClick={() => openFamilyMembers(family)}
+                                  title="View family members"
                                 >
-                                  {family.evacuation_status ||
-                                    "Not assigned"}
-                                </span>
-
+                                  View Members
+                                </button>
                               </td>
 
                             </tr>
 
-                          )
-                        )}
+                          ))}
 
-                      </tbody>
+                        </tbody>
 
-                    </table>
+                      </table>
+
+                    </div>
 
                   </div>
+
+                  {filteredFamilies.length > residentPerPage && (
+                    <div className="barangay-pagination">
+                      <span>
+                        {(residentPage - 1) * residentPerPage + 1}–{Math.min(residentPage * residentPerPage, filteredFamilies.length)} of {filteredFamilies.length} families
+                      </span>
+                      <div className="pagination-controls">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          disabled={residentPage <= 1}
+                          onClick={() => setResidentPage((p) => p - 1)}
+                        >
+                          Previous
+                        </button>
+                        <span>Page {residentPage} of {residentTotalPages}</span>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          disabled={residentPage >= residentTotalPages}
+                          onClick={() => setResidentPage((p) => p + 1)}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+
+              ) : selectedBarangay.families?.length > 0 ? (
+
+                <div className="empty-state">
+
+                  <div className="empty-icon">
+                    <FontAwesomeIcon icon={faUsers} />
+                  </div>
+
+                  <h3>
+                    No residents found matching "{residentSearch}"
+                  </h3>
+
+                  <p>
+                    Try searching for a different household head, code, or clear your search.
+                  </p>
+
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setResidentSearch("");
+                      setResidentPage(1);
+                    }}
+                  >
+                    Clear Search
+                  </button>
 
                 </div>
 
@@ -745,10 +970,7 @@ function BarangayManager() {
 
               {centers === null || centersLoading ? (
 
-                <div className="barangay-loading">
-                  <div className="loading-spinner"></div>
-                  <p>Loading evacuation centers...</p>
-                </div>
+                <LoadingState message="Loading evacuation centers..." />
 
               ) : centers.length > 0 ? (
 
@@ -1266,119 +1488,218 @@ function BarangayManager() {
 
           ) : (
 
-            <div className="barangay-grid">
-
-              {barangays.map((barangay) => (
-
-                <div
-                  className="barangay-card"
-                  key={barangay.id}
-                >
-
-                  <div className="card-top">
-
-                    <div className="barangay-icon">
-                      <FontAwesomeIcon
-                        icon={faLocationDot}
-                      />
-                    </div>
-
-                    <div className="card-title-area">
-
-                      <h3>
-                        {barangay.name}
-                      </h3>
-
-                      <span>
-                        Barangay
-                      </span>
-
-                    </div>
-
-                  </div>
-
-                  <div className="card-stats">
-
-                    <div className="card-stat">
-
-                      <span>
-                        Population
-                      </span>
-
-                      <strong>
-                        {barangay.population ?? "—"}
-                      </strong>
-
-                    </div>
-
-                    <div className="card-stat">
-
-                      <span>
-                        Families
-                      </span>
-
-                      <strong>
-                        {barangay.family_count ?? 0}
-                      </strong>
-
-                    </div>
-
-                    <div className="card-stat">
-
-                      <span>
-                        Residents
-                      </span>
-
-                      <strong>
-                        {barangay.resident_count ?? 0}
-                      </strong>
-
-                    </div>
-
-                    <div className="card-stat">
-
-                      <span>
-                        Centers
-                      </span>
-
-                      <strong>
-                        {barangay.evacuation_center_count ?? 0}
-                      </strong>
-
-                    </div>
-
-                  </div>
-
-                  <button
-                    className="view-button"
-                    onClick={() =>
-                      openBarangay(barangay.id)
-                    }
-                    disabled={detailLoading}
-                  >
-
-                    <span>
-                      {detailLoading
-                        ? "Loading..."
-                        : "View Barangay"}
-                    </span>
-
-                    <FontAwesomeIcon
-                      icon={
-                        detailLoading
-                          ? faRotate
-                          : faArrowRight
-                      }
-                      spin={detailLoading}
-                    />
-
-                  </button>
-
+            <>
+              {/* Search & Filter / View Toggle Bar */}
+              <div className="barangay-filter-bar">
+                <div className="barangay-search">
+                  <FontAwesomeIcon icon={faMagnifyingGlass} />
+                  <input
+                    type="text"
+                    placeholder="Search barangays by name..."
+                    value={barangaySearch}
+                    onChange={(e) => {
+                      setBarangaySearch(e.target.value);
+                      setBrgyPage(1);
+                    }}
+                    aria-label="Search barangays"
+                  />
+                  {barangaySearch && (
+                    <button
+                      type="button"
+                      className="barangay-search-clear"
+                      onClick={() => {
+                        setBarangaySearch("");
+                        setBrgyPage(1);
+                      }}
+                      aria-label="Clear search"
+                    >
+                      <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                  )}
                 </div>
 
-              ))}
+                <div className="barangay-filter-actions">
+                  <div className="barangay-view-toggle">
+                    <button
+                      type="button"
+                      className={viewMode === "table" ? "active" : ""}
+                      onClick={() => setViewMode("table")}
+                      title="Table view"
+                    >
+                      <FontAwesomeIcon icon={faTableList} />
+                      Table
+                    </button>
+                    <button
+                      type="button"
+                      className={viewMode === "grid" ? "active" : ""}
+                      onClick={() => setViewMode("grid")}
+                      title="Cards view"
+                    >
+                      <FontAwesomeIcon icon={faGrip} />
+                      Cards
+                    </button>
+                  </div>
+                </div>
+              </div>
 
-            </div>
+              {filteredBarangays.length > 0 ? (
+                <>
+                  {viewMode === "table" ? (
+                    <div className="table-card">
+                      <div className="table-scroll">
+                        <table className="barangay-table">
+                          <thead>
+                            <tr>
+                              <th>Barangay Name</th>
+                              <th>Population</th>
+                              <th>Registered Families</th>
+                              <th>Registered Residents</th>
+                              <th>Evacuation Centers</th>
+                              <th>Status</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {paginatedBarangays.map((barangay) => (
+                              <tr key={barangay.id}>
+                                <td>
+                                  <div className="head-cell">
+                                    <div className="small-avatar" style={{ background: "#edf4fc", color: "var(--brand, #1b5fc1)" }}>
+                                      <FontAwesomeIcon icon={faLocationDot} />
+                                    </div>
+                                    <strong style={{ fontSize: "13.5px", color: "var(--ink, #0e1f3a)" }}>{barangay.name}</strong>
+                                  </div>
+                                </td>
+                                <td><strong>{barangay.population ?? "—"}</strong></td>
+                                <td>{barangay.family_count ?? 0}</td>
+                                <td>{barangay.resident_count ?? 0}</td>
+                                <td>
+                                  <span className={`status-badge ${(barangay.evacuation_center_count || 0) > 0 ? "status-assigned" : "status-pending"}`}>
+                                    <FontAwesomeIcon icon={faBuilding} /> {barangay.evacuation_center_count ?? 0} center(s)
+                                  </span>
+                                </td>
+                                <td>
+                                  <span className="status-badge status-assigned">
+                                    <FontAwesomeIcon icon={faCircleCheck} /> Active
+                                  </span>
+                                </td>
+                                <td>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-secondary"
+                                    onClick={() => openBarangay(barangay.id)}
+                                    disabled={detailLoading}
+                                    title="View Barangay details"
+                                  >
+                                    <span>{detailLoading ? "Loading..." : "View Barangay"}</span>
+                                    <FontAwesomeIcon
+                                      icon={detailLoading ? faRotate : faArrowRight}
+                                      spin={detailLoading}
+                                    />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="barangay-grid">
+                      {paginatedBarangays.map((barangay) => (
+                        <div className="barangay-card" key={barangay.id}>
+                          <div className="card-top">
+                            <div className="barangay-icon">
+                              <FontAwesomeIcon icon={faLocationDot} />
+                            </div>
+                            <div className="card-title-area">
+                              <h3>{barangay.name}</h3>
+                              <span>Barangay</span>
+                            </div>
+                          </div>
+
+                          <div className="card-stats">
+                            <div className="card-stat">
+                              <span>Population</span>
+                              <strong>{barangay.population ?? "—"}</strong>
+                            </div>
+                            <div className="card-stat">
+                              <span>Families</span>
+                              <strong>{barangay.family_count ?? 0}</strong>
+                            </div>
+                            <div className="card-stat">
+                              <span>Residents</span>
+                              <strong>{barangay.resident_count ?? 0}</strong>
+                            </div>
+                            <div className="card-stat">
+                              <span>Centers</span>
+                              <strong>{barangay.evacuation_center_count ?? 0}</strong>
+                            </div>
+                          </div>
+
+                          <button
+                            className="view-button"
+                            onClick={() => openBarangay(barangay.id)}
+                            disabled={detailLoading}
+                          >
+                            <span>{detailLoading ? "Loading..." : "View Barangay"}</span>
+                            <FontAwesomeIcon
+                              icon={detailLoading ? faRotate : faArrowRight}
+                              spin={detailLoading}
+                            />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {filteredBarangays.length > brgyPerPage && (
+                    <div className="barangay-pagination">
+                      <span>
+                        {(brgyPage - 1) * brgyPerPage + 1}–{Math.min(brgyPage * brgyPerPage, filteredBarangays.length)} of {filteredBarangays.length} barangays
+                      </span>
+                      <div className="pagination-controls">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          disabled={brgyPage <= 1}
+                          onClick={() => setBrgyPage((p) => p - 1)}
+                        >
+                          Previous
+                        </button>
+                        <span>Page {brgyPage} of {brgyTotalPages}</span>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          disabled={brgyPage >= brgyTotalPages}
+                          onClick={() => setBrgyPage((p) => p + 1)}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="empty-state">
+                  <div className="empty-icon">
+                    <FontAwesomeIcon icon={faLocationDot} />
+                  </div>
+                  <h3>No barangays matching "{barangaySearch}"</h3>
+                  <p>Try searching for a different name or clear your search.</p>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setBarangaySearch("");
+                      setBrgyPage(1);
+                    }}
+                  >
+                    Clear Search
+                  </button>
+                </div>
+              )}
+            </>
 
           )}
 
@@ -1447,43 +1768,78 @@ function BarangayManager() {
             <div className="family-summary">
 
               <div className="family-summary-item">
-
                 <div className="family-summary-icon">
                   <FontAwesomeIcon icon={faUser} />
                 </div>
-
                 <div>
-
-                  <span>
-                    Household Head
-                  </span>
-
-                  <strong>
-                    {selectedFamily.head_name || "—"}
-                  </strong>
-
+                  <span>Household Head</span>
+                  <strong>{selectedFamily.head_name || "—"}</strong>
                 </div>
-
               </div>
 
               <div className="family-summary-item">
-
                 <div className="family-summary-icon">
                   <FontAwesomeIcon icon={faPhone} />
                 </div>
-
                 <div>
-
-                  <span>
-                    Contact
-                  </span>
-
-                  <strong>
-                    {selectedFamily.contact_number || "—"}
-                  </strong>
-
+                  <span>Contact</span>
+                  <strong>{selectedFamily.contact_number || "—"}</strong>
                 </div>
+              </div>
 
+              <div className="family-summary-item">
+                <div className="family-summary-icon">
+                  <FontAwesomeIcon icon={faBuilding} />
+                </div>
+                <div>
+                  <span>Evacuation Center</span>
+                  <strong>
+                    {selectedFamily.current_center ||
+                      selectedFamily.evacuation_center ||
+                      selectedFamily.assignments?.[0]?.center ||
+                      "Not assigned"}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="family-summary-item">
+                <div className="family-summary-icon">
+                  <FontAwesomeIcon icon={faDoorOpen} />
+                </div>
+                <div>
+                  <span>Assigned Room</span>
+                  <strong>
+                    {(() => {
+                      const r =
+                        selectedFamily.current_room ||
+                        selectedFamily.rooms ||
+                        selectedFamily.assignments?.[0]?.room;
+                      if (!r) return "Not assigned";
+                      return String(r).toLowerCase().startsWith("room") ? r : `Room ${r}`;
+                    })()}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="family-summary-item">
+                <div className="family-summary-icon">
+                  <FontAwesomeIcon icon={faShieldHeart} />
+                </div>
+                <div>
+                  <span>Status</span>
+                  <strong>
+                    {selectedFamily.current_room_id ||
+                    (selectedFamily.assigned_members && selectedFamily.assigned_members > 0) ||
+                    (Array.isArray(selectedFamily.assignments) && selectedFamily.assignments.length > 0) ||
+                    selectedFamily.current_room ||
+                    selectedFamily.current_center ||
+                    (selectedFamily.evacuation_status && selectedFamily.evacuation_status.toLowerCase().includes("assigned"))
+                      ? "Assigned"
+                      : (selectedFamily.evacuation_status && !selectedFamily.evacuation_status.toLowerCase().includes("not assigned")
+                      ? selectedFamily.evacuation_status
+                      : "Not assigned")}
+                  </strong>
+                </div>
               </div>
 
             </div>

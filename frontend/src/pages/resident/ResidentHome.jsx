@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
@@ -11,6 +11,7 @@ import { createReportPopup } from "../../components/mapReports";
 
 import { useHazardData } from "../../hooks/useHazardData";
 import { useEvacuationData } from "../../hooks/useEvacuationData";
+import { usePublicHazardReports, useRoadSegments, useSogodBoundary } from "../../hooks/useEvacuationQueries";
 import { useRouting } from "../../hooks/useRouting";
 import { displayEntityName } from "../../utils/displayEntityName";
 
@@ -58,6 +59,10 @@ const SOGOD_BOUNDS = [
  * At this zoom and above: the building outline and room icons show.
  */
 const ROOM_MIN_ZOOM = 14;
+const PUBLIC_MAP_QUERY_OPTIONS = {
+  staleTime: 20000,
+  refetchOnMount: "always",
+};
 
 /*
  * Remembers who the resident is on this device.
@@ -661,18 +666,26 @@ const ResidentHome = () => {
   const routeMarkersRef = useRef([]);
 
   const [mapLoaded, setMapLoaded] = useState(false);
-  const [hazardReports, setHazardReports] = useState([]);
+  const hazardReportsQuery = usePublicHazardReports(PUBLIC_MAP_QUERY_OPTIONS);
+  const roadSegmentsQuery = useRoadSegments(PUBLIC_MAP_QUERY_OPTIONS);
+  const sogodBoundaryQuery = useSogodBoundary();
+  const hazardReports = useMemo(
+    () => Array.isArray(hazardReportsQuery.data)
+      ? hazardReportsQuery.data.filter(isValidatedReport)
+      : [],
+    [hazardReportsQuery.data]
+  );
+  const roads = roadSegmentsQuery.data ?? null;
+  const sogodBoundary = sogodBoundaryQuery.data ?? null;
 
   // --------------------------------------------------
   // Use Custom Hooks for Logic
   // --------------------------------------------------
   const { 
-    hazardZones, 
     visibleLayers, 
     setVisibleLayers, 
-    refreshHazardZones, 
     filteredHazardZones 
-  } = useHazardData();
+  } = useHazardData(PUBLIC_MAP_QUERY_OPTIONS);
 
   const { 
     evacCenters, 
@@ -698,9 +711,6 @@ const ResidentHome = () => {
   const [mapStyle, setMapStyle] = useState("street");
 
   const [mapOptionsOpen, setMapOptionsOpen] = useState(false);
-
-  const [sogodBoundary, setSogodBoundary] = useState(null);
-  const [roads, setRoads] = useState(null);
 
   const [pickingLocation, setPickingLocation] = useState(false);
 
@@ -781,33 +791,6 @@ const ResidentHome = () => {
   // --------------------------------------------------
   // Load remaining data
   // --------------------------------------------------
-
-  useEffect(() => {
-    api
-      .getRoadSegments()
-      .then(setRoads)
-      .catch((err) => {
-        console.error("Failed to load road segments:", err);
-      });
-
-    fetch("/sogod_boundary.geojson")
-      .then((res) => res.json())
-      .then(setSogodBoundary)
-      .catch((err) => {
-        console.error("Failed to load Sogod boundary:", err);
-      });
-  }, []);
-
-  useEffect(() => {
-    api
-      .getPublicHazardReports()
-      .then((reports) =>
-        setHazardReports(
-          Array.isArray(reports) ? reports.filter(isValidatedReport) : []
-        )
-      )
-      .catch((error) => console.error("Hazard reports loading error:", error));
-  }, []);
 
   // Display interactive hazard-zone outlines for the selected map layers.
   useEffect(() => {
@@ -2469,8 +2452,6 @@ const ResidentHome = () => {
       "Thank you - your report has been submitted for review."
     );
 
-    refreshHazardZones();
-
     setTimeout(() => setReportConfirmation(""), 4000);
   }
 
@@ -3165,11 +3146,13 @@ const ResidentHome = () => {
         <button
           onClick={openMyCenter}
           className={myCenter ? "action-btn verified" : "action-btn"}
-          title={myCenter ? "My evacuation center" : "Enter your name"}
+          title={myCenter ? "My Evacuation Center" : "Find My Evacuation Center"}
         >
           <FontAwesomeIcon icon={myCenter ? faCircleCheck : faUser} />
 
-          {!isMobile && <span>{myCenter ? firstName : "Enter Your Name"}</span>}
+          {!isMobile && (
+            <span>{myCenter ? `My Center (${firstName})` : "My Evacuation Center"}</span>
+          )}
         </button>
 
         {locationPermission !== "granted" ? (

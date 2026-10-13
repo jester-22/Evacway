@@ -1,10 +1,13 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLocationCrosshairs, faTriangleExclamation, faXmark } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../services/api";
+import { queryKeys } from "../hooks/useEvacuationQueries";
 import "../components_css/RescueAlertModal.css";
 
 export default function RescueAlertModal({ onClose, onSubmitted }) {
+  const queryClient = useQueryClient();
   const [description, setDescription] = useState("");
   const [locationDescription, setLocationDescription] = useState("");
   const [coordinates, setCoordinates] = useState(null);
@@ -56,6 +59,7 @@ export default function RescueAlertModal({ onClose, onSubmitted }) {
         latitude: coordinates?.latitude ?? null,
         longitude: coordinates?.longitude ?? null,
       });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.rescueRequests });
       onSubmitted();
     } catch (requestError) {
       setError(requestError.message || "Rescue request could not be sent.");

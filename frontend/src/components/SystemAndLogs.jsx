@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faClock,
@@ -10,11 +10,8 @@ import "../components_css/SystemAndLogs.css";
 
 function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) {
   const isPersonnel = user?.role === "lgu_personnel";
-  const [showOnlyMyLogs, setShowOnlyMyLogs] = useState(isPersonnel);
-
-  useEffect(() => {
-    setShowOnlyMyLogs(isPersonnel);
-  }, [isPersonnel]);
+  const [adminScope, setAdminScope] = useState("all");
+  const showOnlyMyLogs = isPersonnel ? true : adminScope === "mine";
 
   const safeUserId = user?.id ?? user?.user_id ?? user?.email ?? null;
 
@@ -37,8 +34,8 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
 
   const totalLogs = filteredLogs.length;
   const lastActivity =
-    totalLogs > 0
-      ? new Date(filteredLogs[0]?.timestamp || Date.now()).toLocaleString()
+    totalLogs > 0 && filteredLogs[0]?.timestamp
+      ? new Date(filteredLogs[0].timestamp).toLocaleString()
       : "No recent activity";
 
   function handleExport() {
@@ -72,10 +69,12 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
       <div className="sal-shell">
         <header className="sal-header">
           <div>
-            <p className="sal-kicker">Operations</p>
             <h3 className="sal-title">
-              {isPersonnel ? "My Logs" : showOnlyMyLogs ? "My Logs" : "System & Logs"}
+              {isPersonnel ? "My Activity Logs" : showOnlyMyLogs ? "My Activity Logs" : "Activity Logs"}
             </h3>
+            <p className="sal-subtitle">
+              View recent actions and system events.
+            </p>
           </div>
 
           <div className="sal-actions">
@@ -84,17 +83,17 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
                 <button
                   type="button"
                   className={!showOnlyMyLogs ? "sal-toggle active" : "sal-toggle"}
-                  onClick={() => setShowOnlyMyLogs(false)}
+                  onClick={() => setAdminScope("all")}
                 >
-                  All logs
+                  All Logs
                 </button>
                 <button
                   type="button"
                   className={showOnlyMyLogs ? "sal-toggle active" : "sal-toggle"}
-                  onClick={() => setShowOnlyMyLogs(true)}
+                  onClick={() => setAdminScope("mine")}
                   disabled={!safeUserId}
                 >
-                  My logs
+                  My Logs
                 </button>
               </div>
             )}
@@ -113,25 +112,20 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
 
         <div className="sal-summary-grid">
           <div className="sal-stat-card">
-            <span>{showOnlyMyLogs ? "My events" : "Total events"}</span>
+            <span>{showOnlyMyLogs ? "My Events" : "Total Events"}</span>
             <strong>{loading ? "..." : totalLogs}</strong>
           </div>
 
           <div className="sal-stat-card is-accent">
-            <span>Latest activity</span>
-            <strong>{loading ? "Syncing activity" : lastActivity}</strong>
-          </div>
-
-          <div className="sal-stat-card">
-            <span>Status</span>
-            <strong>{loading ? "Loading" : totalLogs > 0 ? "Online" : "Idle"}</strong>
+            <span>Latest Activity</span>
+            <strong>{loading ? "Loading..." : lastActivity}</strong>
           </div>
         </div>
 
         <section className="sal-card">
           <div className="sal-card-header">
-            <h4>{showOnlyMyLogs ? "My activity log" : "Activity log"}</h4>
-            <span>{totalLogs} entries</span>
+            <h4>{showOnlyMyLogs ? "My Activity" : "Recent Activity"}</h4>
+            <span>{totalLogs} {totalLogs === 1 ? "entry" : "entries"}</span>
           </div>
 
           {loading ? (
@@ -140,13 +134,8 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
                 <FontAwesomeIcon icon={faRotate} spin />
               </div>
               <div className="sal-loading-copy">
-                <strong>Loading activity</strong>
-                <span>Synchronizing recent system events</span>
-              </div>
-              <div className="sal-skeleton-list" aria-hidden="true">
-                <span />
-                <span />
-                <span />
+                <strong>Loading activity logs...</strong>
+                <span>Fetching recent system events</span>
               </div>
             </div>
           ) : error ? (

@@ -1,7 +1,9 @@
-import { useState, useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
+import { queryKeys, useEvacuationCenters, useHazardZones, useLogs, useNotifications } from "../../hooks/useEvacuationQueries";
+import { useQueryClient } from "@tanstack/react-query";
 
 import Sidebar from "../../components/Sidebar";
 import EvacuationCenterManager from "../../components/EvacuationCenterManager";
@@ -37,58 +39,54 @@ function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
 function LguDashboard() {
   const location = useLocation();
   const requestedTab = new URLSearchParams(location.search).get("tab");
-  const [tab, setTab] = useState(["reports", "rescue"].includes(requestedTab) ? requestedTab : "centers");
+  const notificationId = new URLSearchParams(location.search).get("notificationId");
+  const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "settings"].includes(requestedTab) ? requestedTab : "centers");
   const [focusedReportId, setFocusedReportId] = useState(null);
   const [focusedRescueId, setFocusedRescueId] = useState(null);
   const [mapFocusLocation, setMapFocusLocation] = useState(null);
-  const [centers, setCenters] = useState(null);
-  const [hazardZones, setHazardZones] = useState(null);
-  const [logs, setLogs] = useState([]);
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [logsError, setLogsError] = useState("");
-
   const { user, logout } = useAuth();
+  const queryClient = useQueryClient();
+  const notificationsQuery = useNotifications({ enabled: Boolean(notificationId) });
+  const handledNotificationId = useRef(null);
   const isMobile = useIsMobile();
-
-  useEffect(() => {
-    refreshCenters();
-
-    api
-      .getHazardZones()
-      .then(setHazardZones)
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (tab !== "settings") return;
-    api
-      .getLogs()
-      .then(setLogs)
-      .catch((error) => {
-        setLogs([]);
-        setLogsError(error.message || "Could not load your activity logs.");
-      })
-      .finally(() => setLogsLoading(false));
-  }, [tab]);
+  const navigate = useNavigate();
+  const centersQuery = useEvacuationCenters(true);
+  const hazardZonesQuery = useHazardZones();
+  const logsQuery = useLogs({ enabled: tab === "settings" });
+  const centers = centersQuery.data ?? null;
+  const hazardZones = hazardZonesQuery.data ?? null;
+  const logs = logsQuery.data || [];
 
   function handleTabChange(nextTab) {
-    if (nextTab === "settings") {
-      setLogsLoading(true);
-      setLogsError("");
+    if (nextTab === "dashboard") {
+      navigate("/dashboard");
+      return;
     }
     setTab(nextTab);
   }
 
   useEffect(() => {
-    const notificationId = new URLSearchParams(location.search).get("notificationId");
-    if (!notificationId) return undefined;
+    if (!notificationId) {
+      handledNotificationId.current = null;
+      return;
+    }
+    if (handledNotificationId.current === notificationId) return;
+
+    const notification = notificationsQuery.data?.notifications?.find(
+      (item) => String(item.id) === notificationId
+    );
+    if (!notification) return;
 
     let cancelled = false;
-    api.getNotifications().then((result) => {
-      if (cancelled) return;
-      const notification = result.notifications?.find((item) => String(item.id) === notificationId);
-      if (!notification) return;
-      api.markNotificationRead(notification.id).catch(() => {});
+    Promise.resolve().then(() => {
+      if (cancelled || handledNotificationId.current === notificationId) return;
+
+      handledNotificationId.current = notificationId;
+      if (!notification.is_read) {
+        api.markNotificationRead(notification.id)
+          .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
+          .catch(() => {});
+      }
       if (notification.resource_type === "hazard_report") {
         setFocusedReportId(notification.resource_id);
         setFocusedRescueId(null);
@@ -98,10 +96,9 @@ function LguDashboard() {
         setFocusedReportId(null);
         setTab("rescue");
       }
-    }).catch(() => {});
-
+    });
     return () => { cancelled = true; };
-  }, [location.search]);
+  }, [location.search, notificationId, notificationsQuery.data, queryClient]);
 
   function handleNotificationSelect(notification) {
     if (notification.resource_type === "hazard_report") {
@@ -126,10 +123,7 @@ function LguDashboard() {
   }
 
   function refreshCenters() {
-    api
-      .getEvacuationCenters(true)
-      .then(setCenters)
-      .catch(() => {});
+    return centersQuery.refetch();
   }
 
   return (
@@ -171,7 +165,7 @@ function LguDashboard() {
         )}
 
         {tab === "settings" && (
-          <SystemAndLogs logs={logs} user={user} loading={logsLoading} error={logsError} />
+          <SystemAndLogs logs={logs} user={user} loading={logsQuery.isLoading} error={logsQuery.error?.message || ""} />
         )}
       </div>
     </div>

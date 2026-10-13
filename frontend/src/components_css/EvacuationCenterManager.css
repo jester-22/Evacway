@@ -14,8 +14,8 @@
   width: 100%;
   height: 100%;
   min-height: 0;
-  background: var(--bg-0, #f5f7fb);
-  color: var(--ink, #1f2937);
+  background: #f8fafc;
+  color: #0f172a;
   font-family: var(--font-body, "Public Sans", sans-serif);
   position: relative;
   overflow: hidden;
@@ -30,35 +30,45 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 14px 24px;
+  gap: 12px;
+  min-height: 60px;
+  padding: 10px 16px;
   background: #ffffff;
-  border-bottom: 1px solid var(--line, #e5e7eb);
+  border-bottom: 1px solid #e2e8f0;
   flex-shrink: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   z-index: 10;
+}
+
+.ecm-container .ecm-title-group {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .ecm-container .ecm-title-group h2 {
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
-  letter-spacing: -0.3px;
-  color: var(--ink, #111827);
-  font-family: var(--font-display, inherit);
+  line-height: 1.2;
+  color: #0f172a;
 }
 
 .ecm-container .ecm-title-group p {
-  margin: 3px 0 0;
+  max-width: 520px;
+  overflow: hidden;
+  margin: 2px 0 0;
   font-size: 13px;
-  color: var(--muted, #6b7280);
+  color: #64748b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ecm-container .ecm-controls {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 /* Filter bar (second row) */
@@ -67,9 +77,9 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  padding: 10px 24px;
+  padding: 8px 16px;
   background: #ffffff;
-  border-bottom: 1px solid var(--line, #e5e7eb);
+  border-bottom: 1px solid #e2e8f0;
   flex-shrink: 0;
 }
 
@@ -77,24 +87,24 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 38px;
-  padding: 0 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 7px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
   background: #ffffff;
-  min-width: 240px;
-  flex: 1 1 240px;
-  max-width: 360px;
+  min-width: 220px;
+  flex: 1 1 220px;
+  max-width: 320px;
   box-sizing: border-box;
 }
 
 .ecm-container .ecm-search:focus-within {
   border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .ecm-container .ecm-search svg {
-  color: var(--muted, #9ca3af);
+  color: #64748b;
   font-size: 12px;
 }
 
@@ -104,7 +114,7 @@
   border: none;
   outline: none;
   background: transparent;
-  color: inherit;
+  color: #0f172a;
   font-size: 13px;
   font-family: inherit;
 }
@@ -113,17 +123,17 @@
   border: none;
   background: none;
   padding: 2px;
-  color: var(--muted, #9ca3af);
+  color: #64748b;
   cursor: pointer;
 }
 
 .ecm-container .ecm-select {
-  min-height: 38px;
+  min-height: 36px;
   padding: 0 10px;
-  border: 1px solid #d1d5db;
-  border-radius: 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
   background: #ffffff;
-  color: #374151;
+  color: #0f172a;
   font-size: 13px;
   font-family: inherit;
   outline: none;
@@ -135,27 +145,27 @@
 
 .ecm-container .ecm-result-count {
   margin-left: auto;
-  font-size: 12.5px;
-  color: var(--muted, #6b7280);
+  font-size: 12px;
+  color: #64748b;
   white-space: nowrap;
 }
 
 .ecm-container .ecm-result-count strong {
-  color: var(--ink, #111827);
+  color: #0f172a;
 }
 
 /* =========================================================
-   BUTTONS (mirror canonical .btn in BarangayManager.css)
+   BUTTONS
    ========================================================= */
 
 .ecm-container .btn {
-  min-height: 38px;
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 0 15px;
-  border-radius: 7px;
+  padding: 0 14px;
+  border-radius: 8px;
   border: 1px solid transparent;
   font-size: 13px;
   font-weight: 600;
@@ -188,13 +198,13 @@
 
 .ecm-container .btn-secondary {
   background: #ffffff;
-  color: #374151;
-  border-color: #d1d5db;
+  color: #0f172a;
+  border-color: #cbd5e1;
 }
 
 .ecm-container .btn-secondary:hover:not(:disabled) {
-  background: #f9fafb;
-  border-color: #9ca3af;
+  background: #f8fafc;
+  border-color: #94a3b8;
 }
 
 .ecm-container .btn-danger {
@@ -216,8 +226,14 @@
 }
 
 .ecm-container .btn-icon {
-  width: 38px;
+  width: 36px;
   padding: 0;
+}
+
+.ecm-container .ecm-top-bar :focus-visible,
+.ecm-container .ecm-filter-bar :focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 /* =========================================================
@@ -225,11 +241,13 @@
    ========================================================= */
 
 .ecm-container .ecm-map-workspace {
-  flex: 1;
-  width: 100%;
+  flex: 1 1 0%;
+  width: auto;
   min-height: 0;
   position: relative;
+  margin: 8px;
   overflow: hidden;
+  border-radius: 12px;
 }
 
 .ecm-container .ecm-draw-toolbar {
@@ -858,20 +876,92 @@
   color: #b91c1c;
 }
 
+@media (min-width: 1200px) {
+  .ecm-container .ecm-filter-bar {
+    flex-wrap: nowrap;
+  }
+
+  .ecm-container .ecm-search {
+    min-width: 140px;
+    flex: 1 1 200px;
+    max-width: 280px;
+  }
+
+  .ecm-container .ecm-select {
+    min-width: 108px;
+    flex: 0 1 132px;
+  }
+
+  .ecm-container .ecm-result-count {
+    flex: 0 0 auto;
+    font-size: 11px;
+  }
+
+  .ecm-container .ecm-filter-bar > .btn-sm {
+    min-height: 36px;
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 1024px) {
+  .ecm-container .ecm-title-group p {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .ecm-container .ecm-top-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .ecm-container .ecm-title-group {
+    flex: 1 1 100%;
+  }
+
+  .ecm-container .ecm-controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 768px) {
   .ecm-container .ecm-top-bar,
   .ecm-container .ecm-filter-bar,
   .ecm-container .ecm-table-view {
-    padding-left: 14px;
-    padding-right: 14px;
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   .ecm-container .ecm-search {
+    min-width: 0;
+    flex: 1 1 100%;
     max-width: none;
+  }
+
+  .ecm-container .ecm-select {
+    min-width: 0;
+    flex: 1 1 calc(50% - 3px);
   }
 
   .ecm-container .ecm-result-count {
     margin-left: 0;
     width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .ecm-container .ecm-top-bar .ecm-controls {
+    gap: 6px;
+  }
+
+  .ecm-container .ecm-top-bar .ecm-controls > .btn {
+    gap: 5px;
+    padding: 0 6px;
+    font-size: 11px;
+  }
+
+  .ecm-container .ecm-top-bar .ecm-controls > .btn-icon {
+    flex: 0 0 36px;
   }
 }

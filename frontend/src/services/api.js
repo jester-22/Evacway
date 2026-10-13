@@ -396,6 +396,23 @@ export const api = {
   getBarangay: (id) =>
     request(`/api/barangays/${id}`),
 
+  addBarangay: (payload) =>
+    request("/api/barangays", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateBarangay: (id, payload) =>
+    request(`/api/barangays/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteBarangay: (id) =>
+    request(`/api/barangays/${id}`, {
+      method: "DELETE",
+    }),
+
   getBarangayEvacuationCenters: (barangayId) =>
     request(
       `/api/barangays/${barangayId}/evacuation-centers`
@@ -427,6 +444,23 @@ export const api = {
 
   deleteFamily: (familyId) =>
     request(`/api/families/${familyId}`, {
+      method: "DELETE",
+    }),
+
+  addFamilyMember: (familyId, payload) =>
+    request(`/api/families/${familyId}/members`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateFamilyMember: (familyId, memberId, payload) =>
+    request(`/api/families/${familyId}/members/${memberId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteFamilyMember: (familyId, memberId) =>
+    request(`/api/families/${familyId}/members/${memberId}`, {
       method: "DELETE",
     }),
 

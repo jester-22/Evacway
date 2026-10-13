@@ -5,10 +5,12 @@ import {
   faTriangleExclamation,
   faPeopleGroup,
   faUsers,
-  faGear,
+  faClockRotateLeft,
   faRightFromBracket,
   faShieldHalved,
   faUser,
+  faChartLine,
+  faLifeRing,
 } from "@fortawesome/free-solid-svg-icons";
 
 import "../components_css/Sidebar.css";
@@ -18,6 +20,12 @@ import { useAuth } from "../context/AuthContext";
 
 const TABS = [
   {
+    key: "dashboard",
+    label: "Dashboard",
+    icon: faChartLine,
+    roles: ["admin", "lgu_personnel"],
+  },
+  {
     key: "centers",
     label: "Evacuation Centers",
     icon: faHouseFlag,
@@ -25,7 +33,7 @@ const TABS = [
   },
   {
     key: "barangays",
-    label: "Barangays",
+    label: "Barangays & Families",
     icon: faPeopleGroup,
     roles: ["admin", "lgu_personnel"],
   },
@@ -37,20 +45,20 @@ const TABS = [
   },
   {
     key: "rescue",
-    label: "Rescue Requests",
-    icon: faTriangleExclamation,
+    label: "Rescue Alerts",
+    icon: faLifeRing,
     roles: ["admin", "lgu_personnel"],
   },
   {
     key: "users",
-    label: "Manage Users",
+    label: "Users",
     icon: faUsers,
     roles: ["admin"],
   },
   {
     key: "settings",
-    label: "Settings / Logs",
-    icon: faGear,
+    label: "Activity Logs",
+    icon: faClockRotateLeft,
     roles: ["admin", "lgu_personnel"],
   },
 ];
@@ -98,14 +106,12 @@ function Sidebar({
           {!isMobile && (
             <span className="sidebar-brand-copy">
               <strong>EvacWay</strong>
-              <small>Operations</small>
             </span>
           )}
           {!isMobile && <NotificationCenter onSelect={onSelectNotification} />}
         </div>
 
-        <div className="sidebar-section-label">Workspace</div>
-        <nav className="sidebar-navigation" aria-label="Dashboard sections">
+        <nav className="sidebar-navigation" aria-label="Main navigation">
           {availableTabs.map((item) => (
             <button
               key={item.key}

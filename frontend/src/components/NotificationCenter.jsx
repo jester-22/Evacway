@@ -7,7 +7,9 @@ import {
   faCheck,
   faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
+import { queryKeys, useNotifications } from "../hooks/useEvacuationQueries";
 import "../components_css/NotificationCenter.css";
 
 function decodeVapidKey(value) {
@@ -18,8 +20,11 @@ function decodeVapidKey(value) {
 
 export default function NotificationCenter({ onSelect }) {
   const bellRef = useRef(null);
-  const [notifications, setNotifications] = useState([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const queryClient = useQueryClient();
+  const notificationsQuery = useNotifications();
+  const refetchNotifications = notificationsQuery.refetch;
+  const notifications = notificationsQuery.data?.notifications || [];
+  const unreadCount = notificationsQuery.data?.unread_count || 0;
   const [open, setOpen] = useState(false);
   const [subscription, setSubscription] = useState(null);
   const [pushMessage, setPushMessage] = useState("");
@@ -27,30 +32,13 @@ export default function NotificationCenter({ onSelect }) {
   const [panelPosition, setPanelPosition] = useState(null);
 
   useEffect(() => {
-    let mounted = true;
-
-    async function refresh() {
-      if (document.visibilityState !== "visible") return;
-      try {
-        const result = await api.getNotifications();
-        if (mounted) {
-          setNotifications(result.notifications || []);
-          setUnreadCount(result.unread_count || 0);
-        }
-      } catch {
-        // Keep the last successful list visible if the network drops.
-      }
+    function refreshWhenVisible() {
+      if (document.visibilityState === "visible") refetchNotifications();
     }
 
-    refresh();
-    const interval = window.setInterval(refresh, 30000);
-    document.addEventListener("visibilitychange", refresh);
-    return () => {
-      mounted = false;
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", refresh);
-    };
-  }, []);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => document.removeEventListener("visibilitychange", refreshWhenVisible);
+  }, [refetchNotifications]);
 
   useEffect(() => {
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
@@ -97,13 +85,17 @@ export default function NotificationCenter({ onSelect }) {
   async function handleSelect(notification) {
     try {
       await api.markNotificationRead(notification.id);
+      queryClient.setQueryData(queryKeys.notifications, (current) => current ? {
+        ...current,
+        notifications: current.notifications?.map((item) => (
+          item.id === notification.id ? { ...item, is_read: true } : item
+        )),
+        unread_count: Math.max(0, (current.unread_count || 0) - (notification.is_read ? 0 : 1)),
+      } : current);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
     } catch {
       // Navigation should still work if marking read fails temporarily.
     }
-    setNotifications((current) => current.map((item) => (
-      item.id === notification.id ? { ...item, is_read: true } : item
-    )));
-    setUnreadCount((count) => Math.max(0, count - (notification.is_read ? 0 : 1)));
     setOpen(false);
     onSelect(notification);
   }

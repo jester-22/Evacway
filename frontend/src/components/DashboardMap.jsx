@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
@@ -20,7 +20,14 @@ import {
   faChevronRight,
 } from "@fortawesome/free-solid-svg-icons";
 
-import { api, BASE_URL } from "../services/api";
+import { BASE_URL } from "../services/api";
+import {
+  usePublicHazardReports,
+  useRoadSegments,
+  useRoomsForCenters,
+  useRoomFamilies,
+  useSogodBoundary,
+} from "../hooks/useEvacuationQueries";
 import { displayEntityName } from "../utils/displayEntityName";
 import "../components_css/DashboardMap.css";
 import { isValidatedReport, createReportMarker, createReportPopup } from "./mapReports";
@@ -224,12 +231,19 @@ function DashboardMap({
 
   const [mapLoaded, setMapLoaded] = useState(false);
 
-  /*
-   * Rooms loaded directly from the database.
-   * This makes the dashboard independent from
-   * EvacuationCenterManager.
-   */
-  const [loadedRooms, setLoadedRooms] = useState([]);
+  const { rooms: loadedRooms } = useRoomsForCenters(centers);
+  const { data: sogodBoundary = null } = useSogodBoundary();
+  const { data: roads = null } = useRoadSegments();
+  const hazardReportsQuery = usePublicHazardReports();
+  const hazardReports = useMemo(() => {
+    const response = hazardReportsQuery.data;
+    const reports = Array.isArray(response)
+      ? response
+      : Array.isArray(response?.reports)
+        ? response.reports
+        : [];
+    return reports.filter(isValidatedReport);
+  }, [hazardReportsQuery.data]);
 
   /*
    * Selected center / room for the details panels
@@ -274,23 +288,19 @@ function DashboardMap({
   /*
    * Families assigned to the selected room
    */
-  const [roomFamilies, setRoomFamilies] = useState({
-    families: [],
-    occupied: 0,
-    available: 0,
-  });
-  const [familiesLoading, setFamiliesLoading] = useState(false);
-  const [familiesError, setFamiliesError] = useState("");
+  const roomFamiliesQuery = useRoomFamilies(selectedRoom?.id);
+  const roomFamilies = useMemo(
+    () => normalizeRoomFamilies(roomFamiliesQuery.data, selectedRoom?.capacity),
+    [roomFamiliesQuery.data, selectedRoom?.capacity]
+  );
+  const familiesLoading = roomFamiliesQuery.isLoading;
+  const familiesError = roomFamiliesQuery.error?.message || "";
 
   const [visibleLayers, setVisibleLayers] = useState({
     flood: false,
     landslide: false,
   });
-  const [hazardReports, setHazardReports] = useState([]);
   const [showReports, setShowReports] = useState(true);
-
-  const [sogodBoundary, setSogodBoundary] = useState(null);
-  const [roads, setRoads] = useState(null);
 
   /*
    * Search
@@ -330,24 +340,6 @@ function DashboardMap({
     setSelectedRoom(room);
   };
 
-  /*
-   * Load Sogod boundary
-   */
-  useEffect(() => {
-    fetch("/sogod_boundary.geojson")
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error("Failed to load Sogod boundary.");
-        }
-
-        return res.json();
-      })
-      .then(setSogodBoundary)
-      .catch((err) => {
-        console.error("Boundary error:", err);
-      });
-  }, []);
-
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || !focusLocation) return;
@@ -361,18 +353,6 @@ function DashboardMap({
       duration: 900,
     });
   }, [mapLoaded, focusLocation]);
-
-  /*
-   * Load roads
-   */
-  useEffect(() => {
-    api
-      .getRoadSegments()
-      .then(setRoads)
-      .catch((err) => {
-        console.error("Road loading error:", err);
-      });
-  }, []);
 
   /*
    * Initialize Mapbox
@@ -409,6 +389,9 @@ function DashboardMap({
       "top-left"
     );
 
+    const resizeObserver = new ResizeObserver(() => map.resize());
+    resizeObserver.observe(mapContainerRef.current);
+
     map.on("load", () => {
       setMapLoaded(true);
     });
@@ -418,6 +401,7 @@ function DashboardMap({
     });
 
     return () => {
+      resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
     };
@@ -551,20 +535,6 @@ function DashboardMap({
       map.off("mouseleave", "roads-closed", handleMouseLeave);
     };
   }, [mapLoaded, roads]);
-
-  useEffect(() => {
-    api
-      .getPublicHazardReports()
-      .then((response) => {
-        const reports = Array.isArray(response)
-          ? response
-          : Array.isArray(response?.reports)
-          ? response.reports
-          : [];
-        setHazardReports(reports.filter(isValidatedReport));
-      })
-      .catch((error) => console.error("Hazard reports error:", error));
-  }, []);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -935,83 +905,6 @@ function DashboardMap({
 
   /*
    * =========================================================
-   * LOAD SAVED ROOMS FROM DATABASE
-   * =========================================================
-   *
-   * Runs on its own, so rooms show on the dashboard even when
-   * EvacuationCenterManager is not open.
-   *
-   * A room without a location (latitude/longitude = null) stays
-   * loaded but is not drawn until its location has been saved.
-   */
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadRooms() {
-      if (!centers?.features?.length) {
-        setLoadedRooms([]);
-        return;
-      }
-
-      const results = await Promise.all(
-        centers.features.map(async (center) => {
-          const centerId =
-            center.properties?.id ??
-            center.properties?.center_id ??
-            center.properties?.evacuation_center_id ??
-            center.id;
-
-          if (centerId == null) {
-            console.warn("NO CENTER ID FOUND:", center);
-            return [];
-          }
-
-          try {
-            const response = await api.getRooms(centerId);
-
-            let centerRooms = [];
-
-            if (Array.isArray(response)) {
-              centerRooms = response;
-            } else if (Array.isArray(response?.rooms)) {
-              centerRooms = response.rooms;
-            } else if (Array.isArray(response?.data)) {
-              centerRooms = response.data;
-            }
-
-            return centerRooms.map((room) => ({
-              ...room,
-              evacuation_center_id:
-                room.evacuation_center_id ??
-                room.center_id ??
-                room.evacuationCenterId ??
-                centerId,
-            }));
-          } catch (error) {
-            console.error(
-              `FAILED TO LOAD ROOMS FOR CENTER ${centerId}:`,
-              error
-            );
-
-            return [];
-          }
-        })
-      );
-
-      if (!cancelled) {
-        setLoadedRooms(results.flat());
-      }
-    }
-
-    loadRooms();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [centers, rooms]);
-
-  /*
-   * =========================================================
    * ROOM MARKERS
    * =========================================================
    *
@@ -1209,47 +1102,6 @@ function DashboardMap({
       removeCenterMarkers();
     };
   }, [mapLoaded, centers, drawMode]);
-
-  /*
-   * Load the families of the selected room
-   */
-  useEffect(() => {
-    if (!selectedRoom?.id) {
-      setRoomFamilies({ families: [], occupied: 0, available: 0 });
-      setFamiliesError("");
-      return;
-    }
-
-    let cancelled = false;
-
-    setFamiliesLoading(true);
-    setFamiliesError("");
-
-    api
-      .getRoomFamilies(selectedRoom.id)
-      .then((data) => {
-        if (!cancelled) {
-          setRoomFamilies(normalizeRoomFamilies(data, selectedRoom.capacity));
-        }
-      })
-      .catch((err) => {
-        console.error("FAILED TO LOAD ASSIGNED FAMILIES:", err);
-
-        if (!cancelled) {
-          setRoomFamilies({ families: [], occupied: 0, available: 0 });
-          setFamiliesError(err.message || "Failed to load assigned families.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setFamiliesLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedRoom]);
 
   /*
    * Temporary room location marker

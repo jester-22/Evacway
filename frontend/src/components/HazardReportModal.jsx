@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLocationDot, faCamera, faXmark, faTriangleExclamation } from "@fortawesome/free-solid-svg-icons";
@@ -12,6 +13,7 @@ const HAZARD_TYPES = [
 ];
 
 function HazardReportModal({ location, onClose, onSubmitted }) {
+  const queryClient = useQueryClient();
   const [description, setDescription] = useState("");
   const [reportType, setReportType] = useState("flood");
   const [photo, setPhoto] = useState(null);
@@ -51,6 +53,7 @@ function HazardReportModal({ location, onClose, onSubmitted }) {
 
     try {
       await api.submitHazardReport(formData);
+      await queryClient.invalidateQueries({ queryKey: ["hazard-reports"] });
       onSubmitted();
     } catch (err) {
       setError(err.message);

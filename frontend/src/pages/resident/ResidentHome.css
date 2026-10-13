@@ -1,23 +1,23 @@
-@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Public+Sans:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap");
 
 /* --------------------------------------------------
    Design tokens
 -------------------------------------------------- */
 
 .resident-home {
-  --navy: #0f3f8c;
-  --brand: #1b5fc1;
-  --brand-dark: #0f3f8c;
-  --ink: #0e1f3a;
-  --muted: #4a5a73;
-  --line: #d3dcea;
-  --paper: #eef3fa;
-  --tint: #e6eefb;
-  --ok: #146c3a;
+  --navy: #1d4ed8;
+  --brand: #2563eb;
+  --brand-dark: #1d4ed8;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --paper: #f8fafc;
+  --tint: #eff6ff;
+  --ok: #16a34a;
 
-  --shadow-sm: 0 1px 2px rgba(11, 30, 66, 0.08), 0 2px 8px rgba(11, 30, 66, 0.1);
-  --shadow-md: 0 2px 4px rgba(11, 30, 66, 0.06), 0 10px 28px rgba(11, 30, 66, 0.18);
-  --shadow-lg: 0 24px 60px rgba(11, 30, 66, 0.32);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.12);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.16);
 
   position: relative;
   width: 100vw;

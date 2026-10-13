@@ -197,7 +197,7 @@ function LoginDialog({ dialogRef }) {
     try {
       const user = await login(email, password);
       close();
-      navigate(user.role === "admin" ? "/admin" : "/lgu");
+      navigate(user ? "/dashboard" : "/");
     } catch (err) {
       setError(err.message);
     } finally {

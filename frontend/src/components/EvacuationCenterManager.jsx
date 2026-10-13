@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
+import { queryKeys, useBarangays, useRoomFamilies, useRooms } from "../hooks/useEvacuationQueries";
 import DashboardMap from "./DashboardMap";
 import LoadingState from "./LoadingState";
 import { displayEntityName } from "../utils/displayEntityName";
@@ -22,7 +24,6 @@ import {
   faUserMinus,
   faMap,
   faList,
-  faBuilding,
   faCircleExclamation,
   faCircleCheck,
   faRotate,
@@ -82,17 +83,20 @@ function EvacuationCenterManager({
   const [occupancyFilter, setOccupancyFilter] = useState("all"); // "all" | "available" | "full"
 
   // Barangays
-  const [barangays, setBarangays] = useState([]);
-  const [loadingBarangays, setLoadingBarangays] = useState(false);
+  const queryClient = useQueryClient();
+  const barangaysQuery = useBarangays();
+  const barangays = Array.isArray(barangaysQuery.data) ? barangaysQuery.data : [];
 
   // Active selections
   const [selectedCenter, setSelectedCenter] = useState(null);
-  const [centerRooms, setCenterRooms] = useState([]);
-  const [loadingRooms, setLoadingRooms] = useState(false);
+  const centerRoomsQuery = useRooms(selectedCenter?.id);
+  const centerRooms = centerRoomsQuery.data || [];
+  const loadingRooms = centerRoomsQuery.isLoading;
 
   const [selectedRoom, setSelectedRoom] = useState(null);
-  const [roomFamilies, setRoomFamilies] = useState([]);
-  const [loadingRoomFamilies, setLoadingRoomFamilies] = useState(false);
+  const roomFamiliesQuery = useRoomFamilies(selectedRoom?.id);
+  const roomFamilies = roomFamiliesQuery.data?.families || [];
+  const loadingRoomFamilies = roomFamiliesQuery.isLoading;
 
   // Available unassigned families for assignment
   const [availableFamilies, setAvailableFamilies] = useState([]);
@@ -131,9 +135,10 @@ function EvacuationCenterManager({
   const [moveModalOpen, setMoveModalOpen] = useState(false);
   const [movingFamily, setMovingFamily] = useState(null);
   const [targetCenterId, setTargetCenterId] = useState("");
-  const [targetCenterRooms, setTargetCenterRooms] = useState([]);
   const [targetRoomId, setTargetRoomId] = useState("");
-  const [loadingTargetRooms, setLoadingTargetRooms] = useState(false);
+  const targetRoomsQuery = useRooms(targetCenterId ? Number(targetCenterId) : null);
+  const targetCenterRooms = (targetRoomsQuery.data || []).filter((room) => room.is_active);
+  const loadingTargetRooms = targetRoomsQuery.isLoading;
   const [moving, setMoving] = useState(false);
 
   // Confirmation dialog
@@ -148,86 +153,33 @@ function EvacuationCenterManager({
   const [savingRoomLocation, setSavingRoomLocation] = useState(false);
   const [savingMap, setSavingMap] = useState(false);
 
-  // Load barangays on mount
-  useEffect(() => {
-    loadBarangays();
-  }, []);
-
-  async function loadBarangays() {
-    setLoadingBarangays(true);
-    try {
-      const data = await api.getBarangays();
-      const list = Array.isArray(data)
-        ? data
-        : Array.isArray(data?.barangays)
-        ? data.barangays
-        : Array.isArray(data?.data)
-        ? data.data
-        : [];
-      setBarangays(list);
-    } catch (err) {
-      console.error("Failed to load barangays:", err);
-    } finally {
-      setLoadingBarangays(false);
-    }
-  }
-
-  // Load rooms when selectedCenter changes
-  useEffect(() => {
-    if (!selectedCenter?.id) {
-      setCenterRooms([]);
-      return;
-    }
-    loadCenterRooms(selectedCenter.id);
-  }, [selectedCenter?.id]);
-
   async function loadCenterRooms(centerId) {
     if (!centerId) return;
-    setLoadingRooms(true);
     try {
-      const data = await api.getRooms(centerId);
-      const list = Array.isArray(data) ? data : data?.rooms || [];
-      setCenterRooms(list);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.rooms(centerId) });
     } catch (err) {
       console.error("Failed to load rooms:", err);
       setError(err.message || "Failed to load rooms.");
-    } finally {
-      setLoadingRooms(false);
     }
   }
 
-  // Load families when selectedRoom changes
-  useEffect(() => {
-    if (!selectedRoom?.id) {
-      setRoomFamilies([]);
-      return;
-    }
-    loadRoomFamilies(selectedRoom.id);
-  }, [selectedRoom?.id]);
+  async function invalidateCenterData() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
+      queryClient.invalidateQueries({ queryKey: ["barangay-centers"] }),
+      queryClient.invalidateQueries({ queryKey: ["rooms"] }),
+      queryClient.invalidateQueries({ queryKey: ["room-families"] }),
+    ]);
+  }
 
-  async function loadRoomFamilies(roomId) {
-    if (!roomId) return;
-    setLoadingRoomFamilies(true);
-    try {
-      const data = await api.getRoomFamilies(roomId);
-      const list = data?.families || [];
-      setRoomFamilies(list);
-      if (data?.occupied !== undefined) {
-        setSelectedRoom((prev) =>
-          prev ? { ...prev, occupied: data.occupied, available: data.available } : prev
-        );
-        setCenterRooms((prev) =>
-          prev.map((r) =>
-            r.id === roomId ? { ...r, occupied: data.occupied, available: data.available } : r
-          )
-        );
-      }
-    } catch (err) {
-      console.error("Failed to load room families:", err);
-      setError(err.message || "Failed to load assigned families.");
-    } finally {
-      setLoadingRoomFamilies(false);
-    }
+  async function invalidateFamilyAssignments() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["families"] }),
+      queryClient.invalidateQueries({ queryKey: ["rooms"] }),
+      queryClient.invalidateQueries({ queryKey: ["room-families"] }),
+      queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
+      queryClient.invalidateQueries({ queryKey: ["barangay-centers"] }),
+    ]);
   }
 
   // Load available families when opening assign modal
@@ -252,20 +204,6 @@ function EvacuationCenterManager({
   async function handleTargetCenterChange(cId) {
     setTargetCenterId(cId);
     setTargetRoomId("");
-    if (!cId) {
-      setTargetCenterRooms([]);
-      return;
-    }
-    setLoadingTargetRooms(true);
-    try {
-      const data = await api.getRooms(cId);
-      const list = Array.isArray(data) ? data : data?.rooms || [];
-      setTargetCenterRooms(list.filter((r) => r.is_active));
-    } catch (err) {
-      console.error("Failed to load target center rooms:", err);
-    } finally {
-      setLoadingTargetRooms(false);
-    }
   }
 
   function openMoveModal(family) {
@@ -346,7 +284,7 @@ function EvacuationCenterManager({
       }
 
       setCenterModalMode(null);
-      if (onRefresh) await onRefresh();
+      await invalidateCenterData();
     } catch (err) {
       setError(err.message || "Failed to save evacuation center.");
     } finally {
@@ -372,7 +310,7 @@ function EvacuationCenterManager({
           if (selectedCenter && selectedCenter.id === props.id) {
             setSelectedCenter((prev) => ({ ...prev, is_active: !isCurrentlyActive }));
           }
-          if (onRefresh) await onRefresh();
+          await invalidateCenterData();
         } catch (err) {
           setError(err.message || "Failed to toggle center active status.");
         }
@@ -395,7 +333,7 @@ function EvacuationCenterManager({
             setSelectedCenter(null);
             setSelectedRoom(null);
           }
-          if (onRefresh) await onRefresh();
+          await invalidateCenterData();
         } catch (err) {
           setError(err.message || "Failed to delete evacuation center.");
         }
@@ -460,7 +398,6 @@ function EvacuationCenterManager({
 
       setRoomModalMode(null);
       await loadCenterRooms(selectedCenter.id);
-      if (onRefresh) await onRefresh();
     } catch (err) {
       setError(err.message || "Failed to save room.");
     } finally {
@@ -546,9 +483,7 @@ function EvacuationCenterManager({
       setNotice(`Family "${family.household_head_name || family.head_name}" assigned to Room ${selectedRoom.room_number}.`);
       setAssignModalOpen(false);
 
-      await loadRoomFamilies(selectedRoom.id);
-      await loadCenterRooms(selectedCenter.id);
-      if (onRefresh) await onRefresh();
+      await invalidateFamilyAssignments();
     } catch (err) {
       setError(err.message || "Failed to assign family.");
     } finally {
@@ -591,9 +526,7 @@ function EvacuationCenterManager({
           setMoveModalOpen(false);
           setMovingFamily(null);
 
-          if (selectedRoom) await loadRoomFamilies(selectedRoom.id);
-          if (selectedCenter) await loadCenterRooms(selectedCenter.id);
-          if (onRefresh) await onRefresh();
+          await invalidateFamilyAssignments();
         } catch (err) {
           setError(err.message || "Failed to move family.");
         } finally {
@@ -614,9 +547,7 @@ function EvacuationCenterManager({
         try {
           await api.unassignFamily(family.family_id);
           setNotice(`Family "${headName}" unassigned successfully.`);
-          if (selectedRoom) await loadRoomFamilies(selectedRoom.id);
-          if (selectedCenter) await loadCenterRooms(selectedCenter.id);
-          if (onRefresh) await onRefresh();
+          await invalidateFamilyAssignments();
         } catch (err) {
           setError(err.message || "Failed to unassign family.");
         }
@@ -747,12 +678,12 @@ function EvacuationCenterManager({
         </div>
 
         <div className="ecm-controls">
-          {/* View Mode Toggle: Map-First vs Directory Table */}
+          {/* View Mode Toggle: Map vs List */}
           <button
             type="button"
             className={`btn ${viewMode === "map" ? "btn-primary" : "btn-secondary"}`}
             onClick={() => setViewMode("map")}
-            title="Interactive Web-GIS Map"
+            title="Map View"
           >
             <FontAwesomeIcon icon={faMap} /> Map View
           </button>
@@ -761,9 +692,9 @@ function EvacuationCenterManager({
             type="button"
             className={`btn ${viewMode === "table" ? "btn-primary" : "btn-secondary"}`}
             onClick={() => setViewMode("table")}
-            title="Tabular Center Directory"
+            title="List View"
           >
-            <FontAwesomeIcon icon={faList} /> Directory Table
+            <FontAwesomeIcon icon={faList} /> List View
           </button>
 
           <button
@@ -845,7 +776,7 @@ function EvacuationCenterManager({
           aria-label="Filter by Mapping Status"
         >
           <option value="all">All Locations</option>
-          <option value="mapped">Mapped on Map</option>
+          <option value="mapped">On Map</option>
           <option value="unmapped">Not Mapped</option>
         </select>
 
@@ -877,12 +808,12 @@ function EvacuationCenterManager({
       </div>
 
       {/* ALERT BANNERS */}
-      {(error || notice) && (
+      {(error || roomFamiliesQuery.error || notice) && (
         <div className="ecm-alerts">
-          {error && (
+          {(error || roomFamiliesQuery.error) && (
             <div className="alert alert-error" role="alert">
               <FontAwesomeIcon icon={faCircleExclamation} />
-              <span style={{ flex: 1 }}>{error}</span>
+              <span style={{ flex: 1 }}>{error || roomFamiliesQuery.error.message}</span>
               <button
                 type="button"
                 className="alert-dismiss"
@@ -981,7 +912,7 @@ function EvacuationCenterManager({
           {step === "footprint" && (
             <div className="ecm-draw-toolbar">
               <FontAwesomeIcon icon={faDrawPolygon} />
-              <span>Tracing Footprint ({footprintPoints.length} points)</span>
+              <span>Draw Building Outline ({footprintPoints.length} points)</span>
               <button
                 type="button"
                 className="btn btn-sm btn-secondary"
@@ -1034,11 +965,11 @@ function EvacuationCenterManager({
                         entrances: entrancePoints,
                       }
                     );
-                    setNotice("Evacuation center footprint and entrances saved!");
+                    setNotice("Evacuation center outline and entrances saved!");
                     setStep("idle");
-                    if (onRefresh) await onRefresh();
+                    await invalidateCenterData();
                   } catch (err) {
-                    setError(err.message || "Failed to save center map geometry.");
+                    setError(err.message || "Failed to save center map location.");
                   } finally {
                     setSavingMap(false);
                   }
@@ -1079,7 +1010,7 @@ function EvacuationCenterManager({
                     setStep("idle");
                     if (selectedCenter?.id) await loadCenterRooms(selectedCenter.id);
                   } catch (err) {
-                    setError(err.message || "Failed to save room coordinates.");
+                    setError(err.message || "Failed to save room location.");
                   } finally {
                     setSavingRoomLocation(false);
                   }
@@ -1142,11 +1073,11 @@ function EvacuationCenterManager({
                   <>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
                       <span className={`status-pill ${selectedCenter.is_active ? "is-active" : "is-inactive"}`}>
-                        {selectedCenter.is_active ? "Active Facility" : "Deactivated"}
+                        {selectedCenter.is_active ? "Active" : "Inactive"}
                       </span>
                       {isCenterMapped(selectedCenter) ? (
                         <span className="status-pill is-mapped">
-                          <FontAwesomeIcon icon={faLocationDot} /> Mapped on GIS
+                          <FontAwesomeIcon icon={faLocationDot} /> On Map
                         </span>
                       ) : (
                         <span className="status-pill is-unmapped">
@@ -1158,7 +1089,7 @@ function EvacuationCenterManager({
                     {!isCenterMapped(selectedCenter) && (
                       <div className="alert alert-warning" style={{ fontSize: 12 }}>
                         <FontAwesomeIcon icon={faTriangleExclamation} />
-                        <span>This center exists in the database, but its boundary footprint has not been mapped yet. Click "Map Footprint" below to trace its location.</span>
+                        <span>This center is not placed on the map yet. Click &ldquo;Draw Outline&rdquo; below to mark its location.</span>
                       </div>
                     )}
 
@@ -1169,7 +1100,7 @@ function EvacuationCenterManager({
                         <span>Capacity</span>
                       </div>
                       <div className="ecm-stat-box">
-                        <strong style={{ color: "#1b5fc1" }}>{centerOccupied}</strong>
+                        <strong style={{ color: "#2563eb" }}>{centerOccupied}</strong>
                         <span>Occupied</span>
                       </div>
                       <div className="ecm-stat-box">
@@ -1204,13 +1135,13 @@ function EvacuationCenterManager({
                           <td>{displayEntityName(selectedCenter.barangay, "Not specified")}</td>
                         </tr>
                         <tr>
-                          <td>GIS Location</td>
+                          <td>Map Location</td>
                           <td>
-                            {isCenterMapped(selectedCenter) ? "Mapped boundary footprint" : "Not mapped yet"}
+                            {isCenterMapped(selectedCenter) ? "Placed on map" : "Not mapped yet"}
                           </td>
                         </tr>
                         <tr>
-                          <td>Rooms Registered</td>
+                          <td>Rooms</td>
                           <td>{centerRooms.length} room{centerRooms.length !== 1 ? "s" : ""}</td>
                         </tr>
                         {selectedCenter.contact_number && (
@@ -1273,13 +1204,13 @@ function EvacuationCenterManager({
                     </div>
 
                     {loadingRooms ? (
-                      <LoadingState message="Loading room allocations..." size="sm" />
+                      <LoadingState message="Loading rooms..." size="sm" />
                     ) : centerRooms.length === 0 ? (
                       <div className="empty-state">
                         <FontAwesomeIcon icon={faDoorOpen} style={{ fontSize: 24, marginBottom: 6, opacity: 0.6 }} />
                         <p style={{ margin: 0, fontWeight: 600 }}>No rooms created yet</p>
                         <p style={{ margin: "4px 0 10px", fontSize: 12 }}>
-                          Click "Add Room" to create a room inside this evacuation center.
+                          Click &ldquo;Add Room&rdquo; to create a room inside this evacuation center.
                         </p>
                         <button
                           type="button"
@@ -1307,7 +1238,7 @@ function EvacuationCenterManager({
 
                               <div className="ecm-room-card-stats">
                                 <span>Cap: <strong>{rCap}</strong></span>
-                                <span>Occ: <strong style={{ color: "#1b5fc1" }}>{rOcc}</strong></span>
+                                <span>Occ: <strong style={{ color: "#2563eb" }}>{rOcc}</strong></span>
                                 <span>
                                   Avail:{" "}
                                   <strong style={{ color: rAvail > 0 ? "#16a34a" : "#dc2626" }}>
@@ -1342,9 +1273,9 @@ function EvacuationCenterManager({
                                   type="button"
                                   className="btn btn-sm btn-secondary"
                                   onClick={() => startMappingRoomLocation(room)}
-                                  title="Pin room coordinate on map"
+                                  title="Place room on map"
                                 >
-                                  <FontAwesomeIcon icon={faLocationDot} /> Plot
+                                  <FontAwesomeIcon icon={faLocationDot} /> Map Pin
                                 </button>
 
                                 <button
@@ -1397,7 +1328,7 @@ function EvacuationCenterManager({
                       </div>
                       <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 13 }}>
                         <span>Capacity: <strong>{selectedRoom.capacity}</strong></span>
-                        <span>Occupied: <strong style={{ color: "#1b5fc1" }}>{selectedRoom.occupied || 0}</strong></span>
+                        <span>Occupied: <strong style={{ color: "#2563eb" }}>{selectedRoom.occupied || 0}</strong></span>
                         <span>
                           Remaining:{" "}
                           <strong style={{ color: (selectedRoom.available ?? 0) > 0 ? "#16a34a" : "#dc2626" }}>
@@ -1508,9 +1439,9 @@ function EvacuationCenterManager({
                   type="button"
                   className="btn btn-sm btn-secondary"
                   onClick={() => startMappingCenterOnMap(selectedCenter)}
-                  title="Trace center boundary polygon and entrances"
+                  title="Draw building outline and entrances on map"
                 >
-                  <FontAwesomeIcon icon={faDrawPolygon} /> Map Footprint
+                  <FontAwesomeIcon icon={faDrawPolygon} /> Draw Outline
                 </button>
 
                 {canDeactivate && (
@@ -1536,17 +1467,17 @@ function EvacuationCenterManager({
         </div>
       ) : (
         /* =========================================================
-            VIEW MODE 2: DIRECTORY TABLE (SECONDARY VIEW)
+            VIEW MODE 2: LIST VIEW (SECONDARY VIEW)
             ========================================================= */
         <div className="ecm-table-view">
           {!centers ? (
-            <LoadingState message="Loading evacuation center directory..." />
+            <LoadingState message="Loading evacuation centers..." />
           ) : filteredCenters.length === 0 ? (
             <div className="empty-state">
               <FontAwesomeIcon icon={faHouseFlag} style={{ fontSize: 32, marginBottom: 8, opacity: 0.6 }} />
               <h4 style={{ margin: "0 0 4px", fontSize: 16 }}>No evacuation centers match your filters</h4>
               <p style={{ margin: 0, fontSize: 13 }}>
-                Try adjusting your search query or filter options, or click "Clear Filters".
+                Try adjusting your search or filter options, or click &ldquo;Clear Filters&rdquo;.
               </p>
               {hasActiveFilters && (
                 <button
@@ -1566,7 +1497,7 @@ function EvacuationCenterManager({
                   <tr>
                     <th>Center Name</th>
                     <th>Barangay</th>
-                    <th>GIS Location</th>
+                    <th>Map Location</th>
                     <th>Capacity</th>
                     <th>Occupancy</th>
                     <th>Available</th>
@@ -1599,7 +1530,7 @@ function EvacuationCenterManager({
                         <td>
                           {mapped ? (
                             <span className="status-pill is-mapped">
-                              <FontAwesomeIcon icon={faLocationDot} /> Mapped
+                              <FontAwesomeIcon icon={faLocationDot} /> On Map
                             </span>
                           ) : (
                             <span className="status-pill is-unmapped">
@@ -1609,7 +1540,7 @@ function EvacuationCenterManager({
                         </td>
                         <td>{cap || "—"}</td>
                         <td>
-                          <span style={{ fontWeight: 700, color: occ > 0 ? "#1b5fc1" : "inherit" }}>
+                          <span style={{ fontWeight: 700, color: occ > 0 ? "#2563eb" : "inherit" }}>
                             {occ}
                           </span>{" "}
                           <small style={{ color: "var(--muted)" }}>({pct}%)</small>
@@ -1636,7 +1567,7 @@ function EvacuationCenterManager({
                                   setDrawerTab("center");
                                   setViewMode("map");
                                 }}
-                                title="Focus center on Web-GIS map"
+                                title="Focus center on map"
                               >
                                 <FontAwesomeIcon icon={faMap} /> View on Map
                               </button>
@@ -1645,9 +1576,9 @@ function EvacuationCenterManager({
                                 type="button"
                                 className="btn btn-sm btn-secondary"
                                 onClick={() => startMappingCenterOnMap(feature)}
-                                title="Map center boundary footprint on GIS"
+                                title="Draw center outline on map"
                               >
-                                <FontAwesomeIcon icon={faDrawPolygon} /> Map Center
+                                <FontAwesomeIcon icon={faDrawPolygon} /> Place on Map
                               </button>
                             )}
 

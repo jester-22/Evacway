@@ -639,6 +639,76 @@ class Resident(db.Model):
         db.Text
     )
 
+    # -----------------------------------------------------
+    # OPTIONAL DETAIL FIELDS USED BY EXCEL IMPORT
+    # -----------------------------------------------------
+
+    suffix = db.Column(
+        db.String(20)
+    )
+
+    date_of_birth = db.Column(
+        db.Date
+    )
+
+    gender = db.Column(
+        db.String(20)
+    )
+
+    alternate_contact = db.Column(
+        db.String(50)
+    )
+
+    relationship_to_head = db.Column(
+        db.String(50)
+    )
+
+    is_head_of_family = db.Column(
+        db.Boolean,
+        default=False
+    )
+
+    is_pwd = db.Column(
+        db.Boolean,
+        default=False
+    )
+
+    disability_type = db.Column(
+        db.String(100)
+    )
+
+    disability_notes = db.Column(
+        db.Text
+    )
+
+    is_pregnant = db.Column(
+        db.Boolean,
+        default=False
+    )
+
+    is_lactating = db.Column(
+        db.Boolean,
+        default=False
+    )
+
+    is_solo_parent = db.Column(
+        db.Boolean,
+        default=False
+    )
+
+    needs_assistance = db.Column(
+        db.Boolean,
+        default=False
+    )
+
+    medical_notes = db.Column(
+        db.Text
+    )
+
+    notes = db.Column(
+        db.Text
+    )
+
     uploaded_by = db.Column(
         db.Integer,
         db.ForeignKey('users.id')
@@ -674,6 +744,25 @@ class Resident(db.Model):
             "family_members": self.family_members,
             "vulnerable_members": self.vulnerable_members,
             "remarks": self.remarks,
+            "suffix": self.suffix,
+            "date_of_birth": (
+                self.date_of_birth.isoformat()
+                if self.date_of_birth
+                else None
+            ),
+            "gender": self.gender,
+            "alternate_contact": self.alternate_contact,
+            "relationship_to_head": self.relationship_to_head,
+            "is_head_of_family": self.is_head_of_family,
+            "is_pwd": self.is_pwd,
+            "disability_type": self.disability_type,
+            "disability_notes": self.disability_notes,
+            "is_pregnant": self.is_pregnant,
+            "is_lactating": self.is_lactating,
+            "is_solo_parent": self.is_solo_parent,
+            "needs_assistance": self.needs_assistance,
+            "medical_notes": self.medical_notes,
+            "notes": self.notes,
 
             "created_at": (
                 self.created_at.isoformat()
@@ -689,11 +778,12 @@ class Resident(db.Model):
             self.last_name
         ]
 
-        return " ".join(
+        name = " ".join(
             str(part).strip()
             for part in parts
             if part and str(part).strip()
         )
+        return " ".join(part for part in (name, self.suffix) if part)
 
     def __repr__(self):
         return (

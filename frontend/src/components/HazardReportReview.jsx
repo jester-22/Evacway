@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, BASE_URL } from "../services/api";
+import { queryKeys, useHazardReports } from "../hooks/useEvacuationQueries";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faCheck,
@@ -47,11 +49,16 @@ function reportPhotoUrl(path) {
 }
 
 function HazardReportReview({ focusReportId, onOpenMap }) {
-  const [reports, setReports] = useState([]);
+  const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("pending");
+  const allReportsQuery = useHazardReports(null, { enabled: focusReportId != null });
+  const focusedReport = allReportsQuery.data?.find((item) => String(item.id) === String(focusReportId));
+  const effectiveStatusFilter = focusedReport?.status || statusFilter;
+  const reportsQuery = useHazardReports(effectiveStatusFilter === "all" ? null : effectiveStatusFilter);
+  const reports = reportsQuery.data || [];
+  const loading = reportsQuery.isLoading;
   const [selected, setSelected] = useState(null);
   const [responseNotes, setResponseNotes] = useState("");
-  const [loading, setLoading] = useState(true);
   const [lightbox, setLightbox] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [barangayName, setBarangayName] = useState("");
@@ -59,31 +66,14 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
   const [photoError, setPhotoError] = useState(false);
 
   useEffect(() => {
-    load();
-  }, [statusFilter]);
-
-  useEffect(() => {
     if (focusReportId == null) return undefined;
-    let cancelled = false;
-    api.getHazardReports(null).then((data) => {
-      if (cancelled) return;
-      const report = data.find((item) => String(item.id) === String(focusReportId));
-      if (report) {
-        setStatusFilter(report.status);
-        setReports(data.filter((item) => item.status === report.status));
-        openReport(report);
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [focusReportId]);
+    const data = allReportsQuery.data;
+    if (!data) return undefined;
 
-  function load() {
-    setLoading(true);
-    api
-      .getHazardReports(statusFilter === "all" ? null : statusFilter)
-      .then(setReports)
-      .finally(() => setLoading(false));
-  }
+    const report = data.find((item) => String(item.id) === String(focusReportId));
+    if (report) openReport(report);
+    return undefined;
+  }, [focusReportId, allReportsQuery.data]);
 
   useEffect(() => {
     if (!selected) {
@@ -168,7 +158,10 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       setPhotoError(false);
       setResponseNotes("");
       setLightbox(false);
-      load();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["hazard-reports"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.roadSegments }),
+      ]);
 
       if (result.closed_roads && result.closed_roads.length > 0) {
         alert(`Road(s) automatically closed due to this confirmed hazard:\n\n${result.closed_roads.join("\n")}`);
@@ -195,7 +188,13 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       // panel and the list in sync with what really happened server-side.
       setSelected(result);
       setPhotoError(false);
-      setReports((prev) => prev.map((r) => (r.id === result.id ? result : r)));
+      queryClient.setQueryData(queryKeys.hazardReports(result.status), (previous = []) =>
+        previous.map((report) => report.id === result.id ? result : report)
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["hazard-reports"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.roadSegments }),
+      ]);
 
       if (result.reopened_roads?.length) {
         alert(`Reopened:\n\n${result.reopened_roads.join("\n")}`);

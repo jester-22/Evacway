@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import { displayEntityName } from "../utils/displayEntityName";
 
@@ -7,6 +8,7 @@ function RoomFamilyChecklist({
   onClose,
   onAssigned,
 }) {
+  const queryClient = useQueryClient();
   const [families, setFamilies] = useState([]);
   const [selected, setSelected] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +78,13 @@ function RoomFamilyChecklist({
         room.id,
         selected
       );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["families"] }),
+        queryClient.invalidateQueries({ queryKey: ["rooms"] }),
+        queryClient.invalidateQueries({ queryKey: ["room-families"] }),
+        queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
+        queryClient.invalidateQueries({ queryKey: ["barangay-centers"] }),
+      ]);
 
       alert("Families assigned successfully.");
 

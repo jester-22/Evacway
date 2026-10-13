@@ -8,6 +8,7 @@ import LguDashboard from "./pages/lgu/LguDashboard";
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import PasswordSetup from "./pages/auth/PasswordSetup";
 import NetworkStatus from "./components/NetworkStatus";
+import Dashboard from "./components/Dashboard";
 
 function App() {
   return (
@@ -20,6 +21,14 @@ function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/map" element={<ResidentHome />} />
           <Route path="/set-password" element={<PasswordSetup />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
 
           {/* LGU Personnel only */}
           <Route

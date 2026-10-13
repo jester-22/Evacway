@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import func
 
 from models import (
@@ -9,7 +9,8 @@ from models import (
     Resident,
     EvacuationAssignment,
     EvacuationCenterRoom,
-    EvacuationCenter
+    EvacuationCenter,
+    SystemLog,
 )
 
 from utils import role_required
@@ -20,8 +21,8 @@ barangays_bp = Blueprint('barangays', __name__)
 
 # =========================================================
 # GET ALL BARANGAYS
-# Counts are computed with 3 grouped queries in total,
-# instead of 3 queries per barangay.
+# Counts are computed with grouped queries in total,
+# instead of N+1 queries per barangay.
 # =========================================================
 @barangays_bp.route('/api/barangays', methods=['GET'])
 @jwt_required()
@@ -35,7 +36,7 @@ def get_barangays():
     family_counts = dict(
         db.session.query(
             Family.barangay_id,
-            func.count(Family.id)
+            func.count(func.distinct(Family.id))
         )
         .group_by(Family.barangay_id)
         .all()
@@ -44,7 +45,7 @@ def get_barangays():
     resident_counts = dict(
         db.session.query(
             Family.barangay_id,
-            func.count(Resident.id)
+            func.count(func.distinct(Resident.id))
         )
         .join(Resident, Resident.family_id == Family.id)
         .group_by(Family.barangay_id)
@@ -54,21 +55,39 @@ def get_barangays():
     center_counts = dict(
         db.session.query(
             EvacuationCenter.barangay_id,
-            func.count(EvacuationCenter.id)
+            func.count(func.distinct(EvacuationCenter.id))
         )
+        .filter(EvacuationCenter.is_active.is_(True))
         .group_by(EvacuationCenter.barangay_id)
+        .all()
+    )
+
+    assigned_family_counts = dict(
+        db.session.query(
+            Family.barangay_id,
+            func.count(func.distinct(Family.id))
+        )
+        .join(Resident, Resident.family_id == Family.id)
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+        .group_by(Family.barangay_id)
         .all()
     )
 
     result = []
 
     for barangay in barangays:
+        f_count = family_counts.get(barangay.id, 0)
+        a_count = assigned_family_counts.get(barangay.id, 0)
+        r_count = resident_counts.get(barangay.id, 0)
         result.append({
             "id": barangay.id,
             "name": barangay.name,
             "population": barangay.population,
-            "family_count": family_counts.get(barangay.id, 0),
-            "resident_count": resident_counts.get(barangay.id, 0),
+            "household_count": f_count,
+            "family_count": f_count,
+            "assigned_family_count": a_count,
+            "unassigned_family_count": max(f_count - a_count, 0),
+            "resident_count": r_count,
             "evacuation_center_count": center_counts.get(barangay.id, 0)
         })
 
@@ -89,7 +108,7 @@ def get_barangays():
 @role_required('admin', 'lgu_personnel')
 def get_barangay(barangay_id):
 
-    barangay = Barangay.query.get(barangay_id)
+    barangay = db.session.get(Barangay, barangay_id)
 
     if not barangay:
         return jsonify({
@@ -102,25 +121,40 @@ def get_barangay(barangay_id):
         Family.family_code.asc()
     ).all()
 
+    family_count = (
+        db.session.query(func.count(func.distinct(Family.id)))
+        .filter(Family.barangay_id == barangay.id)
+        .scalar()
+    ) or 0
+
     resident_count = (
-        db.session.query(func.count(Resident.id))
+        db.session.query(func.count(func.distinct(Resident.id)))
         .join(Family, Resident.family_id == Family.id)
         .filter(Family.barangay_id == barangay.id)
         .scalar()
     ) or 0
 
     evacuation_center_count = EvacuationCenter.query.filter(
-        EvacuationCenter.barangay_id == barangay.id
+        EvacuationCenter.barangay_id == barangay.id,
+        EvacuationCenter.is_active.is_(True)
     ).count()
 
     from routes.families import _family_list_rows
     family_rows = _family_list_rows(families)
 
+    assigned_count = sum(
+        1 for f in family_rows
+        if (f.get("assigned_members") or 0) > 0 or f.get("current_room_id")
+    )
+
     return jsonify({
         "id": barangay.id,
         "name": barangay.name,
         "population": barangay.population,
-        "family_count": len(families),
+        "household_count": family_count,
+        "family_count": family_count,
+        "assigned_family_count": assigned_count,
+        "unassigned_family_count": max(family_count - assigned_count, 0),
         "resident_count": resident_count,
         "evacuation_center_count": evacuation_center_count,
         "families": family_rows
@@ -140,17 +174,22 @@ def get_barangay(barangay_id):
 @role_required('admin', 'lgu_personnel')
 def get_barangay_evacuation_centers(barangay_id):
 
-    barangay = Barangay.query.get(barangay_id)
+    barangay = db.session.get(Barangay, barangay_id)
 
     if not barangay:
         return jsonify({
             "error": "Barangay not found"
         }), 404
 
+    include_inactive = request.args.get('include_inactive') == 'true'
+
     # Query 1: centers
-    centers = EvacuationCenter.query.filter(
+    center_query = EvacuationCenter.query.filter(
         EvacuationCenter.barangay_id == barangay_id
-    ).order_by(
+    )
+    if not include_inactive:
+        center_query = center_query.filter(EvacuationCenter.is_active.is_(True))
+    centers = center_query.order_by(
         EvacuationCenter.name.asc()
     ).all()
 
@@ -160,9 +199,12 @@ def get_barangay_evacuation_centers(barangay_id):
     rooms = []
 
     if center_ids:
-        rooms = EvacuationCenterRoom.query.filter(
+        room_query = EvacuationCenterRoom.query.filter(
             EvacuationCenterRoom.evacuation_center_id.in_(center_ids)
-        ).order_by(
+        )
+        if not include_inactive:
+            room_query = room_query.filter(EvacuationCenterRoom.is_active.is_(True))
+        rooms = room_query.order_by(
             EvacuationCenterRoom.room_number.asc()
         ).all()
 
@@ -191,7 +233,7 @@ def get_barangay_evacuation_centers(barangay_id):
         )
 
     # Query 4: the families that appear in those rooms
-    family_ids = {family_id for _, family_id, _ in rows}
+    family_ids = {family_id for _, family_id, _ in rows if family_id is not None}
 
     families_by_id = {}
 
@@ -219,14 +261,12 @@ def get_barangay_evacuation_centers(barangay_id):
 
         room_families.setdefault(room_id, []).append({
             "id": family.id,
+            "family_id": family.id,
             "family_code": family.family_code,
             "head_name": family.head_name,
             "member_count": family.member_count,
             "contact_number": family.contact_number,
-            "evacuation_status": (
-                family.evacuation_status
-                or "Not Evacuated"
-            ),
+            "evacuation_status": "Assigned",
             "assigned_members": assigned_members
         })
 
@@ -238,14 +278,17 @@ def get_barangay_evacuation_centers(barangay_id):
     rooms_by_center = {}
 
     for room in rooms:
-
+        assigned = room_assigned_count.get(room.id, 0)
+        cap = room.capacity or 0
         rooms_by_center.setdefault(
             room.evacuation_center_id,
             []
         ).append({
             "id": room.id,
+            "evacuation_center_id": room.evacuation_center_id,
             "room_number": room.room_number,
             "capacity": room.capacity,
+            "is_active": room.is_active,
 
             "latitude": (
                 float(room.latitude)
@@ -259,26 +302,37 @@ def get_barangay_evacuation_centers(barangay_id):
                 else None
             ),
 
-            "assigned_count": room_assigned_count.get(room.id, 0),
+            "assigned_count": assigned,
+            "occupied": assigned,
+            "available": max(cap - assigned, 0),
             "families": room_families.get(room.id, [])
         })
 
-    return jsonify([
-        {
+    result = []
+    for center in centers:
+        c_rooms = rooms_by_center.get(center.id, [])
+        active_c_rooms = [r for r in c_rooms if r.get("is_active", True)]
+        room_cap_sum = sum((r.get("capacity") or 0) for r in active_c_rooms)
+        center_occ = sum((r.get("assigned_count") or 0) for r in c_rooms)
+        eff_cap = center.capacity if center.capacity is not None else room_cap_sum
+        result.append({
             "id": center.id,
             "name": center.name,
-            "barangay": center.barangay,
+            "barangay": center.barangay or barangay.name,
             "barangay_id": center.barangay_id,
-            "capacity": center.capacity,
+            "capacity": eff_cap,
+            "occupied": center_occ,
+            "available": max((eff_cap or 0) - center_occ, 0),
+            "room_count": len(active_c_rooms),
             "building_material": center.building_material,
             "accessibility_notes": center.accessibility_notes,
             "hazard_exposure_score": center.hazard_exposure_score,
             "contact_number": center.contact_number,
             "is_active": center.is_active,
-            "rooms": rooms_by_center.get(center.id, [])
-        }
-        for center in centers
-    ]), 200
+            "rooms": c_rooms
+        })
+
+    return jsonify(result), 200
 
 
 # =========================================================
@@ -289,7 +343,7 @@ def get_barangay_evacuation_centers(barangay_id):
 @role_required('admin', 'lgu_personnel')
 def add_barangay():
 
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
     if not data:
         return jsonify({
@@ -298,12 +352,12 @@ def add_barangay():
 
     name = data.get("name")
 
-    if not name or not name.strip():
+    if not name or not str(name).strip():
         return jsonify({
             "error": "Barangay name is required"
         }), 400
 
-    name = name.strip()
+    name = str(name).strip()
 
     existing = Barangay.query.filter(
         func.lower(Barangay.name) == name.lower()
@@ -314,17 +368,17 @@ def add_barangay():
             "error": "Barangay already exists"
         }), 409
 
-    population = data.get("population")
+    raw_pop = data.get("population")
+    population = 0
+    if raw_pop is not None and str(raw_pop).strip() != "":
+        try:
+            population = int(raw_pop)
+            if population < 0:
+                return jsonify({"error": "Population cannot be negative"}), 400
+        except (TypeError, ValueError):
+            return jsonify({"error": "Population must be a valid integer"}), 400
 
-    # geom is required by your database.
-    # For now, the frontend must provide it when creating
-    # a barangay.
-    geom = data.get("geom")
-
-    if not geom:
-        return jsonify({
-            "error": "Barangay boundary is required"
-        }), 400
+    geom = data.get("geom") or None
 
     barangay = Barangay(
         name=name,
@@ -333,19 +387,154 @@ def add_barangay():
     )
 
     db.session.add(barangay)
+    db.session.add(SystemLog(
+        user_id=get_jwt_identity(),
+        action=f"Added barangay '{barangay.name}'"
+    ))
     db.session.commit()
 
     return jsonify({
         "message": "Barangay added successfully",
+        "id": barangay.id,
+        "name": barangay.name,
         "barangay": {
             "id": barangay.id,
             "name": barangay.name,
             "population": barangay.population,
             "family_count": 0,
+            "assigned_family_count": 0,
+            "unassigned_family_count": 0,
             "resident_count": 0,
             "evacuation_center_count": 0
         }
     }), 201
+
+
+# =========================================================
+# UPDATE BARANGAY
+# =========================================================
+@barangays_bp.route('/api/barangays/<int:barangay_id>', methods=['PUT'])
+@jwt_required()
+@role_required('admin', 'lgu_personnel')
+def update_barangay(barangay_id):
+    barangay = db.session.get(Barangay, barangay_id)
+    if not barangay:
+        return jsonify({"error": "Barangay not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+
+    if "name" in data:
+        new_name = str(data.get("name") or "").strip()
+        if not new_name:
+            return jsonify({"error": "Barangay name cannot be empty"}), 400
+        duplicate = Barangay.query.filter(
+            func.lower(Barangay.name) == new_name.lower(),
+            Barangay.id != barangay.id
+        ).first()
+        if duplicate:
+            return jsonify({"error": f"Barangay '{new_name}' already exists"}), 409
+
+        old_name = barangay.name
+        barangay.name = new_name
+
+        if old_name != new_name:
+            family_ids = [f.id for f in Family.query.filter_by(barangay_id=barangay.id).all()]
+            if family_ids:
+                Resident.query.filter(Resident.family_id.in_(family_ids)).update(
+                    {Resident.barangay: new_name},
+                    synchronize_session=False
+                )
+            EvacuationCenter.query.filter_by(barangay_id=barangay.id).update(
+                {EvacuationCenter.barangay: new_name},
+                synchronize_session=False
+            )
+
+    if "population" in data:
+        raw_pop = data.get("population")
+        if raw_pop is None or str(raw_pop).strip() == "":
+            barangay.population = 0
+        else:
+            try:
+                pop_val = int(raw_pop)
+                if pop_val < 0:
+                    return jsonify({"error": "Population cannot be negative"}), 400
+                barangay.population = pop_val
+            except (TypeError, ValueError):
+                return jsonify({"error": "Population must be a valid integer"}), 400
+
+    db.session.add(SystemLog(
+        user_id=get_jwt_identity(),
+        action=f"Updated barangay '{barangay.name}' (ID: {barangay.id})"
+    ))
+    db.session.commit()
+
+    f_count = (
+        db.session.query(func.count(func.distinct(Family.id)))
+        .filter(Family.barangay_id == barangay.id)
+        .scalar()
+    ) or 0
+    r_count = (
+        db.session.query(func.count(func.distinct(Resident.id)))
+        .join(Family, Resident.family_id == Family.id)
+        .filter(Family.barangay_id == barangay.id)
+        .scalar()
+    ) or 0
+    c_count = EvacuationCenter.query.filter(
+        EvacuationCenter.barangay_id == barangay.id,
+        EvacuationCenter.is_active.is_(True)
+    ).count()
+
+    return jsonify({
+        "message": f"Barangay '{barangay.name}' updated successfully.",
+        "id": barangay.id,
+        "name": barangay.name,
+        "barangay": {
+            "id": barangay.id,
+            "name": barangay.name,
+            "population": barangay.population,
+            "household_count": f_count,
+            "family_count": f_count,
+            "resident_count": r_count,
+            "evacuation_center_count": c_count
+        }
+    }), 200
+
+
+# =========================================================
+# DELETE BARANGAY (SAFE CHECK)
+# =========================================================
+@barangays_bp.route('/api/barangays/<int:barangay_id>', methods=['DELETE'])
+@jwt_required()
+@role_required('admin', 'lgu_personnel')
+def delete_barangay(barangay_id):
+    barangay = db.session.get(Barangay, barangay_id)
+    if not barangay:
+        return jsonify({"error": "Barangay not found"}), 404
+
+    family_count = Family.query.filter_by(barangay_id=barangay.id).count()
+    if family_count > 0:
+        return jsonify({
+            "error": f"Cannot delete '{barangay.name}' because it has {family_count} registered household(s). Remove or transfer households first."
+        }), 400
+
+    center_count = EvacuationCenter.query.filter_by(barangay_id=barangay.id).count()
+    if center_count > 0:
+        return jsonify({
+            "error": f"Cannot delete '{barangay.name}' because it has {center_count} linked evacuation center(s)."
+        }), 400
+
+    name = barangay.name
+    db.session.delete(barangay)
+    db.session.add(SystemLog(
+        user_id=get_jwt_identity(),
+        action=f"Deleted barangay '{name}' (ID: {barangay_id})"
+    ))
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Barangay '{name}' deleted successfully.",
+        "id": barangay_id
+    }), 200
 
 
 # =========================================================
@@ -360,7 +549,7 @@ def add_barangay():
 @role_required('admin', 'lgu_personnel')
 def get_barangay_families(barangay_id):
 
-    barangay = Barangay.query.get(barangay_id)
+    barangay = db.session.get(Barangay, barangay_id)
 
     if not barangay:
         return jsonify({
@@ -373,116 +562,5 @@ def get_barangay_families(barangay_id):
         Family.family_code.asc()
     ).all()
 
-    return jsonify([
-        {
-            "id": family.id,
-            "family_code": family.family_code,
-            "head_name": family.head_name,
-            "member_count": family.member_count,
-            "contact_number": family.contact_number,
-            "evacuation_status": family.evacuation_status
-        }
-        for family in families
-    ]), 200
-
-
-# =========================================================
-# GET ONE FAMILY
-# Includes members and evacuation information.
-# Assignments are fetched with one joined query instead of
-# 3 queries per resident.
-# =========================================================
-@barangays_bp.route(
-    '/api/families/<int:family_id>',
-    methods=['GET']
-)
-@jwt_required()
-@role_required('admin', 'lgu_personnel')
-def get_family(family_id):
-
-    family = Family.query.get(family_id)
-
-    if not family:
-        return jsonify({
-            "error": "Family not found"
-        }), 404
-
-    residents = Resident.query.filter(
-        Resident.family_id == family.id
-    ).order_by(
-        Resident.id.asc()
-    ).all()
-
-    resident_ids = [resident.id for resident in residents]
-
-    evacuation_by_resident = {}
-
-    if resident_ids:
-
-        rows = (
-            db.session.query(
-                EvacuationAssignment,
-                EvacuationCenterRoom,
-                EvacuationCenter
-            )
-            .join(
-                EvacuationCenterRoom,
-                EvacuationCenterRoom.id == EvacuationAssignment.room_id
-            )
-            .join(
-                EvacuationCenter,
-                EvacuationCenter.id == EvacuationCenterRoom.evacuation_center_id
-            )
-            .filter(
-                EvacuationAssignment.resident_id.in_(resident_ids)
-            )
-            .order_by(EvacuationAssignment.id.asc())
-            .all()
-        )
-
-        for assignment, room, center in rows:
-
-            # keep the first assignment per resident,
-            # same as the previous .first() behavior
-            if assignment.resident_id in evacuation_by_resident:
-                continue
-
-            evacuation_by_resident[assignment.resident_id] = {
-                "assignment_id": assignment.id,
-                "room_id": room.id,
-                "room_number": room.room_number,
-                "center_id": center.id,
-                "center_name": center.name,
-                "assigned_at": (
-                    assignment.assigned_at.isoformat()
-                    if assignment.assigned_at
-                    else None
-                )
-            }
-
-    members = []
-
-    for resident in residents:
-
-        member_data = resident.to_dict()
-        member_data["evacuation"] = evacuation_by_resident.get(
-            resident.id
-        )
-
-        members.append(member_data)
-
-    return jsonify({
-        "id": family.id,
-        "family_code": family.family_code,
-        "head_name": family.head_name,
-        "member_count": family.member_count,
-        "contact_number": family.contact_number,
-        "evacuation_status": family.evacuation_status,
-
-        "barangay": {
-            "id": family.barangay.id,
-            "name": family.barangay.name
-        },
-
-        "members": members
-    }), 200
+    from routes.families import _family_list_rows
+    return jsonify(_family_list_rows(families)), 200

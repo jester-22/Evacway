@@ -1,4 +1,5 @@
 import { createContext, useContext, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import { useNavigate } from "react-router-dom";
 
@@ -11,9 +12,16 @@ export function AuthProvider({ children }) {
   });
 
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   async function login(email, password) {
     const data = await api.login(email, password);
+    const sameAccount = user && data.user && (
+      user.id != null && data.user.id != null
+        ? String(user.id) === String(data.user.id)
+        : user.email?.trim().toLowerCase() === data.user.email?.trim().toLowerCase()
+    );
+    if (!sameAccount) queryClient.clear();
     localStorage.setItem("evacway_token", data.access_token);
     localStorage.setItem("evacway_user", JSON.stringify(data.user));
     setUser(data.user);
@@ -22,6 +30,7 @@ export function AuthProvider({ children }) {
 
   function logout() {
     console.log("LOGOUT FIRING");
+    queryClient.clear();
     navigate("/");
     console.log("AFTER NAVIGATE, location is:", window.location.pathname);
     localStorage.removeItem("evacway_token");

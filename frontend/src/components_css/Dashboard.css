@@ -1,0 +1,14 @@
+.dashboard-page {
+  min-height: 100%;
+  overflow-y: auto;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.dashboard-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-skeleton > div {
+  background-color: #e2e8f0;
+}

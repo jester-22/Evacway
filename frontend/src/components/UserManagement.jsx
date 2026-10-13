@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import { useAuth } from "../context/AuthContext";
+import { queryKeys, useLogs, useUsers } from "../hooks/useEvacuationQueries";
 import "../components_css/UserManagement.css";
 
 const ROLE_LABELS = {
@@ -19,8 +21,11 @@ function initials(name = "") {
 
 function UserManagement() {
   const { user: currentUser } = useAuth();
-  const [users, setUsers] = useState([]);
-  const [logs, setLogs] = useState([]);
+  const queryClient = useQueryClient();
+  const usersQuery = useUsers();
+  const logsQuery = useLogs();
+  const users = usersQuery.data || [];
+  const logs = logsQuery.data || [];
   const [showForm, setShowForm] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
   const [editingUser, setEditingUser] = useState(null);
@@ -41,17 +46,11 @@ function UserManagement() {
   const [saving, setSaving] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
 
-  useEffect(() => {
-    load();
-    loadLogs();
-  }, []);
-
-  function load() {
-    api.getUsers().then(setUsers).catch(() => {});
-  }
-
-  function loadLogs() {
-    api.getLogs().then(setLogs).catch(() => setLogs([]));
+  function invalidateUsersAndLogs() {
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.users }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.logs }),
+    ]);
   }
 
   async function checkEmailAvailability(value) {
@@ -105,6 +104,7 @@ function UserManagement() {
 
     try {
       const result = await api.resetUserPassword(user.id);
+      await invalidateUsersAndLogs();
       alert(result.message || `Password setup email sent to ${user.email}.`);
     } catch (err) {
       alert(err.message || "Unable to reset password right now.");
@@ -137,7 +137,7 @@ function UserManagement() {
         role: "lgu_personnel",
       });
       setShowForm(false);
-      load();
+      await invalidateUsersAndLogs();
       alert(result.message || `Account setup email sent to ${email}.`);
     } catch (err) {
       setError(err.message);
@@ -154,7 +154,7 @@ function UserManagement() {
     )
       return;
     await api.toggleUserActive(user.id);
-    load();
+    await invalidateUsersAndLogs();
   }
 
   function startEditingUser(user) {
@@ -182,7 +182,7 @@ function UserManagement() {
       });
       setSelectedUser(updated);
       setEditingUser(null);
-      load();
+      await invalidateUsersAndLogs();
     } catch (requestError) {
       setEditError(requestError.message || "Account details could not be updated.");
     } finally {
@@ -209,62 +209,37 @@ function UserManagement() {
   const activeCount = filteredUsers.filter((u) => u.is_active).length;
   const adminCount = filteredUsers.filter((u) => u.role === "admin").length;
 
-  function getUserSummary(user) {
-    if (user.role === "admin") {
-      return user.is_active
-        ? "Oversees operations and system access."
-        : "Admin profile temporarily paused.";
-    }
-
-    return user.is_active
-      ? "Handling field coordination and updates."
-      : "Field access paused until reactivated.";
-  }
-
-  function getUserFocus(user) {
-    if (user.role === "admin") {
-      return "Operations oversight";
-    }
-
-    return "Evacuation response";
-  }
-
   return (
     <div className="um-page">
-      
-
       <div className="um-root">
         <div className="um-header">
           <div>
-            <p className="um-kicker">Team overview</p>
-            <h3 className="um-title">User dashboard</h3>
+            <h3 className="um-title">Users</h3>
+            <p className="um-subtitle">
+              Manage LGU personnel and administrator accounts.
+            </p>
           </div>
 
           <button onClick={() => setShowForm(true)} className="um-add-btn">
             <span className="um-add-icon">+</span>
-            Add user
+            Add User
           </button>
         </div>
 
         <div className="um-summary-grid">
           <div className="um-stat-card">
-            <span>Total users</span>
+            <span>Total Users</span>
             <strong>{filteredUsers.length}</strong>
           </div>
 
           <div className="um-stat-card is-primary">
-            <span>Active</span>
+            <span>Active Users</span>
             <strong>{activeCount}</strong>
           </div>
 
           <div className="um-stat-card">
             <span>Admins</span>
             <strong>{adminCount}</strong>
-          </div>
-
-          <div className="um-stat-card">
-            <span>On duty</span>
-            <strong>{activeCount > 0 ? "Ready" : "Idle"}</strong>
           </div>
         </div>
 
@@ -313,6 +288,9 @@ function UserManagement() {
                     </span>
                     <h4>{u.name}</h4>
                     <p>{u.email}</p>
+                    <small className="um-contact-line">
+                      {u.contact_number || "No contact number"}
+                    </small>
                   </div>
 
                   <span
@@ -324,28 +302,14 @@ function UserManagement() {
                   </span>
                 </div>
 
-                <div className="um-profile-summary">
-                  <div className="um-summary-block">
-                    <span>Focus</span>
-                    <strong>{getUserFocus(u)}</strong>
-                  </div>
-
-                  <div className="um-summary-block">
-                    <span>Contact</span>
-                    <strong>{u.contact_number || "Not shared"}</strong>
-                  </div>
-                </div>
-
-                <div className="um-activity-panel">
-                  <div className="um-activity-header">
-                    <span className="um-activity-dot" />
-                    <small>Recent activity</small>
-                  </div>
-                  <p>{getUserSummary(u)}</p>
-                </div>
-
                 <div className="um-card-footer">
-                  <button onClick={() => handleToggle(u)} className="um-toggle-btn">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggle(u);
+                    }}
+                    className="um-toggle-btn"
+                  >
                     {u.is_active ? "Deactivate" : "Reactivate"}
                   </button>
                 </div>

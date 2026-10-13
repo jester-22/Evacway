@@ -1,12 +1,15 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLock, faTriangleExclamation, faUser } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../services/api";
+import { queryKeys } from "../hooks/useEvacuationQueries";
 import "../components_css/AccountProfileModal.css";
 
 const EMPTY_PASSWORD = { current: "", next: "", confirm: "" };
 
 export default function AccountProfileModal({ user, onClose, onUpdated }) {
+  const queryClient = useQueryClient();
   const [view, setView] = useState("profile");
   const [profile, setProfile] = useState({
     name: user?.name || "",
@@ -18,6 +21,13 @@ export default function AccountProfileModal({ user, onClose, onUpdated }) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  function invalidateUserData() {
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.users }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.logs }),
+    ]);
+  }
+
   async function saveProfile(event) {
     event.preventDefault();
     setBusy(true);
@@ -26,6 +36,7 @@ export default function AccountProfileModal({ user, onClose, onUpdated }) {
     try {
       const updated = await api.updateMyProfile(profile);
       onUpdated(updated);
+      await invalidateUserData();
       setMessage("Account details updated.");
     } catch (requestError) {
       setError(requestError.message || "Account details could not be updated.");
@@ -47,6 +58,7 @@ export default function AccountProfileModal({ user, onClose, onUpdated }) {
     try {
       const result = await api.changeMyPassword(password.current, password.next);
       setPassword(EMPTY_PASSWORD);
+      await invalidateUserData();
       setMessage(result.message || "Password changed successfully.");
     } catch (requestError) {
       setError(requestError.message || "Password could not be changed.");
@@ -61,6 +73,7 @@ export default function AccountProfileModal({ user, onClose, onUpdated }) {
     setMessage("");
     try {
       const result = await api.requestMyPasswordReset();
+      await invalidateUserData();
       setMessage(result.message || `A password reset link was sent to ${profile.email}.`);
     } catch (requestError) {
       setError(requestError.message || "Password reset email could not be sent.");

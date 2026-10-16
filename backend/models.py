@@ -6,6 +6,29 @@ from zoneinfo import ZoneInfo
 
 db = SQLAlchemy()
 
+BARANGAY_COLOR_PALETTE = (
+    "#2563eb",
+    "#059669",
+    "#d97706",
+    "#7c3aed",
+    "#db2777",
+    "#0891b2",
+    "#4f46e5",
+    "#dc2626",
+    "#0d9488",
+    "#ea580c",
+    "#65a30d",
+    "#9333ea",
+)
+
+
+def get_barangay_color(barangay_id):
+    try:
+        idx = (int(barangay_id) - 1) % len(BARANGAY_COLOR_PALETTE)
+        return BARANGAY_COLOR_PALETTE[idx]
+    except (TypeError, ValueError):
+        return BARANGAY_COLOR_PALETTE[0]
+
 
 # ---------------------------------------------------------
 # TIMEZONE
@@ -137,9 +160,7 @@ class HazardZone(db.Model):
 # Center information can come from Excel first.
 # GIS polygon/entrance can be added later from the map.
 #
-# Barangay relationship:
-#
-# Barangay 1 ---- many EvacuationCenters
+# Barangay relationship is many-to-many through CenterBarangay.
 # ---------------------------------------------------------
 class EvacuationCenter(db.Model):
     __tablename__ = 'evacuation_centers'
@@ -152,20 +173,6 @@ class EvacuationCenter(db.Model):
     name = db.Column(
         db.String(100),
         nullable=False
-    )
-
-    # -----------------------------------------------------
-    # NEW: REAL BARANGAY FOREIGN KEY
-    # -----------------------------------------------------
-    barangay_id = db.Column(
-        db.Integer,
-        db.ForeignKey('barangays.id'),
-        nullable=True
-    )
-
-    # Kept for compatibility with existing data/API.
-    barangay = db.Column(
-        db.String(100)
     )
 
     capacity = db.Column(
@@ -215,13 +222,11 @@ class EvacuationCenter(db.Model):
         default=philippines_now
     )
 
-    # -----------------------------------------------------
-    # Barangay → Evacuation Centers
-    # -----------------------------------------------------
-    barangay_record = db.relationship(
-        'Barangay',
-        back_populates='evacuation_centers',
-        foreign_keys=[barangay_id]
+    barangay_links = db.relationship(
+        'CenterBarangay',
+        back_populates='center',
+        cascade='all, delete-orphan',
+        lazy=True
     )
 
     # -----------------------------------------------------
@@ -235,13 +240,29 @@ class EvacuationCenter(db.Model):
     )
 
     def to_dict(self):
+        barangays = [
+            {
+                "id": link.barangay.id,
+                "name": link.barangay.name,
+                "color": link.color,
+            }
+            for link in sorted(
+                self.barangay_links,
+                key=lambda item: (
+                    item.barangay.name.casefold()
+                    if item.barangay and item.barangay.name
+                    else ""
+                ),
+            )
+            if link.barangay is not None
+        ]
         return {
             "id": self.id,
             "name": self.name,
-
-            "barangay_id": self.barangay_id,
-            "barangay": self.barangay,
-
+            "barangays": barangays,
+            "barangay": ", ".join(item["name"] for item in barangays) or None,
+            "barangay_ids": [item["id"] for item in barangays],
+            "barangay_id": barangays[0]["id"] if barangays else None,
             "capacity": self.capacity,
             "building_material": self.building_material,
             "accessibility_notes": self.accessibility_notes,
@@ -258,6 +279,38 @@ class EvacuationCenter(db.Model):
 
     def __repr__(self):
         return f"<EvacuationCenter {self.name}>"
+
+
+class CenterBarangay(db.Model):
+    __tablename__ = 'center_barangays'
+
+    center_id = db.Column(
+        db.Integer,
+        db.ForeignKey('evacuation_centers.id'),
+        primary_key=True
+    )
+    barangay_id = db.Column(
+        db.Integer,
+        db.ForeignKey('barangays.id'),
+        primary_key=True
+    )
+    created_at = db.Column(
+        db.DateTime,
+        default=philippines_now
+    )
+
+    center = db.relationship(
+        'EvacuationCenter',
+        back_populates='barangay_links'
+    )
+    barangay = db.relationship(
+        'Barangay',
+        back_populates='center_links'
+    )
+
+    @property
+    def color(self):
+        return get_barangay_color(self.barangay_id)
 
 
 # ---------------------------------------------------------
@@ -470,22 +523,16 @@ class Barangay(db.Model):
         nullable=True
     )
 
-    # -----------------------------------------------------
-    # Barangay → Families
-    # -----------------------------------------------------
     families = db.relationship(
         'Family',
         backref='barangay',
         lazy=True
     )
 
-    # -----------------------------------------------------
-    # Barangay → Evacuation Centers
-    # -----------------------------------------------------
-    evacuation_centers = db.relationship(
-        'EvacuationCenter',
-        back_populates='barangay_record',
-        foreign_keys='EvacuationCenter.barangay_id',
+    center_links = db.relationship(
+        'CenterBarangay',
+        back_populates='barangay',
+        cascade='all, delete-orphan',
         lazy=True
     )
 

@@ -110,8 +110,7 @@ function EvacuationCenterManager({
   const [centerModalMode, setCenterModalMode] = useState(null); // 'add' | 'edit' | null
   const [centerForm, setCenterForm] = useState({
     name: "",
-    barangay_id: "",
-    barangay: "",
+    barangay_ids: [],
     capacity: "",
     building_material: "",
     accessibility_notes: "",
@@ -123,6 +122,7 @@ function EvacuationCenterManager({
   const [roomForm, setRoomForm] = useState({
     room_number: "",
     capacity: "",
+    barangay_id: "",
     latitude: "",
     longitude: "",
   });
@@ -137,7 +137,9 @@ function EvacuationCenterManager({
   const [targetCenterId, setTargetCenterId] = useState("");
   const [targetRoomId, setTargetRoomId] = useState("");
   const targetRoomsQuery = useRooms(targetCenterId ? Number(targetCenterId) : null);
-  const targetCenterRooms = (targetRoomsQuery.data || []).filter((room) => room.is_active);
+  const targetCenterRooms = (targetRoomsQuery.data || []).filter(
+    (room) => room.is_active !== false
+  );
   const loadingTargetRooms = targetRoomsQuery.isLoading;
   const [moving, setMoving] = useState(false);
 
@@ -221,8 +223,7 @@ function EvacuationCenterManager({
   function openAddCenterModal() {
     setCenterForm({
       name: "",
-      barangay_id: "",
-      barangay: "",
+      barangay_ids: [],
       capacity: "",
       building_material: "",
       accessibility_notes: "",
@@ -236,8 +237,7 @@ function EvacuationCenterManager({
     const props = center.properties || center;
     setCenterForm({
       name: props.name || "",
-      barangay_id: props.barangay_id ? String(props.barangay_id) : "",
-      barangay: props.barangay || "",
+      barangay_ids: (props.barangays || []).map((barangay) => String(barangay.id)),
       capacity: props.capacity !== null && props.capacity !== undefined ? String(props.capacity) : "",
       building_material: props.building_material || "",
       accessibility_notes: props.accessibility_notes || "",
@@ -254,6 +254,10 @@ function EvacuationCenterManager({
       setError("Evacuation center name is required.");
       return;
     }
+    if (!centerForm.barangay_ids.length) {
+      setError("Select at least one barangay served by this center.");
+      return;
+    }
 
     setSavingCenter(true);
     setError("");
@@ -261,8 +265,7 @@ function EvacuationCenterManager({
     try {
       const payload = {
         name: centerForm.name.trim(),
-        barangay_id: centerForm.barangay_id ? Number(centerForm.barangay_id) : null,
-        barangay: centerForm.barangay.trim() || null,
+        barangay_ids: centerForm.barangay_ids.map(Number),
         capacity: centerForm.capacity !== "" ? Number(centerForm.capacity) : null,
         building_material: centerForm.building_material.trim() || null,
         accessibility_notes: centerForm.accessibility_notes.trim() || null,
@@ -586,12 +589,16 @@ function EvacuationCenterManager({
       const nameMatch =
         !q ||
         String(props.name || "").toLowerCase().includes(q) ||
-        String(props.barangay || "").toLowerCase().includes(q) ||
+        (props.barangays || []).some((barangay) =>
+          String(barangay.name || "").toLowerCase().includes(q)
+        ) ||
         String(props.contact_number || "").toLowerCase().includes(q);
 
       // Barangay filter
       const brgyMatch =
-        !barangayFilter || String(props.barangay_id) === String(barangayFilter);
+        !barangayFilter || (props.barangays || []).some(
+          (barangay) => String(barangay.id) === String(barangayFilter)
+        );
 
       // Status filter
       const statusMatch =
@@ -1132,7 +1139,20 @@ function EvacuationCenterManager({
                       <tbody>
                         <tr>
                           <td>Barangay</td>
-                          <td>{displayEntityName(selectedCenter.barangay, "Not specified")}</td>
+                          <td>
+                            <div className="ecm-barangay-badges">
+                              {(selectedCenter.barangays || []).map((barangay) => (
+                                <span
+                                  className="ecm-barangay-badge"
+                                  key={barangay.id}
+                                  style={{ "--barangay-color": barangay.color || "#2563eb" }}
+                                >
+                                  {displayEntityName(barangay.name, `Barangay ${barangay.id}`)}
+                                </span>
+                              ))}
+                              {!selectedCenter.barangays?.length && "Not specified"}
+                            </div>
+                          </td>
                         </tr>
                         <tr>
                           <td>Map Location</td>
@@ -1164,6 +1184,32 @@ function EvacuationCenterManager({
                         )}
                       </tbody>
                     </table>
+
+                    <div className="ecm-breakdown-wrap">
+                      <h4 className="ecm-section-title">Capacity by Barangay</h4>
+                      <table className="ecm-table ecm-breakdown-table">
+                        <thead>
+                          <tr><th>Barangay</th><th>Rooms</th><th>Assigned</th><th>Available</th></tr>
+                        </thead>
+                        <tbody>
+                          {(selectedCenter.barangay_breakdown || []).map((row) => (
+                            <tr key={row.id}>
+                              <td>
+                                <span className="ecm-barangay-badge" style={{ "--barangay-color": row.color || "#2563eb" }}>
+                                  {displayEntityName(row.name, `Barangay ${row.id}`)}
+                                </span>
+                              </td>
+                              <td>{row.rooms}</td>
+                              <td>{row.assigned}</td>
+                              <td>{row.available}</td>
+                            </tr>
+                          ))}
+                          {!selectedCenter.barangay_breakdown?.length && (
+                            <tr><td colSpan="4">No barangay allocation data available.</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
 
                     {/* MANAGE ROOMS ACTION TRIGGER */}
                     <button
@@ -1526,7 +1572,20 @@ function EvacuationCenterManager({
                             </div>
                           )}
                         </td>
-                        <td>{displayEntityName(center.barangay, "—")}</td>
+                        <td>
+                          <div className="ecm-barangay-badges">
+                            {(center.barangays || []).map((barangay) => (
+                              <span
+                                className="ecm-barangay-badge"
+                                key={barangay.id}
+                                style={{ "--barangay-color": barangay.color || "#2563eb" }}
+                              >
+                                {displayEntityName(barangay.name, `Barangay ${barangay.id}`)}
+                              </span>
+                            ))}
+                            {!center.barangays?.length && "—"}
+                          </div>
+                        </td>
                         <td>
                           {mapped ? (
                             <span className="status-pill is-mapped">
@@ -1671,21 +1730,17 @@ function EvacuationCenterManager({
               </div>
 
               <div className="form-group">
-                <label>Barangay</label>
+                <label>Barangays served *</label>
                 <select
+                  required
+                  multiple
                   className="form-select"
-                  value={centerForm.barangay_id}
+                  value={centerForm.barangay_ids}
                   onChange={(e) => {
-                    const bId = e.target.value;
-                    const bObj = barangays.find((b) => String(b.id) === String(bId));
-                    setCenterForm({
-                      ...centerForm,
-                      barangay_id: bId,
-                      barangay: bObj ? bObj.name : centerForm.barangay,
-                    });
+                    const selectedIds = Array.from(e.target.selectedOptions, (option) => option.value);
+                    setCenterForm((previous) => ({ ...previous, barangay_ids: selectedIds }));
                   }}
                 >
-                  <option value="">Select Barangay</option>
                   {barangays.map((b) => (
                     <option key={b.id} value={b.id}>
                       {displayEntityName(b.name, `Barangay ${b.id}`)}
@@ -2048,12 +2103,14 @@ function EvacuationCenterManager({
                     .filter((c) => (c.properties || c).is_active)
                     .map((feature) => {
                       const c = feature.properties || feature;
+                      const barangayNames = (c.barangays || []).map((barangay) => barangay.name).join(", ");
                       return (
                         <option key={c.id} value={c.id}>
-                          {c.name} ({c.barangay || "No barangay"})
+                          {c.name} ({barangayNames || "No barangay"})
                         </option>
                       );
-                    })}
+                    })
+                    .filter((option) => option)}
                 </select>
               </div>
 

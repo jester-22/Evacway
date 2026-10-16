@@ -126,7 +126,15 @@ def get_evacuation_route():
                     "evacuation_center": {
                         "id": center.id,
                         "name": center.name,
-                        "barangay": center.barangay,
+                        "barangays": [
+                            {
+                                "id": link.barangay.id,
+                                "name": link.barangay.name,
+                                "color": link.color
+                            }
+                            for link in center.barangay_links
+                            if link.barangay is not None
+                        ],
                         "capacity": center.capacity,
                         "latitude": entrance_lat,
                         "longitude": entrance_lng

@@ -438,6 +438,7 @@ function BarangayManager() {
     setCenterModal({
       mode: "add",
       name: "",
+      barangay_ids: [String(selectedBarangay.id)],
       address: selectedBarangay.name,
       capacity: 100,
       contact_number: "",
@@ -453,6 +454,7 @@ function BarangayManager() {
       mode: "edit",
       id: center.id,
       name: center.name || "",
+      barangay_ids: (center.barangays || []).map((barangay) => String(barangay.id)),
       address: center.address || selectedBarangay?.name || "",
       capacity: center.capacity ?? 0,
       contact_number: center.contact_number || "",
@@ -475,7 +477,7 @@ function BarangayManager() {
       setError("");
       const payload = {
         name: centerModal.name.trim(),
-        barangay_id: selectedBarangay.id,
+        barangay_ids: centerModal.barangay_ids.map(Number),
         address: centerModal.address.trim() || selectedBarangay.name,
         capacity: Number(centerModal.capacity || 0),
         contact_number: centerModal.contact_number.trim() || null,
@@ -1466,11 +1468,11 @@ function BarangayManager() {
                   <thead>
                     <tr>
                       <th>Center Name</th>
-                      <th>Barangay / Address</th>
-                      <th>Rooms</th>
-                      <th>Total Capacity</th>
-                      <th>Current Occupancy</th>
-                      <th>Available</th>
+                      <th>Shared with</th>
+                      <th>Rooms here</th>
+                      <th>Center capacity</th>
+                      <th>Assigned families here</th>
+                      <th>Available room capacity here</th>
                       <th>Status</th>
                       <th className="bm-th-right">Actions</th>
                     </tr>
@@ -1478,16 +1480,10 @@ function BarangayManager() {
                   <tbody>
                     {centers.map((center) => {
                       const rooms = Array.isArray(center.rooms) ? center.rooms : [];
-                      const cap = Number(
-                        center.capacity ||
-                          rooms.reduce((acc, r) => acc + Number(r.capacity || 0), 0)
-                      );
-                      const occ = Number(
-                        center.occupied ??
-                          rooms.reduce((acc, r) => acc + Number(r.occupied || 0), 0)
-                      );
-                      const avail = Math.max(0, cap - occ);
-                      const isFull = avail <= 0 && cap > 0;
+                      const cap = Number(center.capacity || 0);
+                      const assignedFamilies = Number(center.barangay_assigned_families || 0);
+                      const avail = Number(center.barangay_available || 0);
+                      const isFull = avail <= 0 && rooms.length > 0;
 
                       return (
                         <tr key={center.id}>
@@ -1497,12 +1493,20 @@ function BarangayManager() {
                               <div className="bm-cell-sub">{center.building_material}</div>
                             )}
                           </td>
-                          <td>{center.address || selectedBarangay?.name}</td>
+                          <td>
+                            <div className="bm-shared-badges">
+                              {center.shared_with?.length
+                                ? center.shared_with.map((barangay) => (
+                                    <span key={barangay.id} className="bm-count-badge">{barangay.name}</span>
+                                  ))
+                                : <span className="bm-cell-sub">Not shared</span>}
+                            </div>
+                          </td>
                           <td>
                             <span className="bm-count-badge">{rooms.length}</span>
                           </td>
                           <td>{cap}</td>
-                          <td>{occ}</td>
+                          <td>{assignedFamilies}</td>
                           <td>
                             <strong className={avail > 0 ? "text-green" : "text-amber"}>
                               {avail}
@@ -1560,16 +1564,10 @@ function BarangayManager() {
               <div className="bm-mobile-stack bm-mobile-only">
                 {centers.map((center) => {
                   const rooms = Array.isArray(center.rooms) ? center.rooms : [];
-                  const cap = Number(
-                    center.capacity ||
-                      rooms.reduce((acc, r) => acc + Number(r.capacity || 0), 0)
-                  );
-                  const occ = Number(
-                    center.occupied ??
-                      rooms.reduce((acc, r) => acc + Number(r.occupied || 0), 0)
-                  );
-                  const avail = Math.max(0, cap - occ);
-                  const isFull = avail <= 0 && cap > 0;
+                  const cap = Number(center.capacity || 0);
+                  const assignedFamilies = Number(center.barangay_assigned_families || 0);
+                  const avail = Number(center.barangay_available || 0);
+                  const isFull = avail <= 0 && rooms.length > 0;
 
                   return (
                     <div key={center.id} className="bm-mobile-card">
@@ -1577,7 +1575,9 @@ function BarangayManager() {
                         <div>
                           <h5 className="bm-mobile-card-title">{center.name}</h5>
                           <span className="bm-cell-sub">
-                            {center.address || selectedBarangay?.name}
+                            {center.shared_with?.length
+                              ? `Shared with: ${center.shared_with.map((barangay) => barangay.name).join(", ")}`
+                              : "Not shared"}
                           </span>
                         </div>
                         <span
@@ -1606,8 +1606,8 @@ function BarangayManager() {
                           <strong>{cap}</strong>
                         </div>
                         <div>
-                          <span>Occupied</span>
-                          <strong>{occ}</strong>
+                          <span>Assigned families here</span>
+                          <strong>{assignedFamilies}</strong>
                         </div>
                         <div>
                           <span>Available</span>
@@ -2424,6 +2424,24 @@ function BarangayManager() {
                         setCenterModal((p) => ({ ...p, name: e.target.value }))
                       }
                     />
+                  </label>
+                  <label className="bm-form-field bm-span-2">
+                    <span>Barangays served *</span>
+                    <select
+                      multiple
+                      required
+                      value={centerModal.barangay_ids}
+                      onChange={(e) =>
+                        setCenterModal((p) => ({
+                          ...p,
+                          barangay_ids: Array.from(e.target.selectedOptions, (option) => option.value),
+                        }))
+                      }
+                    >
+                      {barangays.map((barangay) => (
+                        <option key={barangay.id} value={barangay.id}>{barangay.name}</option>
+                      ))}
+                    </select>
                   </label>
                   <label className="bm-form-field">
                     <span>Address / Location *</span>

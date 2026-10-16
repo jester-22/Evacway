@@ -6,6 +6,8 @@ from models import (
     db,
     EvacuationCenter,
     EvacuationCenterRoom,
+    CenterBarangay,
+    Barangay,
     EvacuationAssignment,
     Family,
     Resident,
@@ -95,6 +97,16 @@ def create_room(center_id):
 
     room_number = data.get('room_number')
     capacity = data.get('capacity')
+    if data.get('barangay_id') is not None and str(data.get('barangay_id')).strip() != "":
+        try:
+            barangay_id = int(data.get('barangay_id'))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid barangay_id"}), 400
+        if center.barangay_links and not CenterBarangay.query.filter_by(
+            center_id=center.id,
+            barangay_id=barangay_id
+        ).first():
+            return jsonify({"error": "The selected barangay is not linked to this evacuation center"}), 400
     latitude = data.get('latitude')
     longitude = data.get('longitude')
 
@@ -509,7 +521,16 @@ def get_available_families(room_id):
     )
     assigned_ids = [row[0] for row in assigned_family_ids]
 
+    center = EvacuationCenter.query.get(room.evacuation_center_id)
+    linked_barangay_ids = (
+        [link.barangay_id for link in center.barangay_links]
+        if center and center.barangay_links
+        else []
+    )
+
     query = Family.query
+    if linked_barangay_ids:
+        query = query.filter(Family.barangay_id.in_(linked_barangay_ids))
     if assigned_ids:
         query = query.filter(~Family.id.in_(assigned_ids))
 
@@ -562,6 +583,15 @@ def assign_families(room_id):
     if not center or not center.is_active:
         return jsonify({"error": "Cannot assign families to a room in an inactive evacuation center"}), 400
 
+    linked_barangay_ids = {
+        link.barangay_id for link in center.barangay_links
+    }
+    linked_barangay_names = {
+        link.barangay.name.strip().casefold()
+        for link in center.barangay_links
+        if link.barangay and link.barangay.name
+    }
+
     data = request.get_json() or {}
 
     # Support either family_ids or resident_ids
@@ -588,6 +618,10 @@ def assign_families(room_id):
         families = Family.query.filter(Family.id.in_(family_ids)).all()
         if len(families) != len(family_ids):
             return jsonify({"error": "One or more selected families were not found"}), 404
+        if linked_barangay_ids and any(
+            family.barangay_id not in linked_barangay_ids for family in families
+        ):
+            return jsonify({"error": "All selected families must belong to a barangay served by this evacuation center"}), 400
         families_to_assign = families
 
     elif resident_ids:
@@ -602,9 +636,16 @@ def assign_families(room_id):
         found_fids = set(r.family_id for r in residents if r.family_id)
         if found_fids:
             families_to_assign = Family.query.filter(Family.id.in_(found_fids)).all()
-        else:
-            # Standalone residents
-            pass
+            if linked_barangay_ids and any(
+                family.barangay_id not in linked_barangay_ids for family in families_to_assign
+            ):
+                return jsonify({"error": "All selected families must belong to a barangay served by this evacuation center"}), 400
+        elif linked_barangay_names:
+            if any(
+                (resident.barangay or "").strip().casefold() not in linked_barangay_names
+                for resident in residents
+            ):
+                return jsonify({"error": "All selected residents must belong to a barangay served by this evacuation center"}), 400
 
     # Validate that none of the families are already assigned
     for fam in families_to_assign:

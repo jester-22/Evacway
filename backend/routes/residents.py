@@ -15,6 +15,7 @@ from models import (
     EvacuationCenter,
     EvacuationCenterRoom,
     EvacuationAssignment,
+    CenterBarangay,
     SystemLog
 )
 
@@ -630,8 +631,7 @@ def find_family(
 # =========================================================
 
 def find_evacuation_center(
-    center_name,
-    barangay_id
+    center_name
 ):
 
     normalized_name = normalize_text(
@@ -641,9 +641,7 @@ def find_evacuation_center(
     if not normalized_name:
         return None
 
-    centers = EvacuationCenter.query.filter_by(
-        barangay_id=barangay_id
-    ).all()
+    centers = EvacuationCenter.query.all()
 
     for center in centers:
 
@@ -982,6 +980,9 @@ def clear_existing_data():
     EvacuationCenterRoom.query.delete(
         synchronize_session=False
     )
+
+    # Center/barangay links must be removed before centers and barangays.
+    CenterBarangay.query.delete(synchronize_session=False)
 
     # Centers
     EvacuationCenter.query.delete(
@@ -1496,16 +1497,8 @@ def upload_residents():
             # EVACUATION CENTER
             # =================================================
             #
-            # IMPORTANT:
-            # The center uses the Barangay from the Excel row.
-            #
-            # There is NO center_barangay column anymore.
-            #
-            # =================================================
-
             center = find_evacuation_center(
-                center_name,
-                barangay.id
+                center_name
             )
 
             if center is None:
@@ -1513,13 +1506,6 @@ def upload_residents():
                 center = EvacuationCenter(
 
                     name=center_name,
-
-                    # Keep the old text field
-                    # for compatibility.
-                    barangay=barangay.name,
-
-                    # New proper relationship.
-                    barangay_id=barangay.id,
 
                     capacity=center_capacity,
 
@@ -1571,6 +1557,16 @@ def upload_residents():
 
                     skipped += 1
                     continue
+
+            if not CenterBarangay.query.filter_by(
+                center_id=center.id,
+                barangay_id=barangay.id
+            ).first():
+                db.session.add(CenterBarangay(
+                    center_id=center.id,
+                    barangay_id=barangay.id
+                ))
+                db.session.flush()
 
             # =================================================
             # ROOM

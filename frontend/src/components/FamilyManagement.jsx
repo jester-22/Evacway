@@ -341,11 +341,13 @@ export default function FamilyManagement({
         ? wizardForm.barangay_id
         : activeFamily?.barangay_id || effectiveBarangayId;
     if (!preferredBarangayId) return raw;
-    return [...raw].sort((a, b) => {
-      const aMatch = Number(a.barangay_id) === Number(preferredBarangayId) ? 0 : 1;
-      const bMatch = Number(b.barangay_id) === Number(preferredBarangayId) ? 0 : 1;
-      return aMatch - bMatch || String(a.name || "").localeCompare(String(b.name || ""));
-    });
+    return raw
+      .filter((center) =>
+        (center.barangays || []).some(
+          (barangay) => Number(barangay.id) === Number(preferredBarangayId)
+        )
+      )
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
   }, [
     centersQuery.data,
     activeScreen,
@@ -1099,7 +1101,9 @@ export default function FamilyManagement({
     const centers = await loadActiveCenters();
     if (fam.barangay_id) {
       const matching = centers.find(
-        (c) => Number(c.barangay_id) === Number(fam.barangay_id)
+        (center) => (center.barangays || []).some(
+          (barangay) => Number(barangay.id) === Number(fam.barangay_id)
+        )
       );
       if (matching) {
         setAssignCenterId(String(matching.id));
@@ -2095,7 +2099,7 @@ export default function FamilyManagement({
                             return (
                               <option key={c.id} value={c.id}>
                                 {displayEntityName(c.name)} (
-                                {c.barangay || "Sogod"}) — {occ}/{cap} occupied
+                                {(c.barangays || []).map((barangay) => barangay.name).join(", ")}) — {occ}/{cap} occupied
                               </option>
                             );
                           })}
@@ -3928,7 +3932,7 @@ export default function FamilyManagement({
                       <option value="">Select evacuation center</option>
                       {centersList.map((c) => (
                         <option key={c.id} value={c.id}>
-                          {displayEntityName(c.name)} ({c.barangay || "Sogod"})
+                          {displayEntityName(c.name)} ({(c.barangays || []).map((barangay) => barangay.name).join(", ")})
                         </option>
                       ))}
                     </select>
@@ -4050,7 +4054,7 @@ export default function FamilyManagement({
                       <option value="">Select destination center</option>
                       {centersList.map((c) => (
                         <option key={c.id} value={c.id}>
-                          {displayEntityName(c.name)} ({c.barangay || "Sogod"})
+                          {displayEntityName(c.name)} ({(c.barangays || []).map((barangay) => barangay.name).join(", ")})
                         </option>
                       ))}
                     </select>

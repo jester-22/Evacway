@@ -2581,7 +2581,10 @@ const ResidentHome = () => {
             const properties = center.properties || {};
 
             const name = displayEntityName(properties.name, "Evacuation Center");
-            const barangay = displayEntityName(properties.barangay);
+            const barangay = (properties.barangays || [])
+              .map((item) => displayEntityName(item.name))
+              .filter(Boolean)
+              .join(", ") || displayEntityName(properties.barangay);
 
             const searchValue = `${name} ${barangay}`.toLowerCase();
 
@@ -2746,7 +2749,11 @@ const ResidentHome = () => {
   const selectedCenterName =
     displayEntityName(selectedCenterProperties.name, "Evacuation Center");
 
-  const selectedCenterBarangay = displayEntityName(selectedCenterProperties.barangay) || null;
+  const selectedCenterBarangays = Array.isArray(selectedCenterProperties.barangays)
+    ? selectedCenterProperties.barangays
+    : selectedCenterProperties.barangay
+      ? [{ name: selectedCenterProperties.barangay }]
+      : [];
 
   const selectedCenterCapacity = selectedCenterProperties.capacity ?? null;
 
@@ -3017,10 +3024,19 @@ const ResidentHome = () => {
             )}
 
             <div className="cd-rows">
-              {selectedCenterBarangay && (
+              {selectedCenterBarangays.length > 0 && (
                 <div className="cd-row">
                   <span>Barangay</span>
-                  <strong>{selectedCenterBarangay}</strong>
+                  <div className="cd-barangay-badges">
+                    {selectedCenterBarangays.map((barangay) => (
+                      <span
+                        key={barangay.id ?? barangay.name}
+                        style={{ "--barangay-color": barangay.color || "#2563eb" }}
+                      >
+                        {displayEntityName(barangay.name)}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 

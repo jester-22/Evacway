@@ -1539,8 +1539,11 @@ function DashboardMap({
   const selectedCenterAddress =
     displayEntityName(selectedCenterProperties.address ?? selectedCenterProperties.location) || null;
 
-  const selectedCenterBarangay =
-    displayEntityName(selectedCenterProperties.barangay_name ?? selectedCenterProperties.barangay) || null;
+  const selectedCenterBarangays = Array.isArray(selectedCenterProperties.barangays)
+    ? selectedCenterProperties.barangays
+    : (selectedCenterProperties.barangay_name ?? selectedCenterProperties.barangay)
+      ? [{ name: selectedCenterProperties.barangay_name ?? selectedCenterProperties.barangay }]
+      : [];
 
   const selectedCenterCapacity =
     selectedCenterProperties.capacity ??
@@ -1880,10 +1883,19 @@ function DashboardMap({
             </span>
 
             <div className="mdp-rows">
-              {selectedCenterBarangay && (
+              {selectedCenterBarangays.length > 0 && (
                 <div className="mdp-row">
                   <span>Barangay</span>
-                  <strong>{selectedCenterBarangay}</strong>
+                  <div className="mdp-barangay-badges">
+                    {selectedCenterBarangays.map((barangay) => (
+                      <span
+                        key={barangay.id ?? barangay.name}
+                        style={{ "--barangay-color": barangay.color || "#2563eb" }}
+                      >
+                        {displayEntityName(barangay.name)}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 

@@ -6,6 +6,7 @@ from models import (
     EvacuationCenterRoom,
     EvacuationAssignment,
     Barangay,
+    CenterBarangay,
     Family,
     Resident,
     SystemLog,
@@ -16,6 +17,178 @@ from flask_jwt_extended import get_jwt_identity
 from utils import role_required
 
 centers_bp = Blueprint('centers', __name__)
+
+
+def _parse_barangay_ids(raw_ids, fallback_id=None, fallback_name=None):
+    candidates = raw_ids
+    if not isinstance(candidates, list) or not candidates:
+        if fallback_id is not None and str(fallback_id).strip() != "":
+            candidates = [fallback_id]
+        elif fallback_name and str(fallback_name).strip():
+            matched = Barangay.query.filter(
+                func.lower(Barangay.name) == str(fallback_name).strip().casefold()
+            ).first()
+            if matched:
+                candidates = [matched.id]
+
+    if not isinstance(candidates, list) or not candidates:
+        return None, "Select at least one barangay for this evacuation center"
+
+    barangay_ids = []
+    for raw_id in candidates:
+        try:
+            barangay_id = int(raw_id)
+        except (TypeError, ValueError):
+            return None, f"Invalid barangay id: {raw_id}"
+        if barangay_id not in barangay_ids:
+            barangay_ids.append(barangay_id)
+
+    barangays = Barangay.query.filter(Barangay.id.in_(barangay_ids)).all()
+    found_ids = {barangay.id for barangay in barangays}
+    missing_ids = [barangay_id for barangay_id in barangay_ids if barangay_id not in found_ids]
+    if missing_ids:
+        return None, f"Barangay id(s) not found: {', '.join(map(str, missing_ids))}"
+    return barangay_ids, None
+
+
+def _center_barangays(center):
+    return [
+        {
+            "id": link.barangay.id,
+            "name": link.barangay.name,
+            "color": link.color
+        }
+        for link in sorted(
+            center.barangay_links,
+            key=lambda item: (
+                item.barangay.name.casefold()
+                if item.barangay and item.barangay.name
+                else ""
+            )
+        )
+        if link.barangay is not None
+    ]
+
+
+def _center_metrics(center):
+    rooms = EvacuationCenterRoom.query.filter_by(
+        evacuation_center_id=center.id,
+        is_active=True
+    ).all()
+    room_ids = [room.id for room in rooms]
+    rooms_by_id = {room.id: room for room in rooms}
+    assigned_by_barangay = {}
+    family_count_by_barangay = {}
+    rooms_by_barangay = {}
+    total_assigned = 0
+
+    if room_ids:
+        total_assigned = (
+            db.session.query(func.count(EvacuationAssignment.id))
+            .filter(EvacuationAssignment.room_id.in_(room_ids))
+            .scalar()
+        ) or 0
+
+        assignment_rows = (
+            db.session.query(
+                Family.barangay_id,
+                func.count(EvacuationAssignment.id),
+                func.count(func.distinct(Family.id))
+            )
+            .join(
+                Resident,
+                Resident.id == EvacuationAssignment.resident_id
+            )
+            .join(
+                Family,
+                Family.id == Resident.family_id
+            )
+            .filter(EvacuationAssignment.room_id.in_(room_ids))
+            .group_by(Family.barangay_id)
+            .all()
+        )
+        assigned_by_barangay = {
+            barangay_id: assigned_count
+            for barangay_id, assigned_count, _ in assignment_rows
+            if barangay_id is not None
+        }
+        family_count_by_barangay = {
+            barangay_id: family_count
+            for barangay_id, _, family_count in assignment_rows
+            if barangay_id is not None
+        }
+
+        room_barangay_rows = (
+            db.session.query(
+                EvacuationAssignment.room_id,
+                Family.barangay_id
+            )
+            .join(
+                Resident,
+                Resident.id == EvacuationAssignment.resident_id
+            )
+            .join(
+                Family,
+                Family.id == Resident.family_id
+            )
+            .filter(
+                EvacuationAssignment.room_id.in_(room_ids),
+                Family.barangay_id.isnot(None)
+            )
+            .distinct()
+            .all()
+        )
+        for rid, bid in room_barangay_rows:
+            rooms_by_barangay.setdefault(bid, set()).add(rid)
+
+    linked_barangays = _center_barangays(center)
+    total_room_capacity = sum(room.capacity or 0 for room in rooms)
+    total_capacity = center.capacity
+    effective_capacity = (
+        total_capacity if total_capacity is not None else total_room_capacity
+    )
+    center_available = max(effective_capacity - total_assigned, 0)
+
+    breakdown = []
+    for barangay in linked_barangays:
+        barangay_id = barangay["id"]
+        used_room_ids = rooms_by_barangay.get(barangay_id, set())
+        used_room_capacity = sum(
+            rooms_by_id[rid].capacity or 0
+            for rid in used_room_ids
+            if rid in rooms_by_id
+        )
+        assigned = assigned_by_barangay.get(barangay_id, 0)
+        breakdown.append({
+            **barangay,
+            "rooms": len(used_room_ids) if used_room_ids else len(rooms),
+            "assigned": assigned,
+            "assigned_families": family_count_by_barangay.get(barangay_id, 0),
+            "available": (
+                max(used_room_capacity - assigned, 0)
+                if used_room_ids
+                else center_available
+            )
+        })
+
+    return {
+        "barangays": linked_barangays,
+        "barangay": ", ".join(item["name"] for item in linked_barangays) or None,
+        "barangay_ids": [item["id"] for item in linked_barangays],
+        "barangay_id": linked_barangays[0]["id"] if linked_barangays else None,
+        "barangay_breakdown": breakdown,
+        "capacity": total_capacity,
+        "occupied": total_assigned,
+        "current_occupancy": total_assigned,
+        "available": (
+            max(total_capacity - total_assigned, 0)
+            if total_capacity is not None
+            else center_available
+        ),
+        "room_count": len(rooms),
+        "total_rooms": len(rooms),
+        "total_assigned": total_assigned
+    }
 
 
 def center_to_feature(center):
@@ -55,29 +228,7 @@ def center_to_feature(center):
         except (TypeError, ValueError):
             entrances = []
 
-    # Calculate actual occupancy from assigned individuals in all rooms of this center
-    occupied = (
-        db.session.query(func.count(EvacuationAssignment.id))
-        .join(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
-        .filter(EvacuationCenterRoom.evacuation_center_id == center.id)
-        .scalar() or 0
-    )
-
-    # Active room count
-    active_rooms = (
-        EvacuationCenterRoom.query.filter_by(
-            evacuation_center_id=center.id,
-            is_active=True
-        ).all()
-    )
-    room_count = len(active_rooms)
-
-    # If center capacity is not explicitly set, sum room capacities
-    capacity = center.capacity
-    if capacity is None and room_count > 0:
-        capacity = sum(r.capacity for r in active_rooms if r.capacity)
-
-    available = max((capacity or 0) - occupied, 0) if capacity is not None else 0
+    metrics = _center_metrics(center)
 
     return {
         "type": "Feature",
@@ -85,13 +236,7 @@ def center_to_feature(center):
         "properties": {
             "id": center.id,
             "name": center.name,
-            "barangay": center.barangay,
-            "barangay_id": center.barangay_id,
-            "capacity": capacity,
-            "occupied": occupied,
-            "current_occupancy": occupied,
-            "available": available,
-            "room_count": room_count,
+            **metrics,
             "building_material": center.building_material,
             "accessibility_notes": center.accessibility_notes,
             "hazard_exposure_score": center.hazard_exposure_score,
@@ -134,16 +279,25 @@ def get_evacuation_centers():
 
     if barangay_id:
         try:
-            query = query.filter(EvacuationCenter.barangay_id == int(barangay_id))
+            barangay_id = int(barangay_id)
         except (ValueError, TypeError):
-            pass
+            return jsonify({"error": "barangay_id must be a valid integer"}), 400
+        query = query.filter(
+            EvacuationCenter.barangay_links.any(
+                CenterBarangay.barangay_id == barangay_id
+            )
+        )
 
     if search:
         search_pattern = f"%{search}%"
         query = query.filter(
             or_(
                 EvacuationCenter.name.ilike(search_pattern),
-                EvacuationCenter.barangay.ilike(search_pattern)
+                EvacuationCenter.barangay_links.any(
+                    CenterBarangay.barangay.has(
+                        Barangay.name.ilike(search_pattern)
+                    )
+                )
             )
         )
 
@@ -168,12 +322,27 @@ def get_evacuation_center_details(center_id):
         evacuation_center_id=center_id
     ).order_by(EvacuationCenterRoom.room_number.asc()).all()
 
+    linked_by_id = {
+        item["id"]: item for item in _center_barangays(center)
+    }
     rooms_data = []
     for room in rooms:
         occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
         room_dict = room.to_dict()
         room_dict["occupied"] = occupied
         room_dict["available"] = max(room.capacity - occupied, 0)
+        assigned_bid = (
+            db.session.query(Family.barangay_id)
+            .join(Resident, Resident.family_id == Family.id)
+            .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+            .filter(EvacuationAssignment.room_id == room.id)
+            .first()
+        )
+        room_bid = assigned_bid[0] if assigned_bid else (
+            next(iter(linked_by_id.keys()), None) if len(linked_by_id) == 1 else None
+        )
+        room_dict["barangay_id"] = room_bid
+        room_dict["barangay"] = linked_by_id.get(room_bid) if room_bid else None
         rooms_data.append(room_dict)
 
     # Load distinct assigned families across all rooms of this center
@@ -226,17 +395,18 @@ def create_evacuation_center():
     if not name:
         return jsonify({"error": "Center name is required"}), 400
 
-    barangay_id = data.get('barangay_id')
-    barangay_name = str(data.get('barangay') or '').strip()
-
-    if barangay_id:
-        try:
-            barangay_id = int(barangay_id)
-            brgy_obj = Barangay.query.get(barangay_id)
-            if brgy_obj and not barangay_name:
-                barangay_name = brgy_obj.name
-        except (ValueError, TypeError):
-            barangay_id = None
+    barangay_ids, barangay_error = _parse_barangay_ids(
+        data.get('barangay_ids'),
+        fallback_id=data.get('barangay_id'),
+        fallback_name=data.get('barangay')
+    )
+    if barangay_error:
+        return jsonify({"error": barangay_error}), 400
+    duplicate = EvacuationCenter.query.filter(
+        func.lower(EvacuationCenter.name) == name.casefold()
+    ).first()
+    if duplicate:
+        return jsonify({"error": f"An evacuation center named '{duplicate.name}' already exists"}), 409
 
     capacity = data.get('capacity')
     if capacity is not None and str(capacity).strip() != "":
@@ -269,8 +439,6 @@ def create_evacuation_center():
 
     center = EvacuationCenter(
         name=name,
-        barangay_id=barangay_id,
-        barangay=barangay_name or None,
         capacity=capacity,
         building_material=data.get('building_material'),
         accessibility_notes=data.get('accessibility_notes'),
@@ -282,6 +450,11 @@ def create_evacuation_center():
         managed_by=user_id
     )
     db.session.add(center)
+    db.session.flush()
+    db.session.add_all(
+        CenterBarangay(center_id=center.id, barangay_id=barangay_id)
+        for barangay_id in barangay_ids
+    )
     db.session.commit()
 
     db.session.add(SystemLog(user_id=user_id, action=f"Added evacuation center: {center.name}"))
@@ -300,23 +473,35 @@ def update_evacuation_center(center_id):
         name = str(data['name'] or '').strip()
         if not name:
             return jsonify({"error": "Center name cannot be empty"}), 400
+        duplicate = EvacuationCenter.query.filter(
+            func.lower(EvacuationCenter.name) == name.casefold(),
+            EvacuationCenter.id != center.id
+        ).first()
+        if duplicate:
+            return jsonify({"error": f"An evacuation center named '{duplicate.name}' already exists"}), 409
         center.name = name
 
-    if 'barangay_id' in data:
-        bid = data.get('barangay_id')
-        if bid:
-            try:
-                center.barangay_id = int(bid)
-                brgy = Barangay.query.get(center.barangay_id)
-                if brgy:
-                    center.barangay = brgy.name
-            except (ValueError, TypeError):
-                pass
-        else:
-            center.barangay_id = None
-
-    if 'barangay' in data and not data.get('barangay_id'):
-        center.barangay = str(data['barangay'] or '').strip() or None
+    if 'barangay_ids' in data or 'barangay_id' in data or 'barangay' in data:
+        barangay_ids, barangay_error = _parse_barangay_ids(
+            data.get('barangay_ids'),
+            fallback_id=data.get('barangay_id'),
+            fallback_name=data.get('barangay')
+        )
+        if barangay_error:
+            return jsonify({"error": barangay_error}), 400
+        existing_links = {
+            link.barangay_id: link
+            for link in center.barangay_links
+        }
+        selected_ids = set(barangay_ids)
+        for barangay_id, link in existing_links.items():
+            if barangay_id not in selected_ids:
+                center.barangay_links.remove(link)
+        for barangay_id in barangay_ids:
+            if barangay_id not in existing_links:
+                center.barangay_links.append(
+                    CenterBarangay(barangay_id=barangay_id)
+                )
 
     if 'capacity' in data:
         cap = data.get('capacity')

@@ -208,10 +208,15 @@ export function useDashboardSummary(isAdmin) {
   });
 
   const barangays = Array.isArray(barangaysQuery.data) ? barangaysQuery.data : [];
-  const centers = (centersQuery.data?.features || []).filter((feature) => {
+  const centersById = new Map();
+  (centersQuery.data?.features || []).forEach((feature) => {
     const props = feature?.properties || feature || {};
-    return props.is_active !== false;
+    const centerId = props.id ?? props.center_id ?? feature?.id;
+    if (props.is_active !== false && centerId != null && !centersById.has(String(centerId))) {
+      centersById.set(String(centerId), feature);
+    }
   });
+  const centers = Array.from(centersById.values());
   const seenRoomIds = new Set();
   const centerRooms = roomsQuery.results.map(({ center, rooms }) => {
     const properties = center.properties || center;
@@ -228,7 +233,9 @@ export function useDashboardSummary(isAdmin) {
     return {
       id: properties.id ?? properties.center_id ?? center.id,
       name: properties.name || "Unnamed center",
-      barangay: properties.barangay || "Barangay not specified",
+      barangays: properties.barangays || [],
+      barangay: (properties.barangays || []).map((barangay) => barangay.name).filter(Boolean).join(", ")
+        || "Barangay not specified",
       total: uniqueRooms.length,
       occupied,
       available: uniqueRooms.length - occupied,
@@ -274,6 +281,10 @@ export function useDashboardSummary(isAdmin) {
           unassignedFamilies,
           residents: totalResidents,
           centers: centers.length,
+          totalCapacity: centers.reduce((total, feature) => {
+            const properties = feature.properties || feature;
+            return total + Number(properties.capacity || 0);
+          }, 0),
           totalRooms,
           occupiedRooms,
           availableRooms: totalRooms - occupiedRooms,

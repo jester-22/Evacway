@@ -516,6 +516,25 @@
   word-break: break-word;
 }
 
+.mdp-barangay-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.mdp-barangay-badges span {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--barangay-color, #2563eb);
+  background: color-mix(in srgb, var(--barangay-color, #2563eb) 12%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--barangay-color, #2563eb) 28%, transparent);
+}
+
 .mdp-note {
   margin: 10px 0 0;
 

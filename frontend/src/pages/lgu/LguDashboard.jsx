@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faTriangleExclamation, faXmark } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { queryKeys, useEvacuationCenters, useHazardZones, useLogs, useNotifications } from "../../hooks/useEvacuationQueries";
@@ -12,7 +14,7 @@ import BarangayManager from "../../components/BarangayManager";
 import RescueRequestManager from "../../components/RescueRequestManager";
 import SystemAndLogs from "../../components/SystemAndLogs";
 
-const MOBILE_BREAKPOINT = 720;
+const MOBILE_BREAKPOINT = 1024;
 
 function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
   const [isMobile, setIsMobile] = useState(
@@ -41,6 +43,7 @@ function LguDashboard() {
   const requestedTab = new URLSearchParams(location.search).get("tab");
   const notificationId = new URLSearchParams(location.search).get("notificationId");
   const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "settings"].includes(requestedTab) ? requestedTab : "centers");
+  const [flashNotice, setFlashNotice] = useState(location.state?.flashMessage || "");
   const [focusedReportId, setFocusedReportId] = useState(null);
   const [focusedRescueId, setFocusedRescueId] = useState(null);
   const [mapFocusLocation, setMapFocusLocation] = useState(null);
@@ -63,7 +66,25 @@ function LguDashboard() {
       return;
     }
     setTab(nextTab);
+    navigate(`/lgu?tab=${encodeURIComponent(nextTab)}`);
   }
+
+  useEffect(() => {
+    if (location.state?.flashMessage) {
+      setFlashNotice(location.state.flashMessage);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
+
+  useEffect(() => {
+    if (requestedTab === "data-management") {
+      setFlashNotice("Admins only");
+      setTab("centers");
+      navigate("/lgu?tab=centers", { replace: true });
+    } else if (requestedTab && ["centers", "barangays", "reports", "rescue", "settings"].includes(requestedTab)) {
+      setTab(requestedTab);
+    }
+  }, [requestedTab, navigate]);
 
   useEffect(() => {
     if (!notificationId) {
@@ -139,6 +160,45 @@ function LguDashboard() {
 
       {/* CONTENT */}
       <div className="dashboard-content" style={{ overflow: "hidden" }}>
+        {flashNotice && (
+          <div
+            style={{
+              margin: "14px 20px 0",
+              padding: "10px 16px",
+              borderRadius: "8px",
+              background: "#fef2f2",
+              border: "1px solid #fecaca",
+              color: "#991b1b",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: "13.5px",
+              fontWeight: "600",
+              boxShadow: "0 2px 6px rgba(220, 38, 38, 0.08)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <FontAwesomeIcon icon={faTriangleExclamation} />
+              <span>{flashNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setFlashNotice("")}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#991b1b",
+                cursor: "pointer",
+                padding: "2px 6px",
+                fontSize: "14px",
+              }}
+              aria-label="Dismiss"
+            >
+              <FontAwesomeIcon icon={faXmark} />
+            </button>
+          </div>
+        )}
+
         {/* EVACUATION CENTERS */}
         {tab === "centers" && (
           <EvacuationCenterManager

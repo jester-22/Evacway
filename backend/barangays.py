@@ -385,7 +385,7 @@ def get_barangay_evacuation_centers(barangay_id):
 # =========================================================
 @barangays_bp.route('/api/barangays', methods=['POST'])
 @jwt_required()
-@role_required('admin', 'lgu_personnel')
+@role_required('admin')
 def add_barangay():
 
     data = request.get_json(silent=True)
@@ -460,7 +460,7 @@ def add_barangay():
 # =========================================================
 @barangays_bp.route('/api/barangays/<int:barangay_id>', methods=['PUT'])
 @jwt_required()
-@role_required('admin', 'lgu_personnel')
+@role_required('admin')
 def update_barangay(barangay_id):
     barangay = db.session.get(Barangay, barangay_id)
     if not barangay:
@@ -549,7 +549,7 @@ def update_barangay(barangay_id):
 # =========================================================
 @barangays_bp.route('/api/barangays/<int:barangay_id>', methods=['DELETE'])
 @jwt_required()
-@role_required('admin', 'lgu_personnel')
+@role_required('admin')
 def delete_barangay(barangay_id):
     barangay = db.session.get(Barangay, barangay_id)
     if not barangay:

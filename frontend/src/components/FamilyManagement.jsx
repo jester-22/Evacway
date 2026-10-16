@@ -151,11 +151,9 @@ function isFamilyAssigned(fam) {
 }
 
 const ADD_STEPS = [
-  { number: 1, title: "Household Info", subtitle: "Barangay & shared address" },
-  { number: 2, title: "Household Head", subtitle: "Complete personal record" },
-  { number: 3, title: "Family Members", subtitle: "Additional household members" },
-  { number: 4, title: "Evacuation Room", subtitle: "Optional room assignment" },
-  { number: 5, title: "Review & Save", subtitle: "Verify all details" },
+  { number: 1, title: "Household & Head", subtitle: "Address, contact & head profile" },
+  { number: 2, title: "Household Members", subtitle: "Additional members (optional)" },
+  { number: 3, title: "Room & Save", subtitle: "Evacuation room & confirm" },
 ];
 
 export default function FamilyManagement({
@@ -590,18 +588,12 @@ export default function FamilyManagement({
         return false;
       }
       if (!wizardForm.address.trim()) {
-        setError("Please enter the household address or purok/sitio.");
+        setError("Please enter the complete household address or purok/sitio.");
         return false;
       }
-      return true;
-    }
-
-    if (step === 2) {
       const head = wizardForm.head;
       if (!head.first_name.trim() || !head.last_name.trim()) {
-        setError(
-          "Household head's first name and last name are required."
-        );
+        setError("Household head's first name and last name are required.");
         return false;
       }
       if (head.date_of_birth) {
@@ -621,7 +613,7 @@ export default function FamilyManagement({
       return true;
     }
 
-    if (step === 3) {
+    if (step === 2) {
       if (editingOtherIndex !== null) {
         setError(
           "Please save or cancel the member form you are currently editing before continuing."
@@ -633,13 +625,13 @@ export default function FamilyManagement({
         memberDisplayName(m).trim().toLocaleLowerCase()
       );
       if (new Set(names).size !== names.length) {
-        setError("All family member names must be unique within the household.");
+        setError("All household member names must be unique within the household.");
         return false;
       }
       return true;
     }
 
-    if (step === 4) {
+    if (step === 3) {
       if (wizardForm.assignment_mode === "assign") {
         if (
           !wizardForm.assignment_center_id ||
@@ -674,7 +666,7 @@ export default function FamilyManagement({
 
   function handleWizardNext() {
     if (!validateWizardStep(wizardStep)) return;
-    setWizardStep((prev) => Math.min(5, prev + 1));
+    setWizardStep((prev) => Math.min(3, prev + 1));
   }
 
   function handleWizardBack() {
@@ -701,7 +693,7 @@ export default function FamilyManagement({
   async function submitNewFamily(event) {
     event.preventDefault();
     if (saving) return;
-    for (let s = 1; s <= 4; s += 1) {
+    for (let s = 1; s <= 2; s += 1) {
       if (!validateWizardStep(s)) {
         setWizardStep(s);
         return;
@@ -1648,19 +1640,19 @@ export default function FamilyManagement({
             >
               <FontAwesomeIcon icon={faArrowLeft} /> Back to Households
             </button>
-            <span className="fm-step-pill">Step {wizardStep} of 5</span>
+            <span className="fm-step-pill">Step {wizardStep} of 3</span>
           </div>
 
           <div className="fm-wizard-header">
             <div>
               <h3>Add New Household</h3>
               <p>
-                Follow the steps below to register the household, head of family, and members.
+                Follow the steps below to register the household, head of household, and members.
               </p>
             </div>
           </div>
 
-          {/* 5-Step Progress Indicator */}
+          {/* 3-Step Progress Indicator */}
           <ol className="fm-stepper" aria-label="Registration steps">
             {ADD_STEPS.map((s) => {
               const isCurrent = wizardStep === s.number;
@@ -1694,14 +1686,13 @@ export default function FamilyManagement({
           </ol>
 
           <form onSubmit={submitNewFamily} className="fm-wizard-body">
-            {/* STEP 1: HOUSEHOLD INFORMATION */}
+            {/* STEP 1: HOUSEHOLD & HEAD INFORMATION */}
             {wizardStep === 1 && (
               <div className="fm-step-panel">
                 <div className="fm-step-intro">
-                  <h4>Step 1: Shared Household Information</h4>
+                  <h4>Step 1: Household & Household Head Details</h4>
                   <p>
-                    Enter the barangay, complete address, and primary contact
-                    details shared by all members of this household.
+                    Enter the barangay, address, contact details, and personal information for the household head.
                   </p>
                 </div>
 
@@ -1803,7 +1794,7 @@ export default function FamilyManagement({
                   <label className="fm-field">
                     <span>Household Remarks / Evacuation Notes</span>
                     <textarea
-                      rows={3}
+                      rows={2}
                       value={wizardForm.remarks}
                       onChange={(e) =>
                         setWizardForm((prev) => ({
@@ -1815,20 +1806,13 @@ export default function FamilyManagement({
                     />
                   </label>
                 </div>
-              </div>
-            )}
 
-            {/* STEP 2: HOUSEHOLD HEAD DETAILS */}
-            {wizardStep === 2 && (
-              <div className="fm-step-panel">
-                <div className="fm-step-intro">
+                <div className="fm-step-subhead" style={{ marginTop: "24px", paddingTop: "18px", borderTop: "1px solid #e2e8f0" }}>
                   <div className="fm-step-intro-row">
                     <div>
-                      <h4>Step 2: Household Head Personal Details</h4>
-                      <p>
-                        Provide the complete personal and vulnerability profile
-                        for the household head. This creates their official
-                        resident record.
+                      <h4 style={{ margin: 0, fontSize: "16px" }}>Household Head Profile</h4>
+                      <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: "13px" }}>
+                        Personal details for the designated household head (first resident).
                       </p>
                     </div>
                     <span className="fm-badge fm-badge-blue">
@@ -1845,16 +1829,16 @@ export default function FamilyManagement({
               </div>
             )}
 
-            {/* STEP 3: OTHER FAMILY MEMBERS */}
-            {wizardStep === 3 && (
+            {/* STEP 2: ADDITIONAL HOUSEHOLD MEMBERS */}
+            {wizardStep === 2 && (
               <div className="fm-step-panel">
                 <div className="fm-step-intro">
                   <div className="fm-step-intro-row">
                     <div>
-                      <h4>Step 3: Other Family Members</h4>
+                      <h4>Step 2: Additional Household Members</h4>
                       <p>
-                        Add all additional members living in this household.
-                        Single-member households can proceed directly to Step 4.
+                        Add all additional residents living in this household.
+                        Single-person households can proceed directly to Step 3.
                       </p>
                     </div>
                     {editingOtherIndex === null && (
@@ -1893,9 +1877,9 @@ export default function FamilyManagement({
                   <button
                     type="button"
                     className="fm-btn fm-btn-ghost fm-btn-sm"
-                    onClick={() => setWizardStep(2)}
+                    onClick={() => setWizardStep(1)}
                   >
-                    <FontAwesomeIcon icon={faPenToSquare} /> Edit Head in Step 2
+                    <FontAwesomeIcon icon={faPenToSquare} /> Edit Head in Step 1
                   </button>
                 </div>
 
@@ -1905,8 +1889,8 @@ export default function FamilyManagement({
                     <div className="fm-member-draft-header">
                       <h5>
                         {editingOtherIndex === "new"
-                          ? "Add Family Member"
-                          : `Edit Family Member #${editingOtherIndex + 2}`}
+                          ? "Add Household Member"
+                          : `Edit Household Member #${editingOtherIndex + 2}`}
                       </h5>
                       <button
                         type="button"
@@ -1947,7 +1931,7 @@ export default function FamilyManagement({
                   <div className="fm-empty-inline">
                     <FontAwesomeIcon icon={faUsers} />
                     <div>
-                      <strong>No additional family members added yet</strong>
+                      <strong>No additional household members added yet</strong>
                       <p>
                         Click &ldquo;Add Another Member&rdquo; above to add
                         dependents, or click &ldquo;Next Step&rdquo; if this is
@@ -2013,15 +1997,15 @@ export default function FamilyManagement({
               </div>
             )}
 
-            {/* STEP 4: EVACUATION ASSIGNMENT */}
-            {wizardStep === 4 && (
+            {/* STEP 3: EVACUATION ASSIGNMENT & REVIEW */}
+            {wizardStep === 3 && (
               <div className="fm-step-panel">
                 <div className="fm-step-intro">
-                  <h4>Step 4: Evacuation Center & Room Assignment (Optional)</h4>
+                  <h4>Step 3: Evacuation Room & Confirm Registration</h4>
                   <p>
-                    You can assign this household ({1 + wizardForm.otherMembers.length}{" "}
+                    Optionally assign this household ({1 + wizardForm.otherMembers.length}{" "}
                     total member{wizardForm.otherMembers.length === 0 ? "" : "s"})
-                    to an active evacuation room now, or leave them unassigned.
+                    to an active evacuation room now, and review summary details before saving.
                   </p>
                 </div>
 
@@ -2099,7 +2083,7 @@ export default function FamilyManagement({
                             return (
                               <option key={c.id} value={c.id}>
                                 {displayEntityName(c.name)} (
-                                {(c.barangays || []).map((barangay) => barangay.name).join(", ")}) — {occ}/{cap} occupied
+                                {(c.barangays || []).map((barangay) => barangay.name).join(", ")}) — {occ}/{cap} assigned
                               </option>
                             );
                           })}
@@ -2148,7 +2132,7 @@ export default function FamilyManagement({
                                 disabled={!enough}
                               >
                                 Room {room.room_number} — {room.occupied || 0}/
-                                {room.capacity} occupied ({available} available)
+                                {room.capacity} assigned ({available} remaining)
                                 {!enough ? " [Insufficient capacity]" : ""}
                               </option>
                             );
@@ -2193,12 +2177,12 @@ export default function FamilyManagement({
                                   <span
                                     className={`fm-badge ${enough ? "fm-badge-green" : "fm-badge-red"}`}
                                   >
-                                    {available} available
+                                    {available} remaining
                                   </span>
                                 </div>
                                 <div className="fm-room-pick-meta">
                                   <span>Capacity: {room.capacity}</span>
-                                  <span>Occupied: {room.occupied || 0}</span>
+                                  <span>Assigned: {room.occupied || 0}</span>
                                 </div>
                               </button>
                             );
@@ -2207,18 +2191,11 @@ export default function FamilyManagement({
                       )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {/* STEP 5: REVIEW AND SAVE */}
-            {wizardStep === 5 && (
-              <div className="fm-step-panel">
-                <div className="fm-step-intro">
-                  <h4>Step 5: Review & Confirm Registration</h4>
-                  <p>
-                    Verify all household, household head, family member, and
-                    evacuation assignment details before saving.
-                  </p>
+                {/* Review Summary before submission */}
+                <div className="fm-step-intro" style={{ marginTop: "1.5rem" }}>
+                  <h4>Registration Summary</h4>
+                  <p>Please review household details before saving.</p>
                 </div>
 
                 <div className="fm-review-grid">
@@ -2226,7 +2203,7 @@ export default function FamilyManagement({
                   <div className="fm-review-card">
                     <div className="fm-review-card-header">
                       <h5>
-                        <FontAwesomeIcon icon={faHouse} /> Household Information
+                        <FontAwesomeIcon icon={faHouse} /> Household & Head
                       </h5>
                       <button
                         type="button"
@@ -2251,6 +2228,10 @@ export default function FamilyManagement({
                         <dd>{wizardForm.family_code.trim() || "Auto-generated"}</dd>
                       </div>
                       <div>
+                        <dt>Household Head</dt>
+                        <dd><strong>{memberDisplayName(wizardForm.head) || "—"}</strong></dd>
+                      </div>
+                      <div>
                         <dt>Complete Address</dt>
                         <dd>{wizardForm.address || "—"}</dd>
                       </div>
@@ -2262,10 +2243,6 @@ export default function FamilyManagement({
                             "Not provided"}
                         </dd>
                       </div>
-                      <div>
-                        <dt>Remarks</dt>
-                        <dd>{wizardForm.remarks || "None"}</dd>
-                      </div>
                     </dl>
                   </div>
 
@@ -2273,16 +2250,8 @@ export default function FamilyManagement({
                   <div className="fm-review-card">
                     <div className="fm-review-card-header">
                       <h5>
-                        <FontAwesomeIcon icon={faBuilding} /> Evacuation
-                        Assignment
+                        <FontAwesomeIcon icon={faBuilding} /> Room Assignment
                       </h5>
-                      <button
-                        type="button"
-                        className="fm-btn fm-btn-ghost fm-btn-sm"
-                        onClick={() => setWizardStep(4)}
-                      >
-                        <FontAwesomeIcon icon={faPenToSquare} /> Edit
-                      </button>
                     </div>
                     {wizardForm.assignment_mode === "assign" &&
                     wizardForm.assignment_center_id &&
@@ -2327,11 +2296,10 @@ export default function FamilyManagement({
                     ) : (
                       <div className="fm-review-unassigned">
                         <span className="fm-badge fm-badge-neutral">
-                          Not Assigned
+                          Unassigned
                         </span>
                         <p>
-                          Household will be registered without an active room
-                          assignment.
+                          Household will be registered in the barangay registry without an active room assignment.
                         </p>
                       </div>
                     )}
@@ -2339,28 +2307,18 @@ export default function FamilyManagement({
                 </div>
 
                 {/* Review Block 3: Household Head & Members */}
-                <div className="fm-review-card">
+                <div className="fm-review-card" style={{ marginTop: "1rem" }}>
                   <div className="fm-review-card-header">
                     <h5>
-                      <FontAwesomeIcon icon={faUsers} /> Registered Household
-                      Members ({1 + wizardForm.otherMembers.length})
+                      <FontAwesomeIcon icon={faUsers} /> Household Members ({1 + wizardForm.otherMembers.length})
                     </h5>
-                    <div className="fm-inline-actions">
-                      <button
-                        type="button"
-                        className="fm-btn fm-btn-ghost fm-btn-sm"
-                        onClick={() => setWizardStep(2)}
-                      >
-                        Edit Head
-                      </button>
-                      <button
-                        type="button"
-                        className="fm-btn fm-btn-ghost fm-btn-sm"
-                        onClick={() => setWizardStep(3)}
-                      >
-                        Edit Members
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="fm-btn fm-btn-ghost fm-btn-sm"
+                      onClick={() => setWizardStep(2)}
+                    >
+                      <FontAwesomeIcon icon={faPenToSquare} /> Edit Members
+                    </button>
                   </div>
 
                   <div className="fm-added-members-list">
@@ -2440,7 +2398,7 @@ export default function FamilyManagement({
               </button>
 
               <div className="fm-wizard-footer-right">
-                {wizardStep < 5 ? (
+                {wizardStep < 3 ? (
                   <button
                     type="button"
                     className="fm-btn fm-btn-primary"
@@ -2460,7 +2418,7 @@ export default function FamilyManagement({
                     />
                     {saving
                       ? "Saving Household..."
-                      : "Confirm & Save Household"}
+                      : "Confirm & Register Household"}
                   </button>
                 )}
               </div>
@@ -2990,14 +2948,14 @@ export default function FamilyManagement({
                           </dd>
                         </div>
                         <div>
-                          <dt>Occupancy</dt>
+                          <dt>Room Assignment</dt>
                           <dd>
                             {activeFamily.current_room_occupied ??
                               activeFamily.assigned_members ??
                               "—"}{" "}
-                            occupied •{" "}
+                            assigned •{" "}
                             {activeFamily.current_room_available ?? "—"}{" "}
-                            available
+                            remaining
                           </dd>
                         </div>
                       </dl>
@@ -3291,7 +3249,7 @@ export default function FamilyManagement({
               </h3>
               <p>
                 Search households, filter by evacuation assignment status, and
-                manage family members and room assignments.
+                manage household members and room assignments.
               </p>
             </div>
             <div className="fm-list-actions">
@@ -3300,17 +3258,7 @@ export default function FamilyManagement({
                 className="fm-btn fm-btn-primary"
                 onClick={openAddFamilyWizard}
               >
-                <FontAwesomeIcon icon={faPlus} /> Add Family
-              </button>
-              <button
-                type="button"
-                className="fm-btn fm-btn-secondary"
-                onClick={() => {
-                  setError("");
-                  setModal("import");
-                }}
-              >
-                <FontAwesomeIcon icon={faFileExcel} /> Import
+                <FontAwesomeIcon icon={faPlus} /> Add Household
               </button>
               <button
                 type="button"
@@ -3392,14 +3340,14 @@ export default function FamilyManagement({
               <p>
                 {search || assignmentStatus
                   ? "No households match your current search or filter criteria."
-                  : "Register a household using 'Add Family' or import from Excel."}
+                  : "Register a household using 'Add Household' to get started."}
               </p>
               <button
                 type="button"
                 className="fm-btn fm-btn-primary"
                 onClick={openAddFamilyWizard}
               >
-                <FontAwesomeIcon icon={faPlus} /> Add Family
+                <FontAwesomeIcon icon={faPlus} /> Add Household
               </button>
             </div>
           ) : (
@@ -3649,8 +3597,8 @@ export default function FamilyManagement({
                   {modal === "edit-household" && "Edit Household Information"}
                   {modal === "member-form" &&
                     (memberModalMode === "add"
-                      ? "Add Family Member"
-                      : "Edit Family Member")}
+                      ? "Add Household Member"
+                      : "Edit Household Member")}
                   {modal === "assign" && "Assign Household to Evacuation Room"}
                   {modal === "move" && "Change Assigned Evacuation Room"}
                   {modal === "import" && "Import Households from Excel"}
@@ -3983,7 +3931,7 @@ export default function FamilyManagement({
                       <strong>{selectedAssignRoom.capacity}</strong>
                     </div>
                     <div>
-                      <span>Current Occupancy</span>
+                      <span>Currently Assigned</span>
                       <strong>{selectedAssignRoom.occupied || 0}</strong>
                     </div>
                     <div>
@@ -4105,7 +4053,7 @@ export default function FamilyManagement({
                       <strong>{selectedTargetRoom.capacity}</strong>
                     </div>
                     <div>
-                      <span>Current Occupancy</span>
+                      <span>Currently Assigned</span>
                       <strong>{selectedTargetRoom.occupied || 0}</strong>
                     </div>
                     <div>

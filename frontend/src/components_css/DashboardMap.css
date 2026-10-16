@@ -151,16 +151,21 @@
 }
 
 /* ==========================================
-   HAZARD LAYER BUTTONS
+   HAZARD LAYER CONTROLS
    ========================================== */
 
-.dashboard-layer-tabs {
+.dashboard-layer-control-wrap {
   position: absolute;
   top: 16px;
   right: 16px;
+  z-index: 20;
+}
 
-  z-index: 10;
+.layer-control-toggle {
+  display: none;
+}
 
+.dashboard-layer-tabs {
   display: flex;
   gap: 6px;
 }
@@ -173,8 +178,8 @@
   height: 38px;
   padding: 0 13px;
 
-  border: none;
-  border-radius: 7px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
 
   background: #ffffff;
   color: #374151;
@@ -184,21 +189,36 @@
 
   cursor: pointer;
 
-  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.08);
+  transition: all 150ms ease;
 }
 
 .layer-tab:hover {
   background: #eff6ff;
+  border-color: #cbd5e1;
 }
 
 .layer-tab-flood-active {
-  background: #e6eefb;
-  color: var(--brand-dark);
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #93c5fd;
 }
 
 .layer-tab-landslide-active {
-  background: #fef3c7;
-  color: #92400e;
+  background: #fefce8;
+  color: #a16207;
+  border-color: #fde047;
+}
+
+.layer-tab-reports-active {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
+.layer-active-check {
+  margin-left: 4px;
+  font-size: 11px;
 }
 
 /* ==========================================
@@ -802,18 +822,85 @@
     width: calc(100% - 32px);
   }
 
+  .dashboard-layer-control-wrap {
+    top: 10px;
+    right: 10px;
+  }
+
+  .layer-control-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 38px;
+    padding: 0 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+    cursor: pointer;
+    transition: all 150ms ease;
+  }
+
+  .layer-control-toggle.has-active {
+    border-color: #2563eb;
+    color: #1d4ed8;
+    background: #eff6ff;
+  }
+
+  .layer-count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: #2563eb;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
   .dashboard-layer-tabs {
-    top: 68px;
-    right: 16px;
-  }
-
-  .layer-tab {
-    height: 36px;
-    padding: 0 10px;
-  }
-
-  .layer-tab span {
     display: none;
+  }
+
+  .dashboard-layer-tabs.is-open {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    top: 44px;
+    right: 0;
+    z-index: 55;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.16);
+    min-width: 160px;
+    gap: 4px;
+  }
+
+  .dashboard-layer-tabs.is-open .layer-tab {
+    width: 100%;
+    justify-content: flex-start;
+    min-height: 40px;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 6px;
+    box-shadow: none;
+    font-size: 13px;
+  }
+
+  .dashboard-layer-tabs.is-open .layer-tab span {
+    display: inline;
+  }
+
+  .dashboard-layer-tabs.is-open .layer-active-check {
+    margin-left: auto;
   }
 
   .mdp-panel {

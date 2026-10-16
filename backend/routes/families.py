@@ -608,7 +608,7 @@ def _preview_family_workbook(file_storage):
 
 
 @families_bp.route('/api/families/import', methods=['POST'])
-@role_required('admin', 'lgu_personnel')
+@role_required('admin')
 def import_families():
     file_storage = request.files.get('file')
     if not file_storage:

@@ -10,10 +10,11 @@ import EvacuationCenterManager from "../../components/EvacuationCenterManager";
 import HazardReportReview from "../../components/HazardReportReview";
 import UserManagement from "../../components/UserManagement";
 import BarangayManager from "../../components/BarangayManager";
+import DataManagement from "../../components/DataManagement";
 import SystemAndLogs from "../../components/SystemAndLogs";
 import RescueRequestManager from "../../components/RescueRequestManager";
 
-const MOBILE_BREAKPOINT = 720;
+const MOBILE_BREAKPOINT = 1024;
 
 function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
   const [isMobile, setIsMobile] = useState(
@@ -37,11 +38,13 @@ function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
   return isMobile;
 }
 
+const ADMIN_TABS = ["centers", "barangays", "reports", "rescue", "users", "data-management", "settings"];
+
 function AdminDashboard() {
   const location = useLocation();
   const requestedTab = new URLSearchParams(location.search).get("tab");
   const notificationId = new URLSearchParams(location.search).get("notificationId");
-  const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "users", "settings"].includes(requestedTab) ? requestedTab : "centers");
+  const [tab, setTab] = useState(ADMIN_TABS.includes(requestedTab) ? requestedTab : "centers");
   const [focusedReportId, setFocusedReportId] = useState(null);
   const [focusedRescueId, setFocusedRescueId] = useState(null);
   const [mapFocusLocation, setMapFocusLocation] = useState(null);
@@ -58,13 +61,28 @@ function AdminDashboard() {
   const hazardZones = hazardZonesQuery.data ?? null;
   const logs = logsQuery.data || [];
 
+  // Protect Admin Dashboard: Redirect non-admins to their dashboard with short message
+  useEffect(() => {
+    if (user && user.role !== "admin") {
+      navigate("/lgu", { replace: true, state: { flashMessage: "Admins only" } });
+    }
+  }, [user, navigate]);
+
   function handleTabChange(nextTab) {
     if (nextTab === "dashboard") {
       navigate("/dashboard");
       return;
     }
     setTab(nextTab);
+    navigate(`/admin?tab=${encodeURIComponent(nextTab)}`);
   }
+
+  // Keep tab state synchronized with URL query params
+  useEffect(() => {
+    if (requestedTab && ADMIN_TABS.includes(requestedTab)) {
+      setTab(requestedTab);
+    }
+  }, [requestedTab]);
 
   useEffect(() => {
     if (!notificationId) {
@@ -168,6 +186,11 @@ function AdminDashboard() {
         {/* MANAGE USERS */}
         {tab === "users" && (
           <UserManagement />
+        )}
+
+        {/* DATA MANAGEMENT */}
+        {tab === "data-management" && (
+          <DataManagement />
         )}
 
         {/* SYSTEM & LOGS */}

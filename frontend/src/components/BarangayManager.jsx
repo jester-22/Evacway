@@ -12,6 +12,7 @@ import "../components_css/BarangayManager.css";
 import "../components_css/BarangayManager.motion.css";
 import FamilyManagement from "./FamilyManagement";
 import LoadingState from "./LoadingState";
+import BarangaysServedPicker from "./BarangaysServedPicker";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faRotate,
@@ -144,12 +145,6 @@ function BarangayManager() {
   const [brgyPage, setBrgyPage] = useState(1);
   const BRGY_PAGE_SIZE = 10;
 
-  // Barangay Add/Edit/Delete Modals
-  const [barangayModal, setBarangayModal] = useState(null); // { mode: 'add' | 'edit', id?, name, total_families, total_residents }
-  const [savingBarangay, setSavingBarangay] = useState(false);
-  const [deleteBarangayTarget, setDeleteBarangayTarget] = useState(null);
-  const [deletingBarangay, setDeletingBarangay] = useState(false);
-
   // Evacuation Center Add/Edit Modal
   const [centerModal, setCenterModal] = useState(null); // { mode: 'add' | 'edit', id?, name, address, capacity, contact_number, building_material, accessibility_notes, is_active }
   const [savingCenter, setSavingCenter] = useState(false);
@@ -166,13 +161,6 @@ function BarangayManager() {
   // Confirm Unassign Modal
   const [unassignTarget, setUnassignTarget] = useState(null); // { familyId, headName }
   const [unassigning, setUnassigning] = useState(false);
-
-  // Import Excel Modal (preserved structure)
-  const [showImport, setShowImport] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [importing, setImporting] = useState(false);
-  const [importMessage, setImportMessage] = useState("");
-  const fileInputRef = useRef(null);
 
   const loading = barangaysQuery.isLoading;
   const detailLoading = selectedBarangayQuery.isLoading && Boolean(selectedBarangayId);
@@ -367,66 +355,7 @@ function BarangayManager() {
     setSelectedRoomId(roomId);
   }
 
-  // =========================================================
-  // BARANGAY CRUD HANDLERS
-  // =========================================================
 
-  function openEditBarangayModal(b) {
-    setError("");
-    setBarangayModal({
-      mode: "edit",
-      id: b.id,
-      name: b.name || "",
-      total_families: b.total_families ?? b.family_count ?? 0,
-      total_residents: b.total_residents ?? b.resident_count ?? 0,
-    });
-  }
-
-  async function handleSaveBarangay(e) {
-    e.preventDefault();
-    if (!barangayModal) return;
-    if (!barangayModal.name.trim()) {
-      setError("Barangay name is required.");
-      return;
-    }
-
-    try {
-      setSavingBarangay(true);
-      setError("");
-      await api.updateBarangay(barangayModal.id, {
-        name: barangayModal.name.trim(),
-        total_families: Number(barangayModal.total_families || 0),
-        total_residents: Number(barangayModal.total_residents || 0),
-      });
-      setSuccessMsg(`Barangay "${barangayModal.name.trim()}" updated.`);
-      setBarangayModal(null);
-      await invalidateEvacuationQueries(queryClient);
-    } catch (err) {
-      setError(err.message || "Failed to save barangay.");
-    } finally {
-      setSavingBarangay(false);
-    }
-  }
-
-  async function handleConfirmDeleteBarangay() {
-    if (!deleteBarangayTarget) return;
-    try {
-      setDeletingBarangay(true);
-      setError("");
-      await api.deleteBarangay(deleteBarangayTarget.id);
-      setSuccessMsg(`Barangay "${deleteBarangayTarget.name}" deleted.`);
-      if (Number(selectedBarangayId) === Number(deleteBarangayTarget.id)) {
-        closeBarangay();
-      }
-      setDeleteBarangayTarget(null);
-      await invalidateEvacuationQueries(queryClient);
-    } catch (err) {
-      setError(err.message || "Failed to delete barangay.");
-      setDeleteBarangayTarget(null);
-    } finally {
-      setDeletingBarangay(false);
-    }
-  }
 
   // =========================================================
   // EVACUATION CENTER & ROOM HANDLERS (SECTION 5)
@@ -469,6 +398,10 @@ function BarangayManager() {
     if (!centerModal || !selectedBarangay) return;
     if (!centerModal.name.trim()) {
       setError("Evacuation center name is required.");
+      return;
+    }
+    if (!centerModal.barangay_ids || !centerModal.barangay_ids.length) {
+      setError("Select at least one barangay served by this center.");
       return;
     }
 
@@ -660,54 +593,8 @@ function BarangayManager() {
   }
 
   // =========================================================
-  // IMPORT & EXPORT HANDLERS
+  // EXPORT HANDLERS
   // =========================================================
-
-  function openImportModal() {
-    setSelectedFile(null);
-    setImportMessage("");
-    setError("");
-    setShowImport(true);
-  }
-
-  function closeImportModal() {
-    if (importing) return;
-    setShowImport(false);
-    setSelectedFile(null);
-    setImportMessage("");
-  }
-
-  function handleFileChange(e) {
-    const file = e.target.files?.[0] || null;
-    setSelectedFile(file);
-    setImportMessage("");
-    setError("");
-  }
-
-  async function handleImport() {
-    if (!selectedFile) {
-      setError("Please choose an Excel file first.");
-      return;
-    }
-
-    try {
-      setImporting(true);
-      setError("");
-      setImportMessage("");
-
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      const result = await api.uploadResidents(formData);
-      setImportMessage(result.message || "Excel imported successfully.");
-
-      await invalidateEvacuationQueries(queryClient);
-    } catch (err) {
-      console.error("Import failed:", err);
-      setError(err.message || "Failed to import Excel file.");
-    } finally {
-      setImporting(false);
-    }
-  }
 
   function downloadCsv(filename, headers, rows) {
     const escapeCell = (val) => {
@@ -1467,12 +1354,10 @@ function BarangayManager() {
                 <table className="bm-table">
                   <thead>
                     <tr>
-                      <th>Center Name</th>
-                      <th>Shared with</th>
-                      <th>Rooms here</th>
-                      <th>Center capacity</th>
-                      <th>Assigned families here</th>
-                      <th>Available room capacity here</th>
+                      <th>Center</th>
+                      <th>Rooms</th>
+                      <th>Capacity</th>
+                      <th>Occupancy</th>
                       <th>Status</th>
                       <th className="bm-th-right">Actions</th>
                     </tr>
@@ -1482,6 +1367,10 @@ function BarangayManager() {
                       const rooms = Array.isArray(center.rooms) ? center.rooms : [];
                       const cap = Number(center.capacity || 0);
                       const assignedFamilies = Number(center.barangay_assigned_families || 0);
+                      const occupiedResidents = Number(
+                        center.barangay_occupied ??
+                        Math.max(0, cap - Number(center.barangay_available || 0))
+                      );
                       const avail = Number(center.barangay_available || 0);
                       const isFull = avail <= 0 && rooms.length > 0;
 
@@ -1489,28 +1378,23 @@ function BarangayManager() {
                         <tr key={center.id}>
                           <td>
                             <strong className="bm-cell-strong">{center.name}</strong>
-                            {center.building_material && (
-                              <div className="bm-cell-sub">{center.building_material}</div>
+                            {center.address && (
+                              <div className="bm-cell-sub">{center.address}</div>
                             )}
-                          </td>
-                          <td>
-                            <div className="bm-shared-badges">
-                              {center.shared_with?.length
-                                ? center.shared_with.map((barangay) => (
-                                    <span key={barangay.id} className="bm-count-badge">{barangay.name}</span>
-                                  ))
-                                : <span className="bm-cell-sub">Not shared</span>}
-                            </div>
                           </td>
                           <td>
                             <span className="bm-count-badge">{rooms.length}</span>
                           </td>
-                          <td>{cap}</td>
-                          <td>{assignedFamilies}</td>
+                          <td>{cap > 0 ? `${cap} people` : "—"}</td>
                           <td>
-                            <strong className={avail > 0 ? "text-green" : "text-amber"}>
-                              {avail}
-                            </strong>
+                            <div>
+                              <strong className="bm-cell-strong">
+                                {occupiedResidents} of {cap} people
+                              </strong>
+                              <div className="bm-cell-sub">
+                                {assignedFamilies} household{assignedFamilies === 1 ? "" : "s"}
+                              </div>
+                            </div>
                           </td>
                           <td>
                             <span
@@ -1536,19 +1420,13 @@ function BarangayManager() {
                                 className="btn btn-primary btn-sm"
                                 onClick={() => openCentersSection(center.id, null)}
                               >
-                                <FontAwesomeIcon icon={faDoorOpen} /> View Rooms
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-outline btn-sm"
-                                onClick={() => openAddRoomModal(center)}
-                              >
-                                <FontAwesomeIcon icon={faPlus} /> Add Room
+                                View Rooms
                               </button>
                               <button
                                 type="button"
                                 className="btn btn-secondary btn-sm"
                                 onClick={() => openEditCenterModal(center)}
+                                title="Edit Center"
                               >
                                 <FontAwesomeIcon icon={faPenToSquare} />
                               </button>
@@ -1657,31 +1535,13 @@ function BarangayManager() {
       {/* Top Page Header */}
       <div className="barangay-header">
         <div>
-          <h2 className="barangay-title">Barangays & Households</h2>
+          <h2 className="barangay-title">Barangays</h2>
           <p className="barangay-subtitle">
-            Manage barangays, households, family members, and evacuation room assignments.
+            Manage registered barangays, population, and associated records.
           </p>
         </div>
 
         <div className="barangay-header-actions">
-          {selectedBarangayId && workspaceTab === "barangays" && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={closeBarangay}
-            >
-              <FontAwesomeIcon icon={faArrowLeft} /> Back to Barangays
-            </button>
-          )}
-
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={openImportModal}
-          >
-            <FontAwesomeIcon icon={faFileExcel} /> Import Excel
-          </button>
-
           <button
             type="button"
             className="btn btn-secondary"
@@ -1767,40 +1627,27 @@ function BarangayManager() {
            PAGE A: BARANGAY MANAGEMENT LANDING PAGE
            ========================================================= */
         <div className="bm-landing">
-          {/* Summary Statistics */}
-          <div className="bm-stats-grid-4">
-            <div className="bm-stat-card">
-              <span className="bm-stat-label">Barangays</span>
-              <strong className="bm-stat-value">{overallStats.totalBarangays}</strong>
-              <span className="bm-stat-sub">Registered barangays</span>
+          {/* Summary Strip (Concise, Clean Metrics) */}
+          <div className="bm-summary-strip">
+            <div className="bm-summary-item">
+              <span className="bm-summary-label">Barangays</span>
+              <strong className="bm-summary-val">{overallStats.totalBarangays}</strong>
             </div>
-            <div className="bm-stat-card">
-              <span className="bm-stat-label">Households</span>
-              <strong className="bm-stat-value">{overallStats.totalHouseholds}</strong>
-              <span className="bm-stat-sub">
-                {overallStats.totalAssigned} assigned to rooms
-              </span>
+            <div className="bm-summary-divider" />
+            <div className="bm-summary-item">
+              <span className="bm-summary-label">Households</span>
+              <strong className="bm-summary-val">{overallStats.totalHouseholds}</strong>
+              <small className="bm-summary-sub">{overallStats.totalAssigned} assigned</small>
             </div>
-            <div
-              className={`bm-stat-card ${
-                overallStats.totalUnassigned > 0 ? "accent-amber" : "accent-green"
-              }`}
-            >
-              <span className="bm-stat-label">Unassigned Households</span>
-              <strong className="bm-stat-value">{overallStats.totalUnassigned}</strong>
-              <span className="bm-stat-sub">
-                Households without an evacuation assignment
-              </span>
+            <div className="bm-summary-divider" />
+            <div className="bm-summary-item">
+              <span className="bm-summary-label">Residents</span>
+              <strong className="bm-summary-val">{overallStats.totalResidents}</strong>
             </div>
-            <div className="bm-stat-card">
-              <span className="bm-stat-label">Residents</span>
-              <strong className="bm-stat-value">{overallStats.totalResidents}</strong>
-              <span className="bm-stat-sub">Registered individual residents</span>
-            </div>
-            <div className="bm-stat-card">
-              <span className="bm-stat-label">Evacuation Centers</span>
-              <strong className="bm-stat-value">{overallStats.totalCenters}</strong>
-              <span className="bm-stat-sub">Active evacuation centers</span>
+            <div className="bm-summary-divider" />
+            <div className="bm-summary-item">
+              <span className="bm-summary-label">Evacuation Centers</span>
+              <strong className="bm-summary-val">{overallStats.totalCenters}</strong>
             </div>
           </div>
 
@@ -1810,7 +1657,7 @@ function BarangayManager() {
               <FontAwesomeIcon icon={faMagnifyingGlass} />
               <input
                 type="text"
-                placeholder="Search barangay..."
+                placeholder="Search barangays..."
                 value={barangaySearch}
                 onChange={(e) => {
                   setBarangaySearch(e.target.value);
@@ -1854,18 +1701,9 @@ function BarangayManager() {
               </h4>
               <p>
                 {barangays.length === 0
-                  ? "Import an Excel file to add barangay records."
+                  ? "No barangays are currently registered in the system."
                   : `No barangays matched "${barangaySearch}".`}
               </p>
-              <div className="bm-empty-actions">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={openImportModal}
-                >
-                  <FontAwesomeIcon icon={faFileExcel} /> Import Excel
-                </button>
-              </div>
             </div>
           ) : (
             <>
@@ -1876,7 +1714,6 @@ function BarangayManager() {
                       <tr>
                         <th>Barangay</th>
                         <th>Households</th>
-                        <th>Household Room Status</th>
                         <th>Residents</th>
                         <th>Evacuation Centers</th>
                         <th className="bm-th-right">Actions</th>
@@ -1891,10 +1728,7 @@ function BarangayManager() {
                           b.resident_count ?? b.total_residents ?? 0
                         );
                         const centerCount = Number(b.evacuation_center_count ?? 0);
-                        const assignedCount = Number(b.assigned_family_count ?? 0);
-                        const unassignedCount = Number(
-                          b.unassigned_family_count ?? Math.max(0, famCount - assignedCount)
-                        );
+                        const unassignedCount = Number(b.unassigned_family_count ?? 0);
 
                         return (
                           <tr key={b.id}>
@@ -1903,11 +1737,11 @@ function BarangayManager() {
                             </td>
                             <td>
                               <strong>{famCount}</strong>
-                            </td>
-                            <td>
-                              <span className="bm-muted">
-                                {assignedCount} assigned • {unassignedCount} unassigned households
-                              </span>
+                              {unassignedCount > 0 && (
+                                <span className="bm-mini-sub text-amber" style={{ marginLeft: 6 }}>
+                                  ({unassignedCount} unassigned)
+                                </span>
+                              )}
                             </td>
                             <td>{resCount}</td>
                             <td>{centerCount}</td>
@@ -1918,23 +1752,7 @@ function BarangayManager() {
                                   className="btn btn-primary btn-sm"
                                   onClick={() => openBarangay(b.id, "overview")}
                                 >
-                                  Open
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn btn-secondary btn-sm"
-                                  title="Edit Barangay"
-                                  onClick={() => openEditBarangayModal(b)}
-                                >
-                                  <FontAwesomeIcon icon={faPenToSquare} />
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn btn-danger-outline btn-sm"
-                                  title="Delete Barangay"
-                                  onClick={() => setDeleteBarangayTarget(b)}
-                                >
-                                  <FontAwesomeIcon icon={faTrash} />
+                                  View Details
                                 </button>
                               </div>
                             </td>
@@ -1989,20 +1807,6 @@ function BarangayManager() {
                         >
                           Open
                         </button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => openEditBarangayModal(b)}
-                        >
-                          <FontAwesomeIcon icon={faPenToSquare} /> Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-danger-outline btn-sm"
-                          onClick={() => setDeleteBarangayTarget(b)}
-                        >
-                          <FontAwesomeIcon icon={faTrash} />
-                        </button>
                       </div>
                     </div>
                   );
@@ -2050,7 +1854,7 @@ function BarangayManager() {
         <div className="bm-dashboard">
           {/* Top Breadcrumb Bar */}
           <div className="bm-dashboard-topbar">
-            <div className="bm-breadcrumb">
+            <nav className="bm-breadcrumb" aria-label="Breadcrumb">
               <button
                 type="button"
                 className="bm-breadcrumb-link"
@@ -2059,32 +1863,10 @@ function BarangayManager() {
                 Barangays
               </button>
               <FontAwesomeIcon icon={faChevronRight} className="bm-breadcrumb-sep" />
-              <button
-                type="button"
-                className={`bm-breadcrumb-link ${
-                  barangaySection === "overview" ? "is-current" : ""
-                }`}
-                onClick={() => {
-                  setBarangaySection("overview");
-                  setSelectedCenterId(null);
-                  setSelectedRoomId(null);
-                }}
-              >
+              <span className="bm-breadcrumb-current">
                 {selectedBarangay.name}
-              </button>
-              {barangaySection === "households" && (
-                <>
-                  <FontAwesomeIcon icon={faChevronRight} className="bm-breadcrumb-sep" />
-                  <span className="bm-breadcrumb-current">Households</span>
-                </>
-              )}
-              {barangaySection === "centers" && (
-                <>
-                  <FontAwesomeIcon icon={faChevronRight} className="bm-breadcrumb-sep" />
-                  <span className="bm-breadcrumb-current">Evacuation Centers</span>
-                </>
-              )}
-            </div>
+              </span>
+            </nav>
 
             {/* Clean Section Switcher */}
             <div className="bm-section-nav">
@@ -2104,161 +1886,69 @@ function BarangayManager() {
                 className={barangaySection === "households" ? "active" : ""}
                 onClick={() => openHouseholdsSection()}
               >
-                <FontAwesomeIcon icon={faPeopleGroup} /> Households (
-                {selectedBarangayStats.totalHouseholds})
+                <FontAwesomeIcon icon={faPeopleGroup} /> Households ({selectedBarangayStats.totalHouseholds})
               </button>
               <button
                 type="button"
                 className={barangaySection === "centers" ? "active" : ""}
                 onClick={() => openCentersSection(null, null)}
               >
-                <FontAwesomeIcon icon={faBuilding} /> Evacuation Centers (
-                {selectedBarangayStats.totalCenters})
+                <FontAwesomeIcon icon={faBuilding} /> Evacuation Centers ({selectedBarangayStats.totalCenters})
               </button>
             </div>
           </div>
 
           {barangaySection === "overview" && (
             <div className="bm-overview-content">
-              {/* Barangay Hero Banner */}
-              <div className="bm-hero-card">
-                <div>
-                  <h3 className="bm-hero-title">{selectedBarangay.name}</h3>
-                  <p className="bm-hero-sub">
-                    Manage households, family members, and evacuation center rooms for {selectedBarangay.name}.
-                  </p>
-                </div>
-                <div className="bm-hero-actions">
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => openEditBarangayModal(selectedBarangay)}
-                  >
-                    <FontAwesomeIcon icon={faPenToSquare} /> Edit Barangay
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => openHouseholdsSection({ startAdd: true })}
-                  >
-                    <FontAwesomeIcon icon={faPlus} /> Add Family
-                  </button>
-                </div>
-              </div>
-
-              {/* 4 Key Barangay Summary Cards */}
-              <div className="bm-stats-grid-4">
-                <div className="bm-stat-card">
-                  <span className="bm-stat-label">Households</span>
-                  <strong className="bm-stat-value">
-                    {selectedBarangayStats.totalHouseholds}
-                  </strong>
-                  <span className="bm-stat-sub">
+              {/* Summary Strip (Concise, Clean Metrics) */}
+              <div className="bm-summary-strip">
+                <div className="bm-summary-item">
+                  <span className="bm-summary-label">Households</span>
+                  <strong className="bm-summary-val">{selectedBarangayStats.totalHouseholds}</strong>
+                  <small className="bm-summary-sub">
                     {selectedBarangayStats.assignedHouseholds} assigned to rooms
-                  </span>
+                  </small>
                 </div>
-                <div className="bm-stat-card">
-                  <span className="bm-stat-label">Residents</span>
-                  <strong className="bm-stat-value">
-                    {selectedBarangayStats.totalResidents}
-                  </strong>
-                  <span className="bm-stat-sub">Registered family members</span>
+                <div className="bm-summary-divider" />
+                <div className="bm-summary-item">
+                  <span className="bm-summary-label">Residents</span>
+                  <strong className="bm-summary-val">{selectedBarangayStats.totalResidents}</strong>
+                  <small className="bm-summary-sub">Individual persons</small>
                 </div>
-                <div className="bm-stat-card">
-                  <span className="bm-stat-label">Evacuation Centers</span>
-                  <strong className="bm-stat-value">
-                    {selectedBarangayStats.totalCenters}
-                  </strong>
-                  <span className="bm-stat-sub">
-                    {selectedBarangayStats.totalRooms} rooms •{" "}
-                    {selectedBarangayStats.totalAvailable} slots open
-                  </span>
+                <div className="bm-summary-divider" />
+                <div className="bm-summary-item">
+                  <span className="bm-summary-label">Evacuation Centers</span>
+                  <strong className="bm-summary-val">{selectedBarangayStats.totalCenters}</strong>
+                  <small className="bm-summary-sub">
+                    {selectedBarangayStats.totalRooms} rooms • {selectedBarangayStats.totalAvailable} spaces open
+                  </small>
                 </div>
-                <div
-                  className={`bm-stat-card ${
-                    selectedBarangayStats.unassignedHouseholds > 0
-                      ? "accent-amber"
-                      : "accent-green"
-                  }`}
-                >
-                  <span className="bm-stat-label">Unassigned Households</span>
-                  <strong className="bm-stat-value">
+                <div className="bm-summary-divider" />
+                <div className="bm-summary-item">
+                  <span className="bm-summary-label">Unassigned</span>
+                  <strong className={`bm-summary-val ${selectedBarangayStats.unassignedHouseholds > 0 ? "text-amber" : ""}`}>
                     {selectedBarangayStats.unassignedHouseholds}
                   </strong>
-                  <span className="bm-stat-sub">
-                    {selectedBarangayStats.unassignedHouseholds > 0
-                      ? "Households without an evacuation assignment"
-                      : "All households assigned"}
-                  </span>
+                  <small className="bm-summary-sub">Households</small>
                 </div>
               </div>
 
-              {/* 2 Main Section Navigation Cards */}
-              <div className="bm-main-sections-grid">
-                {/* Households and Residents */}
-                <div className="bm-feature-card">
-                  <div className="bm-feature-card-head">
-                    <div className="bm-feature-icon">
-                      <FontAwesomeIcon icon={faPeopleGroup} />
-                    </div>
-                    <div>
-                      <h4>Households & Residents</h4>
-                    </div>
-                  </div>
-                  <p className="bm-feature-desc">
-                    View households, inspect family members, register new families, and assign households to evacuation rooms.
-                  </p>
-                  <div className="bm-feature-actions">
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => openHouseholdsSection()}
-                    >
-                      View Households <FontAwesomeIcon icon={faArrowRight} />
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-outline"
-                      onClick={() => openHouseholdsSection({ startAdd: true })}
-                    >
-                      <FontAwesomeIcon icon={faPlus} /> Add Family
-                    </button>
-                  </div>
-                </div>
-
-                {/* Evacuation Centers */}
-                <div className="bm-feature-card">
-                  <div className="bm-feature-card-head">
-                    <div className="bm-feature-icon">
-                      <FontAwesomeIcon icon={faBuilding} />
-                    </div>
-                    <div>
-                      <h4>Evacuation Centers & Rooms</h4>
-                    </div>
-                  </div>
-                  <p className="bm-feature-desc">
-                    Manage evacuation centers in {selectedBarangay.name}, check room capacity, and view or move assigned households.
-                  </p>
-                  <div className="bm-feature-actions">
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => openCentersSection(null, null)}
-                    >
-                      View Centers <FontAwesomeIcon icon={faArrowRight} />
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-outline"
-                      onClick={() => {
-                        openCentersSection(null, null);
-                        openAddCenterModal();
-                      }}
-                    >
-                      <FontAwesomeIcon icon={faPlus} /> Add Center
-                    </button>
-                  </div>
-                </div>
+              {/* Direct Actions to Main Sections */}
+              <div className="bm-overview-actions-bar">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => openHouseholdsSection()}
+                >
+                  <FontAwesomeIcon icon={faPeopleGroup} /> View Households ({selectedBarangayStats.totalHouseholds})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => openCentersSection(null, null)}
+                >
+                  <FontAwesomeIcon icon={faBuilding} /> View Evacuation Centers ({selectedBarangayStats.totalCenters})
+                </button>
               </div>
             </div>
           )}
@@ -2287,107 +1977,7 @@ function BarangayManager() {
          MODALS
          ========================================================= */}
 
-      {/* Add / Edit Barangay Modal */}
-      {barangayModal && (
-        <div className="modal-overlay" onClick={() => !savingBarangay && setBarangayModal(null)}>
-          <div className="bm-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="bm-dialog-header">
-              <div>
-                <h4>
-                  {barangayModal.mode === "add" ? "Add New Barangay" : "Edit Barangay"}
-                </h4>
-              </div>
-              <button
-                type="button"
-                className="bm-dialog-close"
-                onClick={() => setBarangayModal(null)}
-              >
-                <FontAwesomeIcon icon={faXmark} />
-              </button>
-            </div>
-            <form onSubmit={handleSaveBarangay}>
-              <div className="bm-dialog-body">
-                <label className="bm-form-field">
-                  <span>Barangay Name *</span>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Poblacion I"
-                    value={barangayModal.name}
-                    onChange={(e) =>
-                      setBarangayModal((p) => ({ ...p, name: e.target.value }))
-                    }
-                  />
-                </label>
-              </div>
-              <div className="bm-dialog-footer">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={savingBarangay}
-                  onClick={() => setBarangayModal(null)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={savingBarangay}
-                >
-                  {savingBarangay ? "Saving..." : "Save Barangay"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
-      {/* Confirm Delete Barangay Modal */}
-      {deleteBarangayTarget && (
-        <div
-          className="modal-overlay"
-          onClick={() => !deletingBarangay && setDeleteBarangayTarget(null)}
-        >
-          <div className="bm-dialog bm-dialog-sm" onClick={(e) => e.stopPropagation()}>
-            <div className="bm-dialog-header">
-              <h4>Delete Barangay</h4>
-              <button
-                type="button"
-                className="bm-dialog-close"
-                onClick={() => setDeleteBarangayTarget(null)}
-              >
-                <FontAwesomeIcon icon={faXmark} />
-              </button>
-            </div>
-            <div className="bm-dialog-body">
-              <p>
-                Are you sure you want to delete{" "}
-                <strong>{deleteBarangayTarget.name}</strong>? Barangays with existing
-                households or evacuation centers cannot be deleted until their records are
-                removed.
-              </p>
-            </div>
-            <div className="bm-dialog-footer">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={deletingBarangay}
-                onClick={() => setDeleteBarangayTarget(null)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                disabled={deletingBarangay}
-                onClick={handleConfirmDeleteBarangay}
-              >
-                {deletingBarangay ? "Deleting..." : "Delete Barangay"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Add / Edit Evacuation Center Modal */}
       {centerModal && (
@@ -2425,24 +2015,30 @@ function BarangayManager() {
                       }
                     />
                   </label>
-                  <label className="bm-form-field bm-span-2">
-                    <span>Barangays served *</span>
-                    <select
-                      multiple
-                      required
-                      value={centerModal.barangay_ids}
-                      onChange={(e) =>
-                        setCenterModal((p) => ({
-                          ...p,
-                          barangay_ids: Array.from(e.target.selectedOptions, (option) => option.value),
-                        }))
+                  <div className="bm-form-field bm-span-2">
+                    <BarangaysServedPicker
+                      barangays={barangays}
+                      selectedIds={centerModal.barangay_ids}
+                      onChange={(selectedIds) =>
+                        setCenterModal((p) => ({ ...p, barangay_ids: selectedIds }))
                       }
-                    >
-                      {barangays.map((barangay) => (
-                        <option key={barangay.id} value={barangay.id}>{barangay.name}</option>
-                      ))}
-                    </select>
-                  </label>
+                      onBeforeDeselect={(bId, bName) => {
+                        const linkedFams = (centerModal.rooms || []).flatMap(
+                          (r) => r.assigned_families || r.families || []
+                        );
+                        const affectedCount = linkedFams.filter(
+                          (f) => String(f.barangay_id) === String(bId) || f.barangay === bName
+                        ).length;
+                        if (affectedCount > 0) {
+                          return window.confirm(
+                            `Removing "${bName}" will affect ${affectedCount} household(s) currently assigned to this center. Do you want to remove it?`
+                          );
+                        }
+                        return true;
+                      }}
+                      required
+                    />
+                  </div>
                   <label className="bm-form-field">
                     <span>Address / Location *</span>
                     <input
@@ -2806,137 +2402,6 @@ function BarangayManager() {
         </div>
       )}
 
-      {/* Preserved Import Excel Data Modal */}
-      {showImport && (
-        <div className="modal-overlay" onClick={closeImportModal}>
-          <div className="import-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div>
-                <h3>Import Excel Data</h3>
-                <p>Import the Sogod evacuation masterlist</p>
-              </div>
-
-              <button
-                className="modal-close"
-                onClick={closeImportModal}
-                disabled={importing}
-              >
-                <FontAwesomeIcon icon={faXmark} />
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="import-info">
-                <strong>Excel is the source of the new data</strong>
-
-                <p>
-                  The selected Excel file will be used to create the barangay,
-                  family, resident, evacuation center, room, and assignment
-                  records.
-                </p>
-
-                <p>
-                  Evacuation center polygons, entrances, and room map locations
-                  are not imported from Excel. These will be added later using
-                  the map.
-                </p>
-              </div>
-
-              <label className="file-label">Excel File</label>
-
-              <div className="file-upload">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={handleFileChange}
-                  disabled={importing}
-                />
-
-                <div className="file-upload-content">
-                  <div className="upload-icon">
-                    <FontAwesomeIcon icon={faUpload} />
-                  </div>
-
-                  <strong>
-                    {selectedFile ? selectedFile.name : "Choose an Excel file"}
-                  </strong>
-
-                  <span>
-                    {selectedFile
-                      ? `${(selectedFile.size / 1024).toFixed(1)} KB`
-                      : ".xlsx or .xls files"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="requirements">
-                <div className="requirements-title">Excel columns</div>
-
-                <div className="column-list">
-                  <span>First Name</span>
-                  <span>Middle Name</span>
-                  <span>Last Name</span>
-                  <span>Household Head Name</span>
-                  <span>Barangay</span>
-                  <span>Address</span>
-                  <span>Contact</span>
-                  <span>Family Members</span>
-                  <span>Vulnerable Members</span>
-                  <span>Remarks</span>
-                  <span>Evacuation Center</span>
-                  <span>Center Capacity</span>
-                  <span>Building Material</span>
-                  <span>Accessibility Notes</span>
-                  <span>Center Contact</span>
-                  <span>Room Number</span>
-                  <span>Room Capacity</span>
-                </div>
-              </div>
-
-              {importMessage && (
-                <div className="alert alert-success">
-                  <span className="alert-icon">
-                    <FontAwesomeIcon icon={faCircleCheck} />
-                  </span>
-                  <span>{importMessage}</span>
-                </div>
-              )}
-
-              {visibleError && (
-                <div className="alert alert-error">
-                  <span className="alert-icon">
-                    <FontAwesomeIcon icon={faTriangleExclamation} />
-                  </span>
-                  <span>{visibleError}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="modal-footer">
-              <button
-                className="btn btn-secondary"
-                onClick={closeImportModal}
-                disabled={importing}
-              >
-                Cancel
-              </button>
-
-              <button
-                className="btn btn-primary"
-                onClick={handleImport}
-                disabled={!selectedFile || importing}
-              >
-                <FontAwesomeIcon
-                  icon={importing ? faRotate : faUpload}
-                  spin={importing}
-                />
-                {importing ? "Importing..." : "Import Excel"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

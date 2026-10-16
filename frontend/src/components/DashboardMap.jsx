@@ -18,6 +18,8 @@ import {
   faArrowLeft,
   faBuildingColumns,
   faChevronRight,
+  faLayerGroup,
+  faCheck,
 } from "@fortawesome/free-solid-svg-icons";
 
 import { BASE_URL } from "../services/api";
@@ -301,6 +303,12 @@ function DashboardMap({
     landslide: false,
   });
   const [showReports, setShowReports] = useState(true);
+  const [layersMenuOpen, setLayersMenuOpen] = useState(false);
+
+  const activeLayerCount =
+    (visibleLayers.flood ? 1 : 0) +
+    (visibleLayers.landslide ? 1 : 0) +
+    (showReports ? 1 : 0);
 
   /*
    * Search
@@ -413,7 +421,7 @@ function DashboardMap({
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded || !sogodBoundary) return;
+    if (!map || !mapLoaded || !sogodBoundary || !map.style) return;
 
     const source = map.getSource("sogod-boundary");
 
@@ -445,7 +453,7 @@ function DashboardMap({
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded || !roads) return;
+    if (!map || !mapLoaded || !roads || !map.style) return;
 
     const existingSource = map.getSource("roads");
 
@@ -525,20 +533,24 @@ function DashboardMap({
     map.on("mouseleave", "roads-closed", handleMouseLeave);
 
     return () => {
-      map.off("click", "roads-open", handleOpenRoadClick);
-      map.off("click", "roads-closed", handleClosedRoadClick);
+      try {
+        map.off("click", "roads-open", handleOpenRoadClick);
+        map.off("click", "roads-closed", handleClosedRoadClick);
 
-      map.off("mouseenter", "roads-open", handleMouseEnter);
-      map.off("mouseleave", "roads-open", handleMouseLeave);
+        map.off("mouseenter", "roads-open", handleMouseEnter);
+        map.off("mouseleave", "roads-open", handleMouseLeave);
 
-      map.off("mouseenter", "roads-closed", handleMouseEnter);
-      map.off("mouseleave", "roads-closed", handleMouseLeave);
+        map.off("mouseenter", "roads-closed", handleMouseEnter);
+        map.off("mouseleave", "roads-closed", handleMouseLeave);
+      } catch (e) {
+        // Safe ignore
+      }
     };
   }, [mapLoaded, roads]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoaded) return;
+    if (!map || !mapLoaded || !map.style) return;
 
     hazardMarkersRef.current.forEach((marker) => marker.remove());
     hazardMarkersRef.current = [];
@@ -577,7 +589,7 @@ function DashboardMap({
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded || !hazardZones) return;
+    if (!map || !mapLoaded || !hazardZones || !map.style) return;
 
     const filtered = {
       ...hazardZones,
@@ -750,11 +762,15 @@ function DashboardMap({
     }
 
     return () => {
-      hazardMarkersRef.current.forEach((marker) => marker.remove());
-      hazardMarkersRef.current = [];
-      map.off("click", "hazard-zones-fill", handleHazardClick);
-      map.off("mouseenter", "hazard-zones-fill", handleMouseEnter);
-      map.off("mouseleave", "hazard-zones-fill", handleMouseLeave);
+      try {
+        hazardMarkersRef.current.forEach((marker) => marker.remove());
+        hazardMarkersRef.current = [];
+        map.off("click", "hazard-zones-fill", handleHazardClick);
+        map.off("mouseenter", "hazard-zones-fill", handleMouseEnter);
+        map.off("mouseleave", "hazard-zones-fill", handleMouseLeave);
+      } catch (e) {
+        // Safe ignore
+      }
     };
   }, [mapLoaded, hazardZones, visibleLayers]);
 
@@ -764,7 +780,7 @@ function DashboardMap({
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded || !centers) return;
+    if (!map || !mapLoaded || !centers || !map.style) return;
 
     const centerFeatures = (centers.features || []).map((center) => ({
       ...center,
@@ -1160,17 +1176,21 @@ function DashboardMap({
   }, [mapLoaded, drawMode, pendingRoomLocation]);
 
   /*
-   * Pending footprint
+   * Pending footprint (only displayed when drawMode === "footprint" or "entrance")
    */
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded) return;
+    if (!map || !mapLoaded || !map.style) return;
 
-    const polygonCoordinates =
-      pendingFootprint.length > 0
-        ? [pendingFootprint.map((point) => [point.lng, point.lat])]
-        : [];
+    const isActive =
+      (drawMode === "footprint" || drawMode === "entrance") &&
+      pendingFootprint &&
+      pendingFootprint.length > 0;
+
+    const polygonCoordinates = isActive
+      ? [pendingFootprint.map((point) => [point.lng, point.lat])]
+      : [];
 
     const footprintData = {
       type: "FeatureCollection",
@@ -1189,109 +1209,146 @@ function DashboardMap({
           : [],
     };
 
-    const source = map.getSource("pending-footprint");
+    try {
+      const source = map.getSource("pending-footprint");
 
-    if (source) {
-      source.setData(footprintData);
-    } else {
-      map.addSource("pending-footprint", {
-        type: "geojson",
-        data: footprintData,
-      });
+      if (source) {
+        source.setData(footprintData);
+      } else {
+        map.addSource("pending-footprint", {
+          type: "geojson",
+          data: footprintData,
+        });
 
-      map.addLayer({
-        id: "pending-footprint-fill",
-        type: "fill",
-        source: "pending-footprint",
-        paint: {
-          "fill-color": "#2563eb",
-          "fill-opacity": 0.2,
-        },
-      });
+        map.addLayer({
+          id: "pending-footprint-fill",
+          type: "fill",
+          source: "pending-footprint",
+          paint: {
+            "fill-color": "#2563eb",
+            "fill-opacity": 0.2,
+          },
+        });
 
-      map.addLayer({
-        id: "pending-footprint-line",
-        type: "line",
-        source: "pending-footprint",
-        paint: {
-          "line-color": "#2563eb",
-          "line-width": 2,
-          "line-dasharray": [2, 2],
-        },
-      });
+        map.addLayer({
+          id: "pending-footprint-line",
+          type: "line",
+          source: "pending-footprint",
+          paint: {
+            "line-color": "#2563eb",
+            "line-width": 2,
+            "line-dasharray": [2, 2],
+          },
+        });
+      }
+    } catch (e) {
+      // Map style not ready or map destroyed
     }
 
     const oldMarkers = map.__evacwayFootprintMarkers || [];
-
     oldMarkers.forEach((marker) => {
       marker.remove();
     });
+    map.__evacwayFootprintMarkers = [];
 
-    const newMarkers = [];
+    if (isActive) {
+      const newMarkers = [];
+      pendingFootprint.forEach((point) => {
+        const element = document.createElement("div");
 
-    pendingFootprint.forEach((point) => {
-      const element = document.createElement("div");
+        element.style.width = "10px";
+        element.style.height = "10px";
+        element.style.borderRadius = "50%";
+        element.style.background = "white";
+        element.style.border = "2px solid #1e3a8a";
+        element.style.boxSizing = "border-box";
 
-      element.style.width = "10px";
-      element.style.height = "10px";
-      element.style.borderRadius = "50%";
-      element.style.background = "white";
-      element.style.border = "2px solid #1e3a8a";
-      element.style.boxSizing = "border-box";
+        const marker = new mapboxgl.Marker({
+          element,
+          anchor: "center",
+        })
+          .setLngLat([point.lng, point.lat])
+          .addTo(map);
 
-      const marker = new mapboxgl.Marker({
-        element,
-        anchor: "center",
-      })
-        .setLngLat([point.lng, point.lat])
-        .addTo(map);
+        newMarkers.push(marker);
+      });
 
-      newMarkers.push(marker);
-    });
+      map.__evacwayFootprintMarkers = newMarkers;
+    }
 
-    map.__evacwayFootprintMarkers = newMarkers;
-  }, [mapLoaded, pendingFootprint]);
+    return () => {
+      try {
+        const markers = map.__evacwayFootprintMarkers || [];
+        markers.forEach((m) => m.remove());
+        map.__evacwayFootprintMarkers = [];
+        if (mapRef.current === map && map.style && typeof map.getSource === "function") {
+          const s = map.getSource("pending-footprint");
+          if (s) {
+            s.setData({ type: "FeatureCollection", features: [] });
+          }
+        }
+      } catch (e) {
+        // Safe ignore during unmount / destruction
+      }
+    };
+  }, [mapLoaded, drawMode, pendingFootprint]);
 
   /*
-   * Pending entrances
+   * Pending entrances (only displayed when drawMode === "entrance")
    */
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded) return;
+    if (!map || !mapLoaded || !map.style) return;
 
     const oldMarkers = map.__evacwayPendingEntranceMarkers || [];
-
     oldMarkers.forEach((marker) => {
       marker.remove();
     });
+    map.__evacwayPendingEntranceMarkers = [];
 
-    const newMarkers = [];
+    const isActive =
+      drawMode === "entrance" &&
+      pendingEntrances &&
+      pendingEntrances.length > 0;
 
-    pendingEntrances.forEach((point, index) => {
-      const element = document.createElement("div");
+    if (isActive) {
+      const newMarkers = [];
+      pendingEntrances.forEach((point, index) => {
+        const element = document.createElement("div");
 
-      element.style.width = "16px";
-      element.style.height = "16px";
-      element.style.borderRadius = "50%";
-      element.style.background = "#dc2626";
-      element.style.border = "2px solid white";
-      element.style.boxShadow = "0 2px 6px rgba(0,0,0,0.3)";
-      element.style.cursor = "pointer";
+        element.style.width = "16px";
+        element.style.height = "16px";
+        element.style.borderRadius = "50%";
+        element.style.background = "#dc2626";
+        element.style.border = "2px solid white";
+        element.style.boxShadow = "0 2px 6px rgba(0,0,0,0.3)";
+        element.style.cursor = "pointer";
 
-      const marker = new mapboxgl.Marker({
-        element,
-        anchor: "center",
-      })
-        .setLngLat([point.lng, point.lat])
-        .setPopup(createPopup(`Entrance ${index + 1}`, "New entrance"))
-        .addTo(map);
+        const marker = new mapboxgl.Marker({
+          element,
+          anchor: "center",
+        })
+          .setLngLat([point.lng, point.lat])
+          .setPopup(createPopup(`Entrance ${index + 1}`, "New entrance"))
+          .addTo(map);
 
-      newMarkers.push(marker);
-    });
+        newMarkers.push(marker);
+      });
 
-    map.__evacwayPendingEntranceMarkers = newMarkers;
-  }, [mapLoaded, pendingEntrances]);
+      map.__evacwayPendingEntranceMarkers = newMarkers;
+    }
+
+    return () => {
+      try {
+        const markers = map.__evacwayPendingEntranceMarkers || [];
+        markers.forEach((m) => m.remove());
+        map.__evacwayPendingEntranceMarkers = [];
+      } catch (e) {
+        // Safe ignore
+      }
+    };
+  }, [mapLoaded, drawMode, pendingEntrances]);
 
   /*
    * Drawing / map click
@@ -1299,7 +1356,7 @@ function DashboardMap({
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded) return;
+    if (!map || !mapLoaded || !map.style) return;
 
     const handleClick = (event) => {
       if (drawMode !== "none" && onMapClick) {
@@ -1312,21 +1369,29 @@ function DashboardMap({
 
     map.on("click", handleClick);
 
-    if (drawMode !== "none") {
-      map.getCanvas().style.cursor = "crosshair";
-    } else {
-      map.getCanvas().style.cursor = "";
+    try {
+      if (drawMode !== "none") {
+        map.getCanvas().style.cursor = "crosshair";
+      } else {
+        map.getCanvas().style.cursor = "";
+      }
+    } catch (e) {
+      // Ignored
     }
 
     return () => {
-      map.off("click", handleClick);
+      try {
+        map.off("click", handleClick);
 
-      if (mapRef.current === map) {
-        const canvas = map.getCanvas();
+        if (mapRef.current === map && map.style) {
+          const canvas = map.getCanvas?.();
 
-        if (canvas) {
-          canvas.style.cursor = "";
+          if (canvas) {
+            canvas.style.cursor = "";
+          }
         }
+      } catch (e) {
+        // Ignored
       }
     };
   }, [mapLoaded, drawMode, onMapClick]);
@@ -1704,37 +1769,68 @@ function DashboardMap({
         </div>
       )}
 
-      {/* Hazard Layer Buttons */}
-      <div className="dashboard-layer-tabs">
+      {/* Hazard Layer Controls (Collapsed on mobile, clean group on desktop) */}
+      <div className="dashboard-layer-control-wrap">
         <button
-          onClick={toggleFlood}
-          className={`layer-tab ${
-            visibleLayers.flood ? "layer-tab-flood-active" : ""
-          }`}
+          type="button"
+          className={`layer-control-toggle ${activeLayerCount > 0 ? "has-active" : ""}`}
+          onClick={() => setLayersMenuOpen((open) => !open)}
+          aria-expanded={layersMenuOpen}
+          aria-label="Toggle hazard layers"
+          title="Hazard Layers"
         >
-          <FontAwesomeIcon icon={faWater} />
-          <span>Flood</span>
+          <FontAwesomeIcon icon={faLayerGroup} />
+          <span className="layer-toggle-text">Layers</span>
+          {activeLayerCount > 0 && (
+            <span className="layer-count-badge">{activeLayerCount}</span>
+          )}
         </button>
 
-        <button
-          onClick={toggleLandslide}
-          className={`layer-tab ${
-            visibleLayers.landslide ? "layer-tab-landslide-active" : ""
-          }`}
-        >
-          <FontAwesomeIcon icon={faMountain} />
-          <span>Landslide</span>
-        </button>
+        <div className={`dashboard-layer-tabs ${layersMenuOpen ? "is-open" : ""}`}>
+          <button
+            type="button"
+            onClick={toggleFlood}
+            className={`layer-tab ${
+              visibleLayers.flood ? "layer-tab-flood-active" : ""
+            }`}
+            aria-pressed={visibleLayers.flood}
+          >
+            <FontAwesomeIcon icon={faWater} />
+            <span>Flood</span>
+            {visibleLayers.flood && (
+              <FontAwesomeIcon icon={faCheck} className="layer-active-check" />
+            )}
+          </button>
 
-        <button
-          onClick={() => setShowReports((visible) => !visible)}
-          className={`layer-tab ${showReports ? "layer-tab-reports-active" : ""}`}
-          aria-pressed={showReports}
-          title={showReports ? "Hide validated hazard reports" : "Show validated hazard reports"}
-        >
-          <FontAwesomeIcon icon={faTriangleExclamation} />
-          <span>Reports</span>
-        </button>
+          <button
+            type="button"
+            onClick={toggleLandslide}
+            className={`layer-tab ${
+              visibleLayers.landslide ? "layer-tab-landslide-active" : ""
+            }`}
+            aria-pressed={visibleLayers.landslide}
+          >
+            <FontAwesomeIcon icon={faMountain} />
+            <span>Landslide</span>
+            {visibleLayers.landslide && (
+              <FontAwesomeIcon icon={faCheck} className="layer-active-check" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowReports((visible) => !visible)}
+            className={`layer-tab ${showReports ? "layer-tab-reports-active" : ""}`}
+            aria-pressed={showReports}
+            title={showReports ? "Hide validated hazard reports" : "Show validated hazard reports"}
+          >
+            <FontAwesomeIcon icon={faTriangleExclamation} />
+            <span>Reports</span>
+            {showReports && (
+              <FontAwesomeIcon icon={faCheck} className="layer-active-check" />
+            )}
+          </button>
+        </div>
       </div>
 
       {/* =====================================================
@@ -1775,12 +1871,12 @@ function DashboardMap({
               <div className="mdp-occupancy-numbers">
                 <div>
                   <strong>{roomFamilies.occupied}</strong>
-                  <span>Occupied</span>
+                  <span>Assigned</span>
                 </div>
 
                 <div>
                   <strong>{roomFamilies.available}</strong>
-                  <span>Available</span>
+                  <span>Remaining</span>
                 </div>
 
                 <div>

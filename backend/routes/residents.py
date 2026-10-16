@@ -1011,8 +1011,7 @@ def clear_existing_data():
     methods=['POST']
 )
 @role_required(
-    'admin',
-    'lgu_personnel'
+    'admin'
 )
 def upload_residents():
 

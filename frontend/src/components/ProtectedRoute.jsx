@@ -11,7 +11,8 @@ function ProtectedRoute({ children, allowedRoles }) {
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return <Navigate to="/" replace />;
+    const redirectPath = user.role === "lgu_personnel" ? "/lgu" : "/";
+    return <Navigate to={redirectPath} state={{ flashMessage: "Admins only" }} replace />;
   }
 
   return children;

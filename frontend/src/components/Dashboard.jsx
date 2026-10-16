@@ -25,7 +25,7 @@ import {
 import Sidebar from "./Sidebar";
 import "../components_css/Dashboard.css";
 
-const MOBILE_BREAKPOINT = 720;
+const MOBILE_BREAKPOINT = 1024;
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(
@@ -158,7 +158,7 @@ function RoomDonut({ total, assigned, unassigned }) {
                 {formatCount(assigned)} of {formatCount(total)}
               </strong>
               <span className="mt-0.5 text-xs font-medium text-slate-500 uppercase tracking-wider">
-                rooms in use
+                rooms assigned
               </span>
             </>
           ) : (
@@ -170,7 +170,7 @@ function RoomDonut({ total, assigned, unassigned }) {
       <div className="w-full max-w-xs space-y-3">
         {[
           { label: "Assigned", value: assigned, color: "bg-blue-600", desc: "Sheltering families" },
-          { label: "Unassigned", value: unassigned, color: "bg-slate-300", desc: "Open capacity" },
+          { label: "Unassigned", value: unassigned, color: "bg-slate-300", desc: "Ready for assignment" },
         ].map((item) => (
           <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-100" key={item.label}>
             <div className="flex items-center gap-2.5">
@@ -303,14 +303,14 @@ function Dashboard() {
       });
     }
 
-    // 2. Critical Room Availability (< 20%)
+    // 2. Critical Room Assignment (< 20% unassigned)
     if (stats.totalRooms > 0 && roomAvailability < 20) {
       items.push({
         id: "low-rooms",
         severity: "danger",
         badge: "Critical Space",
-        title: `Low Room Capacity (${roomAvailability}% Remaining)`,
-        desc: `Only ${formatCount(stats.availableRooms)} of ${formatCount(stats.totalRooms)} rooms are available across all centers.`,
+        title: `Low Unassigned Rooms (${roomAvailability}% Remaining)`,
+        desc: `Only ${formatCount(stats.availableRooms)} of ${formatCount(stats.totalRooms)} rooms are unassigned across all centers.`,
         actionLabel: "View Rooms",
         tab: "centers",
       });
@@ -504,7 +504,7 @@ function Dashboard() {
           ) : stats ? (
             <>
               {/* 2. EVACUATION READINESS BANNER */}
-              <section className="dashboard-card p-6 border-l-8 border-l-blue-600" aria-label="Evacuation readiness status">
+              <section className="dashboard-card p-6 border-l-4 border-l-blue-600" aria-label="Evacuation readiness status">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2.5">
@@ -517,7 +517,7 @@ function Dashboard() {
                       </span>
                     </div>
                     <h2 className="dashboard-heading text-xl font-bold text-slate-900 sm:text-2xl">
-                      Evacuation Sheltering Readiness: {assignedFamiliesRate}%
+                      Evacuation Sheltering Readiness
                     </h2>
                     <p className="text-sm text-slate-600 max-w-2xl">
                       {formatCount(stats.assignedFamilies)} of {formatCount(stats.families)} registered households have been safely assigned to evacuation rooms. {readinessConfig.desc}
@@ -588,9 +588,9 @@ function Dashboard() {
                   accentColor="#059669"
                 />
                 <StatCard
-                  label="Available Rooms"
+                  label="Unassigned Rooms"
                   value={stats.availableRooms}
-                  description={`${roomAvailability}% of ${formatCount(stats.totalRooms)} rooms open`}
+                  description={`${roomAvailability}% of ${formatCount(stats.totalRooms)} rooms unassigned`}
                   icon={faCircleCheck}
                   accentColor="#0284c7"
                   progressPercent={roomAvailability}
@@ -658,12 +658,12 @@ function Dashboard() {
                       </div>
                     </div>
 
-                    {/* Rooms in Use */}
+                    {/* Assigned Rooms */}
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
                         <span className="flex items-center gap-2">
                           <FontAwesomeIcon icon={faBed} className="text-indigo-600" />
-                          Rooms in Active Use
+                          Assigned Rooms
                         </span>
                         <span className="dashboard-mono text-slate-900">
                           {formatCount(stats.occupiedRooms)} / {formatCount(stats.totalRooms)}{" "}
@@ -903,76 +903,27 @@ function Dashboard() {
                 </section>
               </div>
 
-              {/* 7. QUICK INSIGHTS TILES */}
-              <section aria-label="Operational insight averages">
-                <div className="mb-3">
-                  <h2 className="dashboard-heading text-base font-bold text-slate-900">
-                    Operational Insights
-                  </h2>
-                </div>
-                <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                  <div className="dashboard-card p-5">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      Avg Residents / Household
-                    </p>
-                    <p className="dashboard-mono mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">
-                      {(stats.residents / (stats.families || 1)).toFixed(1)}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-400">Average family size</p>
-                  </div>
 
-                  <div className="dashboard-card p-5">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      Avg Households / Barangay
-                    </p>
-                    <p className="dashboard-mono mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">
-                      {Math.round(stats.families / (stats.barangays || 1))}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-400">Distribution per community</p>
-                  </div>
-
-                  <div className="dashboard-card p-5">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      Avg Rooms / Center
-                    </p>
-                    <p className="dashboard-mono mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">
-                      {(stats.totalRooms / (stats.centers || 1)).toFixed(1)}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-400">Facility partitioning</p>
-                  </div>
-
-                  <div className="dashboard-card p-5">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      Residents / Open Room
-                    </p>
-                    <p className="dashboard-mono mt-2 text-2xl font-bold text-slate-900 sm:text-3xl">
-                      {stats.availableRooms > 0 ? (stats.residents / stats.availableRooms).toFixed(1) : "N/A"}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-400">Theoretical pressure ratio</p>
-                  </div>
-                </div>
-              </section>
-
-              {/* BAR CHARTS: ROOM OCCUPANCY PER CENTER & TOP 8 BARANGAYS */}
+              {/* BAR CHARTS: ROOM ASSIGNMENTS PER CENTER & TOP 8 BARANGAYS */}
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                {/* Bar Chart 1: Room Occupancy per Evacuation Center */}
-                <section className="dashboard-card p-6 flex flex-col justify-between" aria-label="Room occupancy per evacuation center">
+                {/* Bar Chart 1: Room Assignments per Evacuation Center */}
+                <section className="dashboard-card p-6 flex flex-col justify-between" aria-label="Room assignments per evacuation center">
                   <div>
                     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
                       <div>
                         <h2 className="dashboard-heading text-lg font-bold text-slate-900">
-                          Room Occupancy by Center
+                          Room Assignments by Center
                         </h2>
                         <p className="text-xs text-slate-500">
-                          Rooms currently in use versus total capacity per center
+                          Assigned versus unassigned rooms per evacuation facility
                         </p>
                       </div>
                       <div className="flex items-center gap-3 text-xs text-slate-500 font-medium">
                         <span className="flex items-center gap-1.5">
-                          <span className="size-2.5 rounded-sm bg-blue-600" /> Occupied
+                          <span className="size-2.5 rounded-sm bg-blue-600" /> Assigned
                         </span>
                         <span className="flex items-center gap-1.5">
-                          <span className="size-2.5 rounded-sm bg-slate-200" /> Available
+                          <span className="size-2.5 rounded-sm bg-slate-200" /> Unassigned
                         </span>
                       </div>
                     </div>
@@ -991,7 +942,7 @@ function Dashboard() {
                                   </span>
                                 </span>
                                 <span className="dashboard-mono shrink-0 text-xs font-medium text-slate-600">
-                                  {center.occupied} / {center.total} rooms ({occPercent}%)
+                                  {center.occupied} / {center.total} rooms assigned ({occPercent}%)
                                 </span>
                               </div>
 
@@ -1001,7 +952,7 @@ function Dashboard() {
                                 aria-valuenow={occPercent}
                                 aria-valuemin={0}
                                 aria-valuemax={100}
-                                aria-label={`${center.name}: ${center.occupied} of ${center.total} rooms occupied`}
+                                aria-label={`${center.name}: ${center.occupied} of ${center.total} rooms assigned`}
                               >
                                 <div
                                   className="h-full bg-blue-600 rounded-l-full transition-all duration-500"

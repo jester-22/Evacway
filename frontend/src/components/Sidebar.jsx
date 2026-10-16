@@ -11,6 +11,9 @@ import {
   faUser,
   faChartLine,
   faLifeRing,
+  faDatabase,
+  faBars,
+  faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 
 import "../components_css/Sidebar.css";
@@ -33,7 +36,7 @@ const TABS = [
   },
   {
     key: "barangays",
-    label: "Barangays & Families",
+    label: "Barangays",
     icon: faPeopleGroup,
     roles: ["admin", "lgu_personnel"],
   },
@@ -53,6 +56,12 @@ const TABS = [
     key: "users",
     label: "Users",
     icon: faUsers,
+    roles: ["admin"],
+  },
+  {
+    key: "data-management",
+    label: "Data Management",
+    icon: faDatabase,
     roles: ["admin"],
   },
   {
@@ -76,13 +85,27 @@ function Sidebar({
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const logoutTimer = useRef(null);
 
   const availableTabs = TABS.filter((item) =>
     item.roles.includes(role)
   );
 
+  const activeTabObj = availableTabs.find((t) => t.key === tab) || availableTabs[0];
+
   useEffect(() => () => window.clearTimeout(logoutTimer.current), []);
+
+  // Close drawer on Escape key
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === "Escape" && drawerOpen) {
+        setDrawerOpen(false);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [drawerOpen]);
 
   function handleLogout() {
     if (loggingOut) return;
@@ -98,17 +121,139 @@ function Sidebar({
 
   return (
     <>
-      <aside className={`sidebar-rail ${isMobile ? "is-mobile" : ""}`}>
+      {/* Mobile & Tablet Header Bar (Visible <= 1024px) */}
+      <header className="sidebar-mobile-header" aria-label="Mobile Navigation Bar">
+        <button
+          type="button"
+          className="sidebar-mobile-menu-btn"
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open navigation menu"
+          title="Open menu"
+        >
+          <FontAwesomeIcon icon={faBars} />
+        </button>
+
+        <div className="sidebar-mobile-brand">
+          <span className="sidebar-brand-icon">
+            <FontAwesomeIcon icon={faShieldHalved} />
+          </span>
+          <span className="sidebar-mobile-brand-title">EvacWay</span>
+          {activeTabObj && (
+            <span className="sidebar-mobile-tab-tag">{activeTabObj.label}</span>
+          )}
+        </div>
+
+        <div className="sidebar-mobile-right">
+          <NotificationCenter onSelect={onSelectNotification} />
+          <button
+            type="button"
+            className="sidebar-mobile-avatar-btn"
+            onClick={() => setProfileOpen(true)}
+            aria-label="Open my account profile"
+            title="My account"
+          >
+            <FontAwesomeIcon icon={faUser} />
+          </button>
+        </div>
+      </header>
+
+      {/* Drawer Overlay for Mobile & Tablet */}
+      {drawerOpen && (
+        <div
+          className="sidebar-drawer-overlay"
+          onClick={() => setDrawerOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Drawer Panel for Mobile & Tablet */}
+      <aside
+        className={`sidebar-drawer ${drawerOpen ? "is-open" : ""}`}
+        aria-label="Slide-over navigation menu"
+        aria-hidden={!drawerOpen}
+      >
+        <div className="sidebar-drawer-header">
+          <div className="sidebar-brand">
+            <span className="sidebar-brand-icon">
+              <FontAwesomeIcon icon={faShieldHalved} />
+            </span>
+            <span className="sidebar-brand-copy">
+              <strong>EvacWay</strong>
+            </span>
+          </div>
+          <button
+            type="button"
+            className="sidebar-drawer-close-btn"
+            onClick={() => setDrawerOpen(false)}
+            aria-label="Close menu"
+            title="Close menu"
+          >
+            <FontAwesomeIcon icon={faXmark} />
+          </button>
+        </div>
+
+        <nav className="sidebar-drawer-nav" aria-label="Drawer navigation">
+          {availableTabs.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => {
+                setTab(item.key);
+                setDrawerOpen(false);
+              }}
+              title={item.label}
+              aria-label={item.label}
+              aria-current={tab === item.key ? "page" : undefined}
+              className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
+            >
+              <FontAwesomeIcon icon={item.icon} />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-drawer-footer">
+          <button
+            type="button"
+            className="sidebar-profile-trigger"
+            onClick={() => {
+              setDrawerOpen(false);
+              setProfileOpen(true);
+            }}
+            aria-label="Open my account profile"
+            title="My account"
+          >
+            <span className="sidebar-avatar"><FontAwesomeIcon icon={faUser} /></span>
+            <span className="sidebar-account-copy">
+              <strong>{user?.name || "Account"}</strong>
+              <small>{role === "admin" ? "Administrator" : "LGU Personnel"}</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDrawerOpen(false);
+              handleLogout();
+            }}
+            className="sidebar-logout-btn"
+            title="Log out"
+            aria-label="Log out"
+          >
+            <FontAwesomeIcon icon={faRightFromBracket} />
+            <span>Log out</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Desktop Sidebar Rail (Visible > 1024px) */}
+      <aside className="sidebar-rail">
         <div className="sidebar-brand">
           <span className="sidebar-brand-icon">
             <FontAwesomeIcon icon={faShieldHalved} />
           </span>
-          {!isMobile && (
-            <span className="sidebar-brand-copy">
-              <strong>EvacWay</strong>
-            </span>
-          )}
-          {!isMobile && <NotificationCenter onSelect={onSelectNotification} />}
+          <span className="sidebar-brand-copy">
+            <strong>EvacWay</strong>
+          </span>
+          <NotificationCenter onSelect={onSelectNotification} />
         </div>
 
         <nav className="sidebar-navigation" aria-label="Main navigation">
@@ -122,10 +267,9 @@ function Sidebar({
               className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
             >
               <FontAwesomeIcon icon={item.icon} />
-              {!isMobile && <span>{item.label}</span>}
+              <span>{item.label}</span>
             </button>
           ))}
-          {isMobile && <NotificationCenter onSelect={onSelectNotification} />}
         </nav>
 
         <div className="sidebar-account">
@@ -137,12 +281,10 @@ function Sidebar({
             title="My account"
           >
             <span className="sidebar-avatar"><FontAwesomeIcon icon={faUser} /></span>
-            {!isMobile && (
-              <span className="sidebar-account-copy">
-                <strong>{user?.name || "Account"}</strong>
-                <small>{role === "admin" ? "Administrator" : "LGU Personnel"}</small>
-              </span>
-            )}
+            <span className="sidebar-account-copy">
+              <strong>{user?.name || "Account"}</strong>
+              <small>{role === "admin" ? "Administrator" : "LGU Personnel"}</small>
+            </span>
           </button>
           <button
             onClick={handleLogout}
@@ -151,7 +293,7 @@ function Sidebar({
             aria-label="Log out"
           >
             <FontAwesomeIcon icon={faRightFromBracket} />
-            {!isMobile && <span>Log out</span>}
+            <span>Log out</span>
           </button>
         </div>
       </aside>

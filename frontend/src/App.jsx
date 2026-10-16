@@ -10,6 +10,8 @@ import PasswordSetup from "./pages/auth/PasswordSetup";
 import NetworkStatus from "./components/NetworkStatus";
 import Dashboard from "./components/Dashboard";
 
+import ManageProfile from "./pages/profile/ManageProfile";
+
 function App() {
   return (
     
@@ -26,6 +28,15 @@ function App() {
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
+                <ManageProfile />
               </ProtectedRoute>
             }
           />

@@ -65,6 +65,10 @@ function LguDashboard() {
       navigate("/dashboard");
       return;
     }
+    if (nextTab === "profile") {
+      navigate("/profile");
+      return;
+    }
     setTab(nextTab);
     navigate(`/lgu?tab=${encodeURIComponent(nextTab)}`);
   }

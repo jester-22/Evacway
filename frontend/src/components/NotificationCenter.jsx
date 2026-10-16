@@ -53,6 +53,31 @@ export default function NotificationCenter({ onSelect }) {
       .catch(() => {});
   }, []);
 
+  // Close notification panel on click outside or Escape
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(event) {
+      if (bellRef.current && bellRef.current.contains(event.target)) return;
+      const panelEl = document.querySelector(".notification-panel");
+      if (panelEl && panelEl.contains(event.target)) return;
+      setOpen(false);
+    }
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setOpen(false);
+        bellRef.current?.focus();
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return undefined;
 
@@ -60,17 +85,26 @@ export default function NotificationCenter({ onSelect }) {
       const rect = bellRef.current?.getBoundingClientRect();
       if (!rect) return;
 
-      const panelWidth = Math.min(390, window.innerWidth - 24);
-      const panelHeight = Math.min(window.innerHeight * 0.7, 600);
-      const mobile = window.innerWidth <= 720;
-      const left = mobile
-        ? Math.min(Math.max(12, rect.right - panelWidth), window.innerWidth - panelWidth - 12)
-        : Math.min(Math.max(12, rect.left), window.innerWidth - panelWidth - 12);
-      const top = mobile
-        ? Math.max(12, rect.top - panelHeight - 10)
-        : Math.min(rect.bottom + 10, window.innerHeight - panelHeight - 12);
+      const panelWidth = Math.min(380, window.innerWidth - 24);
+      // Always open below the bell button so it never blocks the button on mobile or desktop
+      const top = Math.min(rect.bottom + 8, window.innerHeight - 180);
+      const maxHeight = Math.max(180, window.innerHeight - top - 16);
 
-      setPanelPosition({ left, top, width: panelWidth });
+      // On mobile or when bell is on the right side of the screen, align with the right
+      let left;
+      if (window.innerWidth <= 1024 || rect.left > window.innerWidth / 2) {
+        left = rect.right - panelWidth;
+      } else {
+        left = rect.left;
+      }
+
+      // Clamp within screen boundaries with 12px margin
+      if (left < 12) left = 12;
+      if (left + panelWidth > window.innerWidth - 12) {
+        left = window.innerWidth - panelWidth - 12;
+      }
+
+      setPanelPosition({ left, top, width: panelWidth, maxHeight });
     }
 
     positionPanel();

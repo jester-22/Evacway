@@ -73,6 +73,10 @@ function AdminDashboard() {
       navigate("/dashboard");
       return;
     }
+    if (nextTab === "profile") {
+      navigate("/profile");
+      return;
+    }
     setTab(nextTab);
     navigate(`/admin?tab=${encodeURIComponent(nextTab)}`);
   }

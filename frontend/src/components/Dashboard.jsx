@@ -233,6 +233,10 @@ function Dashboard() {
       navigate("/dashboard");
       return;
     }
+    if (nextTab === "profile") {
+      navigate("/profile");
+      return;
+    }
     const path = isAdmin ? "/admin" : "/lgu";
     navigate(`${path}?tab=${encodeURIComponent(nextTab)}`);
   }

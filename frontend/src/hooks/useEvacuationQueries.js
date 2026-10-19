@@ -228,7 +228,15 @@ export function useDashboardSummary(isAdmin) {
       seenRoomIds.add(roomId);
       return true;
     });
-    const occupied = uniqueRooms.filter((room) => Number(room.occupied) > 0).length;
+    const occupied = uniqueRooms.filter((room) =>
+      Boolean(
+        room.is_assigned ||
+        room.assignment_status === "Assigned" ||
+        Number(room.occupied) > 0
+      )
+    ).length;
+    const capacity = uniqueRooms.reduce((sum, room) => sum + Number(room.capacity || 0), 0);
+    const assignedPeople = uniqueRooms.reduce((sum, room) => sum + Number(room.occupied || 0), 0);
 
     return {
       id: properties.id ?? properties.center_id ?? center.id,
@@ -238,7 +246,12 @@ export function useDashboardSummary(isAdmin) {
         || "Barangay not specified",
       total: uniqueRooms.length,
       occupied,
+      assignedRooms: occupied,
+      unassignedRooms: Math.max(0, uniqueRooms.length - occupied),
       available: uniqueRooms.length - occupied,
+      capacity,
+      assignedPeople,
+      remainingCapacity: Math.max(0, capacity - assignedPeople),
     };
   }).sort((first, second) =>
     second.available - first.available
@@ -281,13 +294,13 @@ export function useDashboardSummary(isAdmin) {
           unassignedFamilies,
           residents: totalResidents,
           centers: centers.length,
-          totalCapacity: centers.reduce((total, feature) => {
-            const properties = feature.properties || feature;
-            return total + Number(properties.capacity || 0);
-          }, 0),
+          totalCapacity: centerRooms.reduce((total, center) => total + center.capacity, 0),
+          totalAssignedPeople: centerRooms.reduce((total, center) => total + center.assignedPeople, 0),
           totalRooms,
+          assignedRooms: occupiedRooms,
+          unassignedRooms: Math.max(0, totalRooms - occupiedRooms),
           occupiedRooms,
-          availableRooms: totalRooms - occupiedRooms,
+          availableRooms: Math.max(0, totalRooms - occupiedRooms),
           centerRooms,
           totalStaff: staff.filter((account) => account.role === "lgu_personnel").length,
           activeStaff: staff.filter((account) => account.role === "lgu_personnel" && account.is_active).length,

@@ -74,3 +74,13 @@ button, input, textarea, select { font-family: inherit; }
 
 .network-status.is-offline { background: var(--alert); }
 .network-status.is-online { background: #26805e; }
+
+/* Hide Mapbox watermark logo and attribution */
+.mapboxgl-ctrl-logo,
+.mapboxgl-ctrl-attrib,
+a.mapboxgl-ctrl-logo {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}

@@ -59,6 +59,9 @@ def get_rooms(center_id):
         room_data = room.to_dict()
         room_data["occupied"] = occupied
         room_data["available"] = max(room.capacity - occupied, 0)
+        is_assigned = occupied > 0
+        room_data["is_assigned"] = is_assigned
+        room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
         # Make sure coordinates are returned as numbers for Mapbox
         if room.latitude is not None:
@@ -271,9 +274,12 @@ def update_room(room_id):
     )
     db.session.commit()
 
+    is_assigned = current_occupied > 0
     room_data = room.to_dict()
     room_data["occupied"] = current_occupied
     room_data["available"] = max(room.capacity - current_occupied, 0)
+    room_data["is_assigned"] = is_assigned
+    room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
     return jsonify({
         "message": "Room updated successfully",
@@ -327,9 +333,12 @@ def update_room_location(room_id):
     db.session.commit()
 
     occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    is_assigned = occupied > 0
     room_data = room.to_dict()
     room_data["occupied"] = occupied
     room_data["available"] = max(room.capacity - occupied, 0)
+    room_data["is_assigned"] = is_assigned
+    room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
     return jsonify({
         "message": "Room location updated successfully",
@@ -365,9 +374,12 @@ def toggle_room_active(room_id):
     db.session.commit()
 
     occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    is_assigned = occupied > 0
     room_data = room.to_dict()
     room_data["occupied"] = occupied
     room_data["available"] = max(room.capacity - occupied, 0)
+    room_data["is_assigned"] = is_assigned
+    room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
     return jsonify(room_data), 200
 
@@ -460,7 +472,8 @@ def get_room_families(room_id):
                     "family_members": len(residents_in_room),
                     "assigned_members": len(residents_in_room),
                     "total_members": fam.member_count or len(residents_in_room),
-                    "evacuation_status": fam.evacuation_status or "Assigned",
+                    "evacuation_status": "Assigned",
+                    "assignment_status": "Assigned",
                     "members": residents_in_room
                 })
                 continue
@@ -480,10 +493,12 @@ def get_room_families(room_id):
             "assigned_members": len(residents_in_room),
             "total_members": len(residents_in_room),
             "evacuation_status": "Assigned",
+            "assignment_status": "Assigned",
             "members": residents_in_room
         })
 
     center = EvacuationCenter.query.get(room.evacuation_center_id)
+    is_assigned = total_individuals > 0
 
     return jsonify({
         "room_id": room.id,
@@ -494,6 +509,8 @@ def get_room_families(room_id):
         "occupied": total_individuals,
         "available": max(room.capacity - total_individuals, 0),
         "is_active": room.is_active,
+        "is_assigned": is_assigned,
+        "assignment_status": "Assigned" if is_assigned else "Unassigned",
         "families": families
     })
 
@@ -557,7 +574,8 @@ def get_available_families(room_id):
             "contact_number": contact,
             "family_members": member_count,
             "member_count": member_count,
-            "evacuation_status": fam.evacuation_status or "Not Evacuated"
+            "evacuation_status": "Unassigned",
+            "assignment_status": "Unassigned"
         })
 
     return jsonify(result)
@@ -716,6 +734,7 @@ def assign_families(room_id):
     db.session.commit()
 
     new_occupied = current_occupied + total_members_needed
+    is_assigned = new_occupied > 0
 
     return jsonify({
         "message": "Families assigned successfully",
@@ -724,7 +743,9 @@ def assign_families(room_id):
         "total_members": total_members_needed,
         "room_occupied": new_occupied,
         "room_capacity": room.capacity,
-        "room_available": max(room.capacity - new_occupied, 0)
+        "room_available": max(room.capacity - new_occupied, 0),
+        "is_assigned": is_assigned,
+        "assignment_status": "Assigned" if is_assigned else "Unassigned"
     }), 201
 
 
@@ -759,7 +780,7 @@ def remove_family_from_room(room_id, resident_or_family_id):
         for a in assignments:
             db.session.delete(a)
 
-        family.evacuation_status = "Not Evacuated"
+        family.evacuation_status = "Unassigned"
         household_name = family.head_name
     else:
         # Check if id refers to a Resident
@@ -787,7 +808,7 @@ def remove_family_from_room(room_id, resident_or_family_id):
             for a in assignments:
                 db.session.delete(a)
             if family:
-                family.evacuation_status = "Not Evacuated"
+                family.evacuation_status = "Unassigned"
             household_name = resident.household_head_name
         else:
             db.session.delete(assignment)
@@ -803,9 +824,12 @@ def remove_family_from_room(room_id, resident_or_family_id):
     db.session.commit()
 
     current_occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    is_assigned = current_occupied > 0
 
     return jsonify({
         "message": f"Family '{household_name}' unassigned from room successfully",
         "room_occupied": current_occupied,
-        "room_available": max(room.capacity - current_occupied, 0)
+        "room_available": max(room.capacity - current_occupied, 0),
+        "is_assigned": is_assigned,
+        "assignment_status": "Assigned" if is_assigned else "Unassigned"
     }), 200

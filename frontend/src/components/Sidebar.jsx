@@ -17,60 +17,82 @@ import {
   faXmark,
   faChevronUp,
   faChevronDown,
+  faMap,
 } from "@fortawesome/free-solid-svg-icons";
 
 import "../components_css/Sidebar.css";
 import NotificationCenter from "./NotificationCenter";
 import { useAuth } from "../context/AuthContext";
 
-const TABS = [
+const NAV_SECTIONS = [
   {
-    key: "dashboard",
-    label: "Dashboard",
-    icon: faChartLine,
-    roles: ["admin", "lgu_personnel"],
+    title: "Overview",
+    items: [
+      {
+        key: "dashboard",
+        label: "Dashboard",
+        icon: faChartLine,
+        roles: ["admin", "lgu_personnel"],
+      },
+    ],
   },
   {
-    key: "centers",
-    label: "Evacuation Centers",
-    icon: faHouseFlag,
-    roles: ["admin", "lgu_personnel"],
+    title: "Operations",
+    items: [
+      {
+        key: "centers",
+        label: "Evacuation Centers",
+        icon: faHouseFlag,
+        roles: ["admin", "lgu_personnel"],
+      },
+      {
+        key: "map",
+        label: "Map",
+        icon: faMap,
+        roles: ["admin", "lgu_personnel"],
+      },
+      {
+        key: "barangays",
+        label: "Barangays",
+        icon: faPeopleGroup,
+        roles: ["admin", "lgu_personnel"],
+      },
+      {
+        key: "reports",
+        label: "Hazard Reports",
+        icon: faTriangleExclamation,
+        roles: ["admin", "lgu_personnel"],
+      },
+      {
+        key: "rescue",
+        label: "Rescue Alerts",
+        icon: faLifeRing,
+        roles: ["admin", "lgu_personnel"],
+      },
+    ],
   },
   {
-    key: "barangays",
-    label: "Barangays",
-    icon: faPeopleGroup,
-    roles: ["admin", "lgu_personnel"],
-  },
-  {
-    key: "reports",
-    label: "Hazard Reports",
-    icon: faTriangleExclamation,
-    roles: ["admin", "lgu_personnel"],
-  },
-  {
-    key: "rescue",
-    label: "Rescue Alerts",
-    icon: faLifeRing,
-    roles: ["admin", "lgu_personnel"],
-  },
-  {
-    key: "users",
-    label: "Users",
-    icon: faUsers,
-    roles: ["admin"],
-  },
-  {
-    key: "data-management",
-    label: "Data Management",
-    icon: faDatabase,
-    roles: ["admin"],
-  },
-  {
-    key: "settings",
-    label: "Activity Logs",
-    icon: faClockRotateLeft,
-    roles: ["admin", "lgu_personnel"],
+    title: "System",
+    items: [
+      {
+        key: "users",
+        label: "Users",
+        icon: faUsers,
+        roles: ["admin"],
+      },
+      {
+        key: "data-management",
+        label: "Data Management",
+        icon: faDatabase,
+        roles: ["admin"],
+      },
+      {
+        key: "settings",
+        label: "Activity Logs",
+        icon: faClockRotateLeft,
+        roles: ["admin", "lgu_personnel"],
+      },
+    ],
   },
 ];
 
@@ -87,11 +109,17 @@ function Sidebar({
   const navigate = useNavigate();
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
+  const [isFadingOut, setIsFadingOut] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [drawerProfileMenuOpen, setDrawerProfileMenuOpen] = useState(false);
   const [mobileProfileMenuOpen, setMobileProfileMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const logoutTimer = useRef(null);
+
+  const cancelBtnRef = useRef(null);
+  const submitBtnRef = useRef(null);
+  const modalRef = useRef(null);
 
   const profileTriggerRef = useRef(null);
   const profileMenuRef = useRef(null);
@@ -105,9 +133,12 @@ function Sidebar({
   const mobileProfileMenuRef = useRef(null);
   const mobileMenuItemRefs = [useRef(null), useRef(null)];
 
-  const availableTabs = TABS.filter((item) =>
-    item.roles.includes(role)
-  );
+  const visibleSections = NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => item.roles.includes(role)),
+  })).filter((section) => section.items.length > 0);
+
+  const availableTabs = visibleSections.flatMap((section) => section.items);
 
   const activeTabObj = availableTabs.find((t) => t.key === tab) || availableTabs[0];
 
@@ -123,6 +154,54 @@ function Sidebar({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [drawerOpen]);
+
+  // Focus management and trap for logout confirm modal
+  useEffect(() => {
+    if (!logoutConfirmOpen) return undefined;
+
+    const timer = setTimeout(() => {
+      cancelBtnRef.current?.focus();
+    }, 40);
+
+    function handleKeyDown(e) {
+      if (e.key === "Escape") {
+        if (!loggingOut) {
+          e.preventDefault();
+          cancelLogout();
+        }
+        return;
+      }
+
+      if (e.key === "Tab") {
+        const cancelBtn = cancelBtnRef.current;
+        const submitBtn = submitBtnRef.current;
+        if (!cancelBtn || !submitBtn) return;
+
+        if (loggingOut) {
+          e.preventDefault();
+          return;
+        }
+
+        if (e.shiftKey) {
+          if (document.activeElement === cancelBtn) {
+            e.preventDefault();
+            submitBtn.focus();
+          }
+        } else {
+          if (document.activeElement === submitBtn) {
+            e.preventDefault();
+            cancelBtn.focus();
+          }
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [logoutConfirmOpen, loggingOut]);
 
   // Close profile dropdown on click outside
   useEffect(() => {
@@ -371,14 +450,46 @@ function Sidebar({
 
   function handleLogout() {
     if (loggingOut) return;
-
+    setLogoutError("");
+    setIsFadingOut(false);
     setLogoutConfirmOpen(true);
   }
 
-  function confirmLogout() {
+  function cancelLogout() {
+    if (loggingOut) return;
     setLogoutConfirmOpen(false);
+    setLogoutError("");
+    setIsFadingOut(false);
+  }
+
+  async function confirmLogout() {
+    if (loggingOut) return;
     setLoggingOut(true);
-    logoutTimer.current = window.setTimeout(logout, 450);
+    setLogoutError("");
+
+    try {
+      // Keep the loading state visible for at least 700ms even if logout is instant
+      await new Promise((resolve) => {
+        logoutTimer.current = window.setTimeout(resolve, 700);
+      });
+
+      // Fade the whole modal and overlay out over 200ms
+      setIsFadingOut(true);
+      await new Promise((resolve) => {
+        logoutTimer.current = window.setTimeout(resolve, 200);
+      });
+
+      // Perform logout/redirect
+      if (typeof logout === "function") {
+        await Promise.resolve(logout());
+      } else {
+        navigate("/");
+      }
+    } catch (err) {
+      setLoggingOut(false);
+      setIsFadingOut(false);
+      setLogoutError("Couldn't sign out. Please try again.");
+    }
   }
 
   return (
@@ -499,21 +610,28 @@ function Sidebar({
         </div>
 
         <nav className="sidebar-drawer-nav" aria-label="Drawer navigation">
-          {availableTabs.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => {
-                setTab(item.key);
-                setDrawerOpen(false);
-              }}
-              title={item.label}
-              aria-label={item.label}
-              aria-current={tab === item.key ? "page" : undefined}
-              className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
-            >
-              <FontAwesomeIcon icon={item.icon} />
-              <span>{item.label}</span>
-            </button>
+          {visibleSections.map((section) => (
+            <div key={section.title} className="sidebar-nav-section">
+              <span className="sidebar-section-heading">{section.title}</span>
+              <div className="sidebar-section-items">
+                {section.items.map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => {
+                      setTab(item.key);
+                      setDrawerOpen(false);
+                    }}
+                    title={item.label}
+                    aria-label={item.label}
+                    aria-current={tab === item.key ? "page" : undefined}
+                    className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
+                  >
+                    <FontAwesomeIcon icon={item.icon} />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
 
@@ -593,18 +711,25 @@ function Sidebar({
         </div>
 
         <nav className="sidebar-navigation" aria-label="Main navigation">
-          {availableTabs.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => setTab(item.key)}
-              title={item.label}
-              aria-label={item.label}
-              aria-current={tab === item.key ? "page" : undefined}
-              className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
-            >
-              <FontAwesomeIcon icon={item.icon} />
-              <span>{item.label}</span>
-            </button>
+          {visibleSections.map((section) => (
+            <div key={section.title} className="sidebar-nav-section">
+              <span className="sidebar-section-heading">{section.title}</span>
+              <div className="sidebar-section-items">
+                {section.items.map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => setTab(item.key)}
+                    title={item.label}
+                    aria-label={item.label}
+                    aria-current={tab === item.key ? "page" : undefined}
+                    className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
+                  >
+                    <FontAwesomeIcon icon={item.icon} />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
 
@@ -673,34 +798,73 @@ function Sidebar({
 
       {logoutConfirmOpen && (
         <div
-          className="logout-confirm-overlay"
-          onClick={(event) => event.target === event.currentTarget && setLogoutConfirmOpen(false)}
+          className={`logout-confirm-overlay ${isFadingOut ? "is-fading-out" : ""}`}
+          onClick={(event) => {
+            if (!loggingOut && event.target === event.currentTarget) {
+              cancelLogout();
+            }
+          }}
+          role="presentation"
         >
-          <section className="logout-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="logout-confirm-title">
-            <div className="logout-confirm-mark">
+          <section
+            ref={modalRef}
+            className={`logout-confirm-modal ${isFadingOut ? "is-fading-out" : ""}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="logout-confirm-title"
+            aria-describedby="logout-confirm-desc"
+          >
+            <div className="logout-confirm-mark" aria-hidden="true">
               <FontAwesomeIcon icon={faRightFromBracket} />
             </div>
+
             <h2 id="logout-confirm-title">Sign out of EvacWay?</h2>
-            <p>You’ll need to sign in again to access the operations dashboard.</p>
+
+            <p id="logout-confirm-desc">
+              You’ll need to sign in again to access the operations dashboard.
+            </p>
+
+            {loggingOut && (
+              <div className="logout-progress-wrap" role="progressbar" aria-label="Signing out">
+                <div className="logout-progress-bar" />
+              </div>
+            )}
+
+            {logoutError && (
+              <p className="logout-error-message" role="alert">
+                {logoutError}
+              </p>
+            )}
+
             <div className="logout-confirm-actions">
-              <button type="button" className="logout-confirm-cancel" autoFocus onClick={() => setLogoutConfirmOpen(false)}>
+              <button
+                ref={cancelBtnRef}
+                type="button"
+                className="logout-confirm-cancel"
+                disabled={loggingOut}
+                onClick={cancelLogout}
+              >
                 Cancel
               </button>
-              <button type="button" className="logout-confirm-submit" onClick={confirmLogout}>
-                Sign out
+
+              <button
+                ref={submitBtnRef}
+                type="button"
+                className="logout-confirm-submit"
+                disabled={loggingOut}
+                onClick={confirmLogout}
+              >
+                {loggingOut ? (
+                  <>
+                    <span className="logout-spinner" aria-hidden="true" />
+                    <span>Signing out…</span>
+                  </>
+                ) : (
+                  <span>Sign out</span>
+                )}
               </button>
             </div>
           </section>
-        </div>
-      )}
-
-      {loggingOut && (
-        <div className="logout-transition" role="status" aria-live="polite">
-          <div className="logout-transition-mark">
-            <FontAwesomeIcon icon={faRightFromBracket} />
-          </div>
-          <strong>Signing out</strong>
-          <span>Closing your EvacWay session</span>
         </div>
       )}
     </>

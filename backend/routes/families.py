@@ -273,7 +273,9 @@ def _family_list_rows(families):
             'current_room': primary_assignment['room'] if primary_assignment else None,
             'current_room_capacity': primary_assignment['room_capacity'] if primary_assignment else None,
             'assigned_members': sum(item['assigned_members'] for item in assignments),
-            'evacuation_status': 'Assigned' if assignments else family.evacuation_status or 'Not Assigned',
+            'is_assigned': bool(assignments),
+            'assignment_status': 'Assigned' if assignments else 'Unassigned',
+            'evacuation_status': 'Assigned' if assignments else 'Unassigned',
         })
     return result
 
@@ -641,7 +643,7 @@ def import_families():
                 head_name=item['head_name'],
                 member_count=item['member_count'],
                 contact_number=item['contact_number'],
-                evacuation_status='Not Assigned',
+                evacuation_status='Unassigned',
             )
             db.session.add(family)
             db.session.flush()
@@ -918,7 +920,7 @@ def add_family():
         head_name=head_name,
         member_count=member_count,
         contact_number=contact_number or head_data.get('contact_number'),
-        evacuation_status='Assigned' if assignment_room else 'Not Assigned',
+        evacuation_status='Assigned' if assignment_room else 'Unassigned',
     )
 
     try:
@@ -1462,7 +1464,9 @@ def assign_family(family_id):
         "room_number": room.room_number,
         "room_capacity": room.capacity,
         "room_occupied": current_occupancy + needed_spaces,
-        "room_available": max(room.capacity - (current_occupancy + needed_spaces), 0)
+        "room_available": max(room.capacity - (current_occupancy + needed_spaces), 0),
+        "is_assigned": True,
+        "assignment_status": "Assigned"
     }), 200
 
 
@@ -1541,7 +1545,9 @@ def move_family(family_id):
         "room_id": new_room.id,
         "room_number": new_room.room_number,
         "new_room_occupied": target_occupancy + members_count,
-        "new_room_available": max(new_room.capacity - (target_occupancy + members_count), 0)
+        "new_room_available": max(new_room.capacity - (target_occupancy + members_count), 0),
+        "is_assigned": True,
+        "assignment_status": "Assigned"
     }), 200
 
 
@@ -1570,7 +1576,7 @@ def unassign_family(family_id):
     for assignment in current_assignments:
         db.session.delete(assignment)
 
-    family.evacuation_status = "Not Evacuated"
+    family.evacuation_status = "Unassigned"
 
     user_id = get_jwt_identity()
     db.session.add(SystemLog(
@@ -1581,7 +1587,9 @@ def unassign_family(family_id):
 
     return jsonify({
         "message": f"Family '{family.head_name}' has been unassigned successfully.",
-        "family_id": family.id
+        "family_id": family.id,
+        "is_assigned": False,
+        "assignment_status": "Unassigned"
     }), 200
 
 

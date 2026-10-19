@@ -328,9 +328,12 @@ def get_evacuation_center_details(center_id):
     rooms_data = []
     for room in rooms:
         occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+        is_assigned = occupied > 0
         room_dict = room.to_dict()
         room_dict["occupied"] = occupied
         room_dict["available"] = max(room.capacity - occupied, 0)
+        room_dict["is_assigned"] = is_assigned
+        room_dict["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
         assigned_bid = (
             db.session.query(Family.barangay_id)
             .join(Resident, Resident.family_id == Family.id)
@@ -371,7 +374,9 @@ def get_evacuation_center_details(center_id):
             "family_code": row.family_code,
             "head_name": row.head_name,
             "contact_number": row.contact_number,
-            "evacuation_status": row.evacuation_status,
+            "evacuation_status": "Assigned",
+            "assignment_status": "Assigned",
+            "is_assigned": True,
             "room_id": row.room_id,
             "room_number": row.room_number,
             "assigned_members": row.assigned_members

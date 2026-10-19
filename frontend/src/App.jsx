@@ -11,6 +11,8 @@ import NetworkStatus from "./components/NetworkStatus";
 import Dashboard from "./components/Dashboard";
 
 import ManageProfile from "./pages/profile/ManageProfile";
+import AdminMap from "./pages/admin/AdminMap";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 function App() {
   return (
@@ -18,7 +20,8 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <NetworkStatus />
-        <Routes>
+        <ErrorBoundary>
+          <Routes>
           {/* Public — no login required, per the proposal */}
           <Route path="/" element={<LandingPage />} />
           <Route path="/map" element={<ResidentHome />} />
@@ -37,6 +40,24 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
                 <ManageProfile />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Admin and LGU Map page */}
+          <Route
+            path="/admin/map"
+            element={
+              <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
+                <AdminMap />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/lgu/map"
+            element={
+              <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
+                <AdminMap />
               </ProtectedRoute>
             }
           />
@@ -61,6 +82,7 @@ function App() {
             }
           />
         </Routes>
+        </ErrorBoundary>
       </AuthProvider>
     </BrowserRouter>
   );

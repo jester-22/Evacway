@@ -1706,7 +1706,7 @@ def upload_residents():
 
                     contact_number=contact_number,
 
-                    evacuation_status="Not Evacuated"
+                    evacuation_status="Unassigned"
                 )
 
                 db.session.add(family)
@@ -1968,11 +1968,7 @@ def upload_residents():
             )
 
             if not residents:
-
-                family.evacuation_status = (
-                    "Not Evacuated"
-                )
-
+                family.evacuation_status = "Unassigned"
                 continue
 
             assigned_count = (
@@ -1991,23 +1987,10 @@ def upload_residents():
                 .count()
             )
 
-            if assigned_count == len(residents):
-
-                family.evacuation_status = (
-                    "Assigned"
-                )
-
-            elif assigned_count > 0:
-
-                family.evacuation_status = (
-                    "Partially Assigned"
-                )
-
+            if assigned_count > 0:
+                family.evacuation_status = "Assigned"
             else:
-
-                family.evacuation_status = (
-                    "Not Evacuated"
-                )
+                family.evacuation_status = "Unassigned"
 
         # =====================================================
         # SAVE IMPORT

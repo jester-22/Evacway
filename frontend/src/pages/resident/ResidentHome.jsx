@@ -8,6 +8,12 @@ import HazardReportModal from "../../components/HazardReportModal";
 import RescueAlertModal from "../../components/RescueAlertModal";
 import { MapLegend } from "../../components/MapOverlays";
 import { createReportPopup } from "../../components/mapReports";
+import {
+  setOrUpdateSelectedLocationMarker,
+  setOrUpdateAccuracyCircle,
+  removeAccuracyCircle,
+  highlightAndOpenSavedReport,
+} from "../../utils/mapLocationIndicators";
 
 import { useHazardData } from "../../hooks/useHazardData";
 import { useEvacuationData } from "../../hooks/useEvacuationData";
@@ -38,6 +44,10 @@ import {
   faArrowUp,
   faTriangleExclamation,
   faBan,
+  faLayerGroup,
+  faEllipsis,
+  faCircle,
+  faCircleQuestion,
 } from "@fortawesome/free-solid-svg-icons";
 
 import "../../components_css/MyLocationMarker.css";
@@ -108,8 +118,8 @@ function getDistanceMeters(first, second) {
   const haversine =
     Math.sin(latitudeDelta / 2) ** 2 +
     Math.cos(firstLatitude) *
-      Math.cos(secondLatitude) *
-      Math.sin(longitudeDelta / 2) ** 2;
+    Math.cos(secondLatitude) *
+    Math.sin(longitudeDelta / 2) ** 2;
 
   return 6371000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
@@ -359,7 +369,7 @@ function getGeometryBounds(geometry) {
 // Tracks viewport width
 // --------------------------------------------------
 
-function useIsMobile(breakpoint = 640) {
+function useIsMobile(breakpoint = 768) {
   const [isMobile, setIsMobile] = useState(window.innerWidth < breakpoint);
 
   useEffect(() => {
@@ -592,11 +602,11 @@ function createBlockedRoadPopup(properties, report) {
 
   const photoUrl = resolvePhotoUrl(
     properties.photo_url ||
-      properties.image_url ||
-      properties.photo ||
-      report?.photo_url ||
-      report?.image_url ||
-      report?.photo
+    properties.image_url ||
+    properties.photo ||
+    report?.photo_url ||
+    report?.image_url ||
+    report?.photo
   );
   if (photoUrl) {
     const photo = document.createElement("img");
@@ -653,7 +663,10 @@ function createSimpleMarker(className) {
 }
 
 const ResidentHome = () => {
-  const isMobile = useIsMobile();
+  // "Compact" layout (search + status chip on top, 2-button right stack,
+  // bottom dock and bottom sheets) is used on phones AND tablets (< 1024px).
+  // Phone vs. tablet sizing is handled by CSS media queries.
+  const isMobile = useIsMobile(1024);
 
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -681,25 +694,25 @@ const ResidentHome = () => {
   // --------------------------------------------------
   // Use Custom Hooks for Logic
   // --------------------------------------------------
-  const { 
-    visibleLayers, 
-    setVisibleLayers, 
-    filteredHazardZones 
+  const {
+    visibleLayers,
+    setVisibleLayers,
+    filteredHazardZones
   } = useHazardData(PUBLIC_MAP_QUERY_OPTIONS);
 
-  const { 
-    evacCenters, 
-    rooms 
+  const {
+    evacCenters,
+    rooms
   } = useEvacuationData();
 
-  const { 
-    route, 
-    setRoute, 
-    routeIsMine, 
-    setRouteIsMine, 
-    routeError, 
-    setRouteError, 
-    findingRoute, 
+  const {
+    route,
+    setRoute,
+    routeIsMine,
+    setRouteIsMine,
+    routeError,
+    setRouteError,
+    findingRoute,
     setFindingRoute
   } = useRouting();
 
@@ -710,7 +723,14 @@ const ResidentHome = () => {
 
   const [mapStyle, setMapStyle] = useState("street");
 
-  const [mapOptionsOpen, setMapOptionsOpen] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  const [showCentersLayer, setShowCentersLayer] = useState(true);
+  const [showHazardsLayer, setShowHazardsLayer] = useState(true);
+  const [showClosedRoadsLayer, setShowClosedRoadsLayer] = useState(true);
 
   const [pickingLocation, setPickingLocation] = useState(false);
 
@@ -723,6 +743,11 @@ const ResidentHome = () => {
 
   const [pendingReportLocation, setPendingReportLocation] = useState(null);
   const [rescueAlertOpen, setRescueAlertOpen] = useState(false);
+  const [rescueCoordinates, setRescueCoordinates] = useState(null);
+  const selectedLocationMarkerRef = useRef(null);
+  const savedReportHighlightRef = useRef(null);
+  const accuracyCircleStateRef = useRef(null);
+  const pickingPurposeRef = useRef("hazard");
 
   const [reportConfirmation, setReportConfirmation] = useState("");
 
@@ -777,6 +802,34 @@ const ResidentHome = () => {
     pickingLocationRef.current = pickingLocation;
   }, [pickingLocation]);
 
+  // --------------------------------------------------
+  // Only one sheet open at a time: opening the center
+  // details closes More / Help / Layers / Legend.
+  // --------------------------------------------------
+
+  useEffect(() => {
+    if (selectedCenter) {
+      setMoreMenuOpen(false);
+      setHelpOpen(false);
+      setLayersOpen(false);
+      setLegendOpen(false);
+    }
+  }, [selectedCenter]);
+
+  // Escape closes any open sheet
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key !== "Escape") return;
+      setMoreMenuOpen(false);
+      setHelpOpen(false);
+      setLayersOpen(false);
+      setLegendOpen(false);
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   useEffect(() => {
     routeDataRef.current = route;
   }, [route]);
@@ -788,6 +841,92 @@ const ResidentHome = () => {
     }
   }, []);
 
+  // Keyboard close for popovers/sheets/cards
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === "Escape") {
+        setLayersOpen(false);
+        setLegendOpen(false);
+        setMoreMenuOpen(false);
+        setShowSearchResults(false);
+        if (selectedCenter) setSelectedCenter(null);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedCenter]);
+
+  // Toggle Evacuation Centers layer visibility
+  useEffect(() => {
+    const map = mapRef.current;
+    evacuationMarkersRef.current.forEach((marker) => {
+      const el = marker.getElement();
+      if (el) el.style.display = showCentersLayer ? "" : "none";
+    });
+    entranceMarkersRef.current.forEach((marker) => {
+      const el = marker.getElement();
+      if (el) el.style.display = showCentersLayer ? "" : "none";
+    });
+    if (map && mapLoaded && map.isStyleLoaded()) {
+      try {
+        if (map.getLayer("evacuation-centers-fill")) {
+          map.setLayoutProperty(
+            "evacuation-centers-fill",
+            "visibility",
+            showCentersLayer ? "visible" : "none"
+          );
+        }
+        if (map.getLayer("evacuation-centers-line")) {
+          map.setLayoutProperty(
+            "evacuation-centers-line",
+            "visibility",
+            showCentersLayer ? "visible" : "none"
+          );
+        }
+      } catch (e) { }
+    }
+  }, [showCentersLayer, mapLoaded]);
+
+  // Toggle Hazards layer visibility
+  useEffect(() => {
+    const map = mapRef.current;
+    hazardMarkersRef.current.forEach((marker) => {
+      const el = marker.getElement();
+      if (el) el.style.display = showHazardsLayer ? "" : "none";
+    });
+    if (map && mapLoaded && map.isStyleLoaded()) {
+      try {
+        [
+          "resident-hazard-fill",
+          "resident-hazard-outline",
+          "resident-hazard-labels",
+        ].forEach((layerId) => {
+          if (map.getLayer(layerId)) {
+            map.setLayoutProperty(
+              layerId,
+              "visibility",
+              showHazardsLayer ? "visible" : "none"
+            );
+          }
+        });
+      } catch (e) { }
+    }
+  }, [showHazardsLayer, mapLoaded]);
+
+  // Toggle Closed Roads layer filter
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
+    try {
+      if (map.getLayer("roads-layer")) {
+        map.setFilter(
+          "roads-layer",
+          showClosedRoadsLayer ? null : ["!=", ["get", "is_closed"], true]
+        );
+      }
+    } catch (e) { }
+  }, [showClosedRoadsLayer, mapLoaded]);
+
   // --------------------------------------------------
   // Load remaining data
   // --------------------------------------------------
@@ -796,96 +935,101 @@ const ResidentHome = () => {
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded || !filteredHazardZones) return;
+    if (!map || !mapLoaded || !filteredHazardZones || !map.isStyleLoaded()) return;
 
-    const sourceId = "resident-hazard-zones";
-    const data = {
-      ...filteredHazardZones,
-      features: Array.isArray(filteredHazardZones.features)
-        ? filteredHazardZones.features
-        : [],
-    };
-    const source = map.getSource(sourceId);
+    try {
+      const sourceId = "resident-hazard-zones";
+      const data = {
+        ...filteredHazardZones,
+        features: Array.isArray(filteredHazardZones.features)
+          ? filteredHazardZones.features
+          : [],
+      };
+      const source = map.getSource(sourceId);
 
-    if (source) {
-      source.setData(data);
-    } else {
-      map.addSource(sourceId, { type: "geojson", data });
-    }
+      if (source) {
+        source.setData(data);
+      } else {
+        map.addSource(sourceId, { type: "geojson", data });
+      }
 
-    if (!map.getLayer("resident-hazard-fill")) {
-      map.addLayer({
-        id: "resident-hazard-fill",
-        type: "fill",
-        source: sourceId,
-        paint: {
-          "fill-color": [
-            "match",
-            ["get", "hazard_type"],
-            "flood", "#0a9fb5",
-            "landslide", "#8b5e34",
-            "#c8372d",
-          ],
-          "fill-opacity": [
-            "match", ["get", "risk_level"],
-            "high", 0.34,
-            "medium", 0.25,
-            0.18,
-          ],
-        },
-      });
-    }
+      if (!map.getLayer("resident-hazard-fill")) {
+        map.addLayer({
+          id: "resident-hazard-fill",
+          type: "fill",
+          source: sourceId,
+          paint: {
+            "fill-color": [
+              "match",
+              ["get", "hazard_type"],
+              "flood", "#0a9fb5",
+              "landslide", "#8b5e34",
+              "#c8372d",
+            ],
+            "fill-opacity": [
+              "match", ["get", "risk_level"],
+              "high", 0.34,
+              "medium", 0.25,
+              0.18,
+            ],
+          },
+        });
+      }
 
-    if (!map.getLayer("resident-hazard-outline")) {
-      map.addLayer({
-        id: "resident-hazard-outline",
-        type: "line",
-        source: sourceId,
-        paint: {
-          "line-color": [
-            "match",
-            ["get", "hazard_type"],
-            "flood", "#087e99",
-            "landslide", "#684323",
-            "#a82e27",
-          ],
-          "line-width": 2.5,
-        },
-      });
-    }
+      if (!map.getLayer("resident-hazard-outline")) {
+        map.addLayer({
+          id: "resident-hazard-outline",
+          type: "line",
+          source: sourceId,
+          paint: {
+            "line-color": [
+              "match",
+              ["get", "hazard_type"],
+              "flood", "#087e99",
+              "landslide", "#684323",
+              "#a82e27",
+            ],
+            "line-width": 2.5,
+          },
+        });
+      }
 
-    if (!map.getLayer("resident-hazard-labels")) {
-      map.addLayer({
-        id: "resident-hazard-labels",
-        type: "symbol",
-        source: sourceId,
-        minzoom: 10,
-        maxzoom: 14,
-        layout: {
-          "text-field": [
-            "concat",
-            ["case", ["==", ["get", "hazard_type"], "flood"], "Flood zone", "Landslide zone"],
-            " · ",
-            ["to-string", ["get", "risk_level"]],
-          ],
-          "text-font": ["Open Sans Semibold", "Arial Unicode MS Regular"],
-          "text-size": 12,
-          "text-max-width": 12,
-          "text-padding": 8,
-          "text-allow-overlap": false,
-          "text-ignore-placement": false,
-        },
-        paint: {
-          "text-color": [
-            "match", ["get", "hazard_type"],
-            "flood", "#075b70",
-            "landslide", "#553719",
-            "#81251f",
-          ],
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 1.5,
-        },
-      });
+      if (!map.getLayer("resident-hazard-labels")) {
+        map.addLayer({
+          id: "resident-hazard-labels",
+          type: "symbol",
+          source: sourceId,
+          minzoom: 10,
+          maxzoom: 14,
+          layout: {
+            "text-field": [
+              "concat",
+              ["case", ["==", ["get", "hazard_type"], "flood"], "Flood zone", "Landslide zone"],
+              " · ",
+              ["to-string", ["get", "risk_level"]],
+            ],
+            "text-font": ["Open Sans Semibold", "Arial Unicode MS Regular"],
+            "text-size": 12,
+            "text-max-width": 12,
+            "text-padding": 8,
+            "text-allow-overlap": false,
+            "text-ignore-placement": false,
+          },
+          paint: {
+            "text-color": [
+              "match", ["get", "hazard_type"],
+              "flood", "#075b70",
+              "landslide", "#553719",
+              "#81251f",
+            ],
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 1.5,
+          },
+        });
+      }
+    } catch (err) {
+      console.warn("Error updating hazard zones layer:", err);
+      return;
     }
 
     const handleZoneClick = (event) => {
@@ -899,24 +1043,32 @@ const ResidentHome = () => {
     };
 
     const handleMouseEnter = () => {
-      map.getCanvas().style.cursor = "pointer";
+      try {
+        map.getCanvas().style.cursor = "pointer";
+      } catch (e) { }
     };
     const handleMouseLeave = () => {
-      map.getCanvas().style.cursor = pickingLocationRef.current
-        ? "crosshair"
-        : "";
+      try {
+        map.getCanvas().style.cursor = pickingLocationRef.current
+          ? "crosshair"
+          : "";
+      } catch (e) { }
     };
 
-    map.on("click", "resident-hazard-fill", handleZoneClick);
-    map.on("mouseenter", "resident-hazard-fill", handleMouseEnter);
-    map.on("mouseleave", "resident-hazard-fill", handleMouseLeave);
+    try {
+      map.on("click", "resident-hazard-fill", handleZoneClick);
+      map.on("mouseenter", "resident-hazard-fill", handleMouseEnter);
+      map.on("mouseleave", "resident-hazard-fill", handleMouseLeave);
+    } catch (e) { }
 
     return () => {
-      map.off("click", "resident-hazard-fill", handleZoneClick);
-      map.off("mouseenter", "resident-hazard-fill", handleMouseEnter);
-      map.off("mouseleave", "resident-hazard-fill", handleMouseLeave);
+      try {
+        map.off("click", "resident-hazard-fill", handleZoneClick);
+        map.off("mouseenter", "resident-hazard-fill", handleMouseEnter);
+        map.off("mouseleave", "resident-hazard-fill", handleMouseLeave);
+      } catch (e) { }
     };
-  }, [filteredHazardZones, mapLoaded, pickingLocation]);
+  }, [filteredHazardZones, mapLoaded, pickingLocation, mapStyle]);
 
   // Put photo-bearing hazard reports on the map as labeled, clickable tags.
   useEffect(() => {
@@ -938,9 +1090,9 @@ const ResidentHome = () => {
       const blocked = isBlockedRoadReport(report);
 
       const closedRoadNames = Array.isArray(report.closed_roads)
-      ? report.closed_roads
-      : [];
-      
+        ? report.closed_roads
+        : [];
+
       const element = document.createElement("button");
       element.type = "button";
       element.className = blocked
@@ -965,6 +1117,13 @@ const ResidentHome = () => {
 
       element.append(iconElement, label);
 
+      element.addEventListener("click", () => {
+        highlightAndOpenSavedReport(map, savedReportHighlightRef, {
+          ...report,
+          closed_roads: closedRoadNames.length > 0 ? closedRoadNames : report.closed_roads,
+        });
+      });
+
       const marker = new mapboxgl.Marker({ element, anchor: "bottom" })
         .setLngLat(coordinates)
         .setPopup(
@@ -988,10 +1147,38 @@ const ResidentHome = () => {
     return () => {
       cancelAnimationFrame(flowFrameRef.current);
       flowFrameRef.current = null;
+      if (savedReportHighlightRef.current) {
+        savedReportHighlightRef.current.remove();
+        savedReportHighlightRef.current = null;
+      }
       hazardMarkersRef.current.forEach((marker) => marker.remove());
       hazardMarkersRef.current = [];
     };
   }, [hazardReports, roads, mapLoaded]);
+
+  // Deep-link / notification opening a saved hazard report on the map
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const targetId = params.get("hazard") || params.get("reportId") || params.get("hazardId");
+    if (!targetId || !mapLoaded) return;
+
+    let targetReport = hazardReports.find((r) => String(r.id) === targetId);
+    if (targetReport && mapRef.current) {
+      highlightAndOpenSavedReport(mapRef.current, savedReportHighlightRef, targetReport);
+      return;
+    }
+
+    if (api && typeof api.getHazardReports === "function" && mapRef.current) {
+      api.getHazardReports("all")
+        .then((all) => {
+          const found = all?.find((r) => String(r.id) === targetId);
+          if (found && mapRef.current) {
+            highlightAndOpenSavedReport(mapRef.current, savedReportHighlightRef, found);
+          }
+        })
+        .catch(() => { });
+    }
+  }, [mapLoaded, hazardReports]);
 
   // --------------------------------------------------
   // Restore the resident saved on this device
@@ -1021,7 +1208,7 @@ const ResidentHome = () => {
           setMyCenter(match);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // --------------------------------------------------
@@ -1043,8 +1230,8 @@ const ResidentHome = () => {
             result.state === "granted"
               ? "granted"
               : result.state === "denied"
-              ? "denied"
-              : "unknown"
+                ? "denied"
+                : "unknown"
           );
         };
 
@@ -1052,7 +1239,7 @@ const ResidentHome = () => {
 
         result.onchange = updatePermission;
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // --------------------------------------------------
@@ -1102,31 +1289,56 @@ const ResidentHome = () => {
 
     map.on("load", () => setMapLoaded(true));
 
+    map.on("style.load", () => {
+      setMapLoaded(true);
+      if (accuracyCircleStateRef.current) {
+        const { lng, lat, accuracy } = accuracyCircleStateRef.current;
+        setOrUpdateAccuracyCircle(map, lng, lat, accuracy);
+      }
+    });
+
     map.on("error", (event) => {
       console.error("Mapbox error:", event);
     });
 
-    // Clicking the map while reporting a hazard.
-    //
-    // This listener is only ever registered once (this effect
-    // has an empty dependency array), so it must NOT read
-    // `pickingLocation` directly - that would always see the
-    // value from the first render. Read pickingLocationRef.current
-    // instead, which is kept up to date by a separate effect.
+    // Clicking the map while reporting a hazard or requesting rescue.
     map.on("click", (e) => {
       if (!pickingLocationRef.current) {
         return;
       }
 
-      setPendingReportLocation({
+      const loc = {
         lat: e.lngLat.lat,
         lng: e.lngLat.lng,
-      });
+      };
 
-      setPickingLocation(false);
+      if (pickingPurposeRef.current === "rescue") {
+        setRescueCoordinates(loc);
+        setRescueAlertOpen(true);
+        setPickingLocation(false);
+        setOrUpdateSelectedLocationMarker(map, selectedLocationMarkerRef, loc, (updatedLoc) => {
+          setRescueCoordinates(updatedLoc);
+        });
+      } else {
+        setPendingReportLocation(loc);
+        setPickingLocation(false);
+        setOrUpdateSelectedLocationMarker(map, selectedLocationMarkerRef, loc, (updatedLoc) => {
+          setPendingReportLocation(updatedLoc);
+        });
+      }
     });
 
     return () => {
+      if (selectedLocationMarkerRef.current) {
+        selectedLocationMarkerRef.current.remove();
+        selectedLocationMarkerRef.current = null;
+      }
+      if (savedReportHighlightRef.current) {
+        savedReportHighlightRef.current.remove();
+        savedReportHighlightRef.current = null;
+      }
+      removeAccuracyCircle(map);
+
       hazardMarkersRef.current.forEach((marker) => marker.remove());
       evacuationMarkersRef.current.forEach((marker) => marker.remove());
       entranceMarkersRef.current.forEach((marker) => marker.remove());
@@ -1149,21 +1361,26 @@ const ResidentHome = () => {
     const map = mapRef.current;
 
     if (!map || !mapLoaded || !map.isStyleLoaded()) return;
-    if (map.getLayer("evacway-buildings")) return;
 
-    map.addLayer({
-      id: "evacway-buildings",
-      type: "fill",
-      source: "composite",
-      "source-layer": "building",
-      minzoom: 12,
-      paint: {
-        "fill-color": "#d6d3d1",
-        "fill-opacity": 0.65,
-        "fill-outline-color": "#b8b5b2",
-      },
-    });
-  }, [mapLoaded]);
+    try {
+      if (map.getLayer("evacway-buildings")) return;
+
+      map.addLayer({
+        id: "evacway-buildings",
+        type: "fill",
+        source: "composite",
+        "source-layer": "building",
+        minzoom: 12,
+        paint: {
+          "fill-color": "#d6d3d1",
+          "fill-opacity": 0.65,
+          "fill-outline-color": "#b8b5b2",
+        },
+      });
+    } catch (err) {
+      console.warn("Error adding evacway buildings:", err);
+    }
+  }, [mapLoaded, mapStyle]);
 
   // --------------------------------------------------
   // Change map style
@@ -1213,7 +1430,7 @@ const ResidentHome = () => {
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded) {
+    if (!map || !mapLoaded || !map.isStyleLoaded()) {
       return;
     }
 
@@ -1222,34 +1439,39 @@ const ResidentHome = () => {
 
     const data = roads || EMPTY_FEATURE_COLLECTION;
 
-    const source = map.getSource(sourceId);
+    try {
+      const source = map.getSource(sourceId);
 
-    if (source) {
-      source.setData(data);
-    } else {
-      map.addSource(sourceId, {
-        type: "geojson",
-        data,
-      });
+      if (source) {
+        source.setData(data);
+      } else {
+        map.addSource(sourceId, {
+          type: "geojson",
+          data,
+        });
 
-      map.addLayer({
-        id: layerId,
-        type: "line",
-        source: sourceId,
+        map.addLayer({
+          id: layerId,
+          type: "line",
+          source: sourceId,
 
-        paint: {
-          "line-color": [
-            "case",
-            ["==", ["get", "is_closed"], true],
-            "#dc2626",
-            "#94a3b8",
-          ],
+          paint: {
+            "line-color": [
+              "case",
+              ["==", ["get", "is_closed"], true],
+              "#dc2626",
+              "#94a3b8",
+            ],
 
-          "line-width": ["case", ["==", ["get", "is_closed"], true], 4, 2],
+            "line-width": ["case", ["==", ["get", "is_closed"], true], 4, 2],
 
-          "line-opacity": ["case", ["==", ["get", "is_closed"], true], 0.9, 0.5],
-        },
-      });
+            "line-opacity": ["case", ["==", ["get", "is_closed"], true], 0.9, 0.5],
+          },
+        });
+      }
+    } catch (err) {
+      console.warn("Error updating roads layer:", err);
+      return;
     }
 
     function handleRoadClick(e) {
@@ -1262,9 +1484,9 @@ const ResidentHome = () => {
       const properties = feature.properties || {};
       const content = properties.is_closed
         ? createBlockedRoadPopup(
-            properties,
-            findReportForRoad(properties, hazardReports)
-          )
+          properties,
+          findReportForRoad(properties, hazardReports)
+        )
         : createRoadPopup(properties);
 
       new mapboxgl.Popup({
@@ -1275,12 +1497,16 @@ const ResidentHome = () => {
         .addTo(map);
     }
 
-    map.on("click", layerId, handleRoadClick);
+    try {
+      map.on("click", layerId, handleRoadClick);
+    } catch (e) { }
 
     return () => {
-      map.off("click", layerId, handleRoadClick);
+      try {
+        map.off("click", layerId, handleRoadClick);
+      } catch (e) { }
     };
-  }, [roads, hazardReports, mapLoaded]);
+  }, [roads, hazardReports, mapLoaded, mapStyle]);
 
   // --------------------------------------------------
   // Add Sogod boundary
@@ -1290,7 +1516,7 @@ const ResidentHome = () => {
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded) {
+    if (!map || !mapLoaded || !map.isStyleLoaded()) {
       return;
     }
 
@@ -1299,29 +1525,33 @@ const ResidentHome = () => {
 
     const data = sogodBoundary || EMPTY_FEATURE_COLLECTION;
 
-    const source = map.getSource(sourceId);
+    try {
+      const source = map.getSource(sourceId);
 
-    if (source) {
-      source.setData(data);
-    } else {
-      map.addSource(sourceId, {
-        type: "geojson",
-        data,
-      });
+      if (source) {
+        source.setData(data);
+      } else {
+        map.addSource(sourceId, {
+          type: "geojson",
+          data,
+        });
 
-      map.addLayer({
-        id: layerId,
-        type: "line",
-        source: sourceId,
+        map.addLayer({
+          id: layerId,
+          type: "line",
+          source: sourceId,
 
-        paint: {
-          "line-color": "#1e3a8a",
-          "line-width": 2,
-          "line-dasharray": [6, 4],
-        },
-      });
+          paint: {
+            "line-color": "#1e3a8a",
+            "line-width": 2,
+            "line-dasharray": [6, 4],
+          },
+        });
+      }
+    } catch (err) {
+      console.warn("Error updating sogod boundary layer:", err);
     }
-  }, [sogodBoundary, mapLoaded]);
+  }, [sogodBoundary, mapLoaded, mapStyle]);
 
   // --------------------------------------------------
   // Fit map to actual Sogod boundary
@@ -1408,7 +1638,7 @@ const ResidentHome = () => {
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded || !evacCenters) {
+    if (!map || !mapLoaded || !evacCenters || !map.isStyleLoaded()) {
       return;
     }
 
@@ -1451,48 +1681,57 @@ const ResidentHome = () => {
       features: validFeatures,
     };
 
-    const source = map.getSource(sourceId);
+    try {
+      const source = map.getSource(sourceId);
 
-    if (source) {
-      source.setData(data);
-    } else {
-      map.addSource(sourceId, {
-        type: "geojson",
-        data,
-      });
+      if (source) {
+        source.setData(data);
+      } else {
+        map.addSource(sourceId, {
+          type: "geojson",
+          data,
+        });
 
-      map.addLayer({
-        id: fillLayerId,
-        type: "fill",
-        source: sourceId,
+        map.addLayer({
+          id: fillLayerId,
+          type: "fill",
+          source: sourceId,
 
-        paint: {
-          "fill-color": "#2563eb",
-          "fill-opacity": 0.25,
-        },
-      });
+          paint: {
+            "fill-color": "#2563eb",
+            "fill-opacity": 0.25,
+          },
+        });
 
-      map.addLayer({
-        id: lineLayerId,
-        type: "line",
-        source: sourceId,
+        map.addLayer({
+          id: lineLayerId,
+          type: "line",
+          source: sourceId,
 
-        paint: {
-          "line-color": "#1d4ed8",
-          "line-width": 3,
-          "line-opacity": 0.9,
-        },
-      });
+          paint: {
+            "line-color": "#1d4ed8",
+            "line-width": 3,
+            "line-opacity": 0.9,
+          },
+        });
+      }
+    } catch (err) {
+      console.warn("Error updating evacuation centers layer:", err);
+      return;
     }
 
     const handleMouseEnter = () => {
-      map.getCanvas().style.cursor = "pointer";
+      try {
+        map.getCanvas().style.cursor = "pointer";
+      } catch (e) { }
     };
 
     const handleMouseLeave = () => {
-      map.getCanvas().style.cursor = pickingLocationRef.current
-        ? "crosshair"
-        : "";
+      try {
+        map.getCanvas().style.cursor = pickingLocationRef.current
+          ? "crosshair"
+          : "";
+      } catch (e) { }
     };
 
     const handleEvacCenterClick = (e) => {
@@ -1505,9 +1744,11 @@ const ResidentHome = () => {
       setSelectedCenter(feature);
     };
 
-    map.on("click", fillLayerId, handleEvacCenterClick);
-    map.on("mouseenter", fillLayerId, handleMouseEnter);
-    map.on("mouseleave", fillLayerId, handleMouseLeave);
+    try {
+      map.on("click", fillLayerId, handleEvacCenterClick);
+      map.on("mouseenter", fillLayerId, handleMouseEnter);
+      map.on("mouseleave", fillLayerId, handleMouseLeave);
+    } catch (e) { }
 
     validFeatures.forEach((center) => {
       const properties = center.properties || {};
@@ -1562,23 +1803,29 @@ const ResidentHome = () => {
     });
 
     const updateEntranceVisibility = () => {
-      const visible = map.getZoom() >= ROOM_MIN_ZOOM;
+      try {
+        const visible = map.getZoom() >= ROOM_MIN_ZOOM;
 
-      entranceMarkersRef.current.forEach((marker) => {
-        marker.getElement().style.visibility = visible ? "visible" : "hidden";
-      });
+        entranceMarkersRef.current.forEach((marker) => {
+          marker.getElement().style.visibility = visible ? "visible" : "hidden";
+        });
+      } catch (e) { }
     };
 
     updateEntranceVisibility();
-    map.on("zoomend", updateEntranceVisibility);
+    try {
+      map.on("zoomend", updateEntranceVisibility);
+    } catch (e) { }
 
     return () => {
-      map.off("click", fillLayerId, handleEvacCenterClick);
-      map.off("mouseenter", fillLayerId, handleMouseEnter);
-      map.off("mouseleave", fillLayerId, handleMouseLeave);
-      map.off("zoomend", updateEntranceVisibility);
+      try {
+        map.off("click", fillLayerId, handleEvacCenterClick);
+        map.off("mouseenter", fillLayerId, handleMouseEnter);
+        map.off("mouseleave", fillLayerId, handleMouseLeave);
+        map.off("zoomend", updateEntranceVisibility);
+      } catch (e) { }
     };
-  }, [evacCenters, mapLoaded]);
+  }, [evacCenters, mapLoaded, mapStyle]);
 
   // --------------------------------------------------
   // Evacuation center ICONS (zoomed out)
@@ -1627,9 +1874,8 @@ const ResidentHome = () => {
 
         const element = document.createElement("div");
 
-        element.className = `evacway-center-marker${
-          isMine ? " evacway-center-marker-mine" : ""
-        }`;
+        element.className = `evacway-center-marker${isMine ? " evacway-center-marker-mine" : ""
+          }`;
 
         const iconElement = document.createElement("span");
         iconElement.className = "evacway-center-icon";
@@ -1722,9 +1968,8 @@ const ResidentHome = () => {
 
         const element = document.createElement("div");
 
-        element.className = `evacway-room-marker${
-          isMine ? " evacway-room-marker-mine" : ""
-        }`;
+        element.className = `evacway-room-marker${isMine ? " evacway-room-marker-mine" : ""
+          }`;
 
         const iconElement = document.createElement("span");
         iconElement.className = "evacway-room-icon";
@@ -1815,6 +2060,13 @@ const ResidentHome = () => {
     marker.__isUserMarker = true;
 
     routeMarkersRef.current.push(marker);
+
+    setOrUpdateAccuracyCircle(
+      map,
+      userCoordinates[0],
+      userCoordinates[1],
+      myLocation.accuracy || 30
+    );
   }, [myLocation, mapLoaded]);
 
   // --------------------------------------------------
@@ -1824,7 +2076,7 @@ const ResidentHome = () => {
   useEffect(() => {
     const map = mapRef.current;
 
-    if (!map || !mapLoaded) {
+    if (!map || !mapLoaded || !map.isStyleLoaded()) {
       return;
     }
 
@@ -1835,16 +2087,20 @@ const ResidentHome = () => {
     cancelAnimationFrame(flowFrameRef.current);
     flowFrameRef.current = null;
 
-    if (map.getLayer(flowLayerId)) {
-      map.removeLayer(flowLayerId);
-    }
+    try {
+      if (map.getLayer(flowLayerId)) {
+        map.removeLayer(flowLayerId);
+      }
 
-    if (map.getLayer(layerId)) {
-      map.removeLayer(layerId);
-    }
+      if (map.getLayer(layerId)) {
+        map.removeLayer(layerId);
+      }
 
-    if (map.getSource(sourceId)) {
-      map.removeSource(sourceId);
+      if (map.getSource(sourceId)) {
+        map.removeSource(sourceId);
+      }
+    } catch (err) {
+      // Style may not be ready
     }
 
     routeMarkersRef.current
@@ -1882,37 +2138,42 @@ const ResidentHome = () => {
       return;
     }
 
-    map.addSource(sourceId, {
-      type: "geojson",
+    try {
+      map.addSource(sourceId, {
+        type: "geojson",
 
-      data: {
-        type: "Feature",
+        data: {
+          type: "Feature",
 
-        geometry: {
-          type: "LineString",
-          coordinates: routeCoordinates,
+          geometry: {
+            type: "LineString",
+            coordinates: routeCoordinates,
+          },
+
+          properties: {},
+        },
+      });
+
+      map.addLayer({
+        id: layerId,
+        type: "line",
+        source: sourceId,
+
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
         },
 
-        properties: {},
-      },
-    });
-
-    map.addLayer({
-      id: layerId,
-      type: "line",
-      source: sourceId,
-
-      layout: {
-        "line-cap": "round",
-        "line-join": "round",
-      },
-
-      paint: {
-        "line-color": "#2563eb",
-        "line-width": 5,
-        "line-opacity": 0.9,
-      },
-    });
+        paint: {
+          "line-color": "#2563eb",
+          "line-width": 5,
+          "line-opacity": 0.9,
+        },
+      });
+    } catch (err) {
+      console.warn("Error drawing route layer:", err);
+      return;
+    }
 
     const destination = route.evacuation_center;
 
@@ -1931,18 +2192,22 @@ const ResidentHome = () => {
       return;
     }
 
-    map.addLayer({
-      id: flowLayerId,
-      type: "line",
-      source: sourceId,
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: {
-        "line-color": "#ffffff",
-        "line-width": 2,
-        "line-opacity": 0.85,
-        "line-dasharray": [0, 4, 3],
-      },
-    });
+    try {
+      map.addLayer({
+        id: flowLayerId,
+        type: "line",
+        source: sourceId,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": 2,
+          "line-opacity": 0.85,
+          "line-dasharray": [0, 4, 3],
+        },
+      });
+    } catch (err) {
+      console.warn("Error adding route flow layer:", err);
+    }
 
     const destinationElement = createSimpleMarker(
       "evacuation-destination-marker"
@@ -1954,9 +2219,8 @@ const ResidentHome = () => {
     destinationName.textContent = destination.name || "Evacuation Center";
 
     const destinationInfo = document.createElement("div");
-    destinationInfo.textContent = `${route.distance_km ?? "?"} km away - about ${
-      route.estimated_time_min ?? "?"
-    } min`;
+    destinationInfo.textContent = `${route.distance_km ?? "?"} km away - about ${route.estimated_time_min ?? "?"
+      } min`;
 
     destinationPopupContent.appendChild(destinationName);
     destinationPopupContent.appendChild(destinationInfo);
@@ -2003,18 +2267,22 @@ const ResidentHome = () => {
       let lastFrame = -1;
 
       const animateRoute = (timestamp) => {
-        if (mapRef.current !== map || !map.isStyleLoaded() || !map.getLayer(flowLayerId)) {
+        try {
+          if (mapRef.current !== map || !map.isStyleLoaded() || !map.getLayer(flowLayerId)) {
+            flowFrameRef.current = null;
+            return;
+          }
+
+          const frame = Math.floor(timestamp / 60) % sequence.length;
+          if (frame !== lastFrame) {
+            map.setPaintProperty(flowLayerId, "line-dasharray", sequence[frame]);
+            lastFrame = frame;
+          }
+
+          flowFrameRef.current = requestAnimationFrame(animateRoute);
+        } catch (e) {
           flowFrameRef.current = null;
-          return;
         }
-
-        const frame = Math.floor(timestamp / 60) % sequence.length;
-        if (frame !== lastFrame) {
-          map.setPaintProperty(flowLayerId, "line-dasharray", sequence[frame]);
-          lastFrame = frame;
-        }
-
-        flowFrameRef.current = requestAnimationFrame(animateRoute);
       };
 
       flowFrameRef.current = requestAnimationFrame(animateRoute);
@@ -2023,11 +2291,15 @@ const ResidentHome = () => {
     return () => {
       cancelAnimationFrame(flowFrameRef.current);
       flowFrameRef.current = null;
-      if (map.getLayer(flowLayerId)) {
-        map.removeLayer(flowLayerId);
+      try {
+        if (map.isStyleLoaded() && map.getLayer(flowLayerId)) {
+          map.removeLayer(flowLayerId);
+        }
+      } catch (err) {
+        // ignore
       }
     };
-  }, [route, mapLoaded]);
+  }, [route, mapLoaded, mapStyle]);
 
   // --------------------------------------------------
   // Enable browser location
@@ -2077,7 +2349,7 @@ const ResidentHome = () => {
   // to the nearest one.
   // --------------------------------------------------
 
-  function handleFindRoute() {
+  function handleFindRoute(targetCenterId = null) {
     setRouteError("");
     setRoute(null);
     routeDataRef.current = null;
@@ -2089,7 +2361,10 @@ const ResidentHome = () => {
       return;
     }
 
-    const assignedCenterId = myCenter?.evacuation_center?.id ?? null;
+    const assignedCenterId =
+      targetCenterId != null
+        ? targetCenterId
+        : (myCenter?.evacuation_center?.id ?? null);
 
     setFindingRoute(true);
 
@@ -2099,21 +2374,24 @@ const ResidentHome = () => {
           const result =
             assignedCenterId != null
               ? await api.getEvacuationRoute(
-                  pos.coords.latitude,
-                  pos.coords.longitude,
-                  assignedCenterId
-                )
+                pos.coords.latitude,
+                pos.coords.longitude,
+                assignedCenterId
+              )
               : await api.getEvacuationRoute(
-                  pos.coords.latitude,
-                  pos.coords.longitude
-                );
+                pos.coords.latitude,
+                pos.coords.longitude
+              );
 
           setMyLocation({
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
           });
 
-          setRouteIsMine(assignedCenterId != null);
+          setRouteIsMine(
+            myCenter?.evacuation_center?.id != null &&
+            String(assignedCenterId) === String(myCenter.evacuation_center.id)
+          );
 
           let routeToDisplay = result;
           if (result.evacuation_center) {
@@ -2128,7 +2406,7 @@ const ResidentHome = () => {
             } catch (directionsError) {
               setRouteError(
                 directionsError.message ||
-                  "Turn-by-turn directions are unavailable. Showing the available evacuation route."
+                "Turn-by-turn directions are unavailable. Showing the available evacuation route."
               );
             }
           } else {
@@ -2346,16 +2624,22 @@ const ResidentHome = () => {
       return;
     }
 
-    if (map.getLayer("evacuation-route-flow")) {
-      map.removeLayer("evacuation-route-flow");
-    }
+    try {
+      if (map.isStyleLoaded()) {
+        if (map.getLayer("evacuation-route-flow")) {
+          map.removeLayer("evacuation-route-flow");
+        }
 
-    if (map.getLayer("evacuation-route-line")) {
-      map.removeLayer("evacuation-route-line");
-    }
+        if (map.getLayer("evacuation-route-line")) {
+          map.removeLayer("evacuation-route-line");
+        }
 
-    if (map.getSource("evacuation-route")) {
-      map.removeSource("evacuation-route");
+        if (map.getSource("evacuation-route")) {
+          map.removeSource("evacuation-route");
+        }
+      }
+    } catch (err) {
+      // ignore
     }
 
     routeMarkersRef.current
@@ -2387,26 +2671,25 @@ const ResidentHome = () => {
         const loc = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
         };
 
         setMyLocation(loc);
-
         setLocationPermission("granted");
+        accuracyCircleStateRef.current = loc;
 
         const map = mapRef.current;
 
         if (map) {
           map.flyTo({
             center: [loc.lng, loc.lat],
-
             zoom: 16,
-
             pitch: 0,
             bearing: 0,
-
             duration: 1000,
             essential: true,
           });
+          setOrUpdateAccuracyCircle(map, loc.lng, loc.lat, loc.accuracy || 30);
         }
 
         setLocating(false);
@@ -2439,20 +2722,99 @@ const ResidentHome = () => {
   // --------------------------------------------------
 
   function handleReportMapClick() {
+    pickingPurposeRef.current = "hazard";
     setPickingLocation(true);
     setPendingReportLocation(null);
   }
 
+  function handleReportLocationChange(newLoc) {
+    setPendingReportLocation(newLoc);
+    accuracyCircleStateRef.current = newLoc;
+    const map = mapRef.current;
+    if (map) {
+      map.flyTo({
+        center: [newLoc.lng, newLoc.lat],
+        zoom: Math.max(map.getZoom(), 16),
+        essential: true,
+      });
+      setMyLocation({ lat: newLoc.lat, lng: newLoc.lng, accuracy: newLoc.accuracy });
+      setOrUpdateAccuracyCircle(map, newLoc.lng, newLoc.lat, newLoc.accuracy || 30);
+      setOrUpdateSelectedLocationMarker(map, selectedLocationMarkerRef, newLoc, (updatedLoc) => {
+        setPendingReportLocation(updatedLoc);
+      });
+    }
+  }
+
+  function handleCloseReportModal() {
+    setPendingReportLocation(null);
+    if (selectedLocationMarkerRef.current) {
+      selectedLocationMarkerRef.current.remove();
+      selectedLocationMarkerRef.current = null;
+    }
+    accuracyCircleStateRef.current = null;
+    removeAccuracyCircle(mapRef.current);
+  }
+
   function handleReportSubmitted() {
     setPendingReportLocation(null);
-
     setPickingLocation(false);
+    if (selectedLocationMarkerRef.current) {
+      selectedLocationMarkerRef.current.remove();
+      selectedLocationMarkerRef.current = null;
+    }
+    accuracyCircleStateRef.current = null;
+    removeAccuracyCircle(mapRef.current);
 
     setReportConfirmation(
       "Thank you - your report has been submitted for review."
     );
 
     setTimeout(() => setReportConfirmation(""), 4000);
+  }
+
+  function handleCloseRescueModal() {
+    setRescueAlertOpen(false);
+    if (selectedLocationMarkerRef.current) {
+      selectedLocationMarkerRef.current.remove();
+      selectedLocationMarkerRef.current = null;
+    }
+    accuracyCircleStateRef.current = null;
+    removeAccuracyCircle(mapRef.current);
+  }
+
+  function handleRescueSubmitted() {
+    setRescueAlertOpen(false);
+    if (selectedLocationMarkerRef.current) {
+      selectedLocationMarkerRef.current.remove();
+      selectedLocationMarkerRef.current = null;
+    }
+    accuracyCircleStateRef.current = null;
+    removeAccuracyCircle(mapRef.current);
+    setReportConfirmation("Rescue alert sent to response staff.");
+    window.setTimeout(() => setReportConfirmation(""), 5000);
+  }
+
+  function handlePinRescueOnMap() {
+    pickingPurposeRef.current = "rescue";
+    setRescueAlertOpen(false);
+    setPickingLocation(true);
+  }
+
+  function handleRescueLocationCaptured(captured) {
+    accuracyCircleStateRef.current = captured;
+    const map = mapRef.current;
+    if (map) {
+      map.flyTo({
+        center: [captured.lng, captured.lat],
+        zoom: 16,
+        essential: true,
+      });
+      setMyLocation({ lat: captured.lat, lng: captured.lng, accuracy: captured.accuracy });
+      setOrUpdateAccuracyCircle(map, captured.lng, captured.lat, captured.accuracy || 30);
+      setOrUpdateSelectedLocationMarker(map, selectedLocationMarkerRef, captured, (updatedLoc) => {
+        setRescueCoordinates(updatedLoc);
+      });
+    }
   }
 
   // --------------------------------------------------
@@ -2772,21 +3134,21 @@ const ResidentHome = () => {
     selectedCenterId == null
       ? []
       : rooms
-          .filter(
-            (room) =>
-              String(room.evacuation_center_id) === String(selectedCenterId)
+        .filter(
+          (room) =>
+            String(room.evacuation_center_id) === String(selectedCenterId)
+        )
+        .slice()
+        .sort((a, b) =>
+          String(a.room_number ?? "").localeCompare(
+            String(b.room_number ?? ""),
+            undefined,
+            {
+              numeric: true,
+              sensitivity: "base",
+            }
           )
-          .slice()
-          .sort((a, b) =>
-            String(a.room_number ?? "").localeCompare(
-              String(b.room_number ?? ""),
-              undefined,
-              {
-                numeric: true,
-                sensitivity: "base",
-              }
-            )
-          );
+        );
 
   // --------------------------------------------------
   // Render
@@ -2796,38 +3158,240 @@ const ResidentHome = () => {
   const currentWalkingManeuver =
     route?.walking_steps?.[activeWalkingStep]?.maneuver || null;
 
+  const activeHazardCount = hazardReports.length;
+  const updatedTimeText = useMemo(() => {
+    const timestamp = hazardReportsQuery.dataUpdatedAt || Date.now();
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  }, [hazardReportsQuery.dataUpdatedAt]);
+
+  const selectedCenterDistance = useMemo(() => {
+    if (!myLocation || !selectedCenter) return null;
+    const geomCenter = getGeometryCenter(selectedCenter.geometry);
+    const props = selectedCenter.properties || {};
+    const coords =
+      geomCenter ||
+      getValidCoordinates([
+        props.longitude ?? props.lng,
+        props.latitude ?? props.lat,
+      ]);
+    if (!coords) return null;
+    const meters = getDistanceMeters([myLocation.lat, myLocation.lng], [coords[1], coords[0]]);
+    if (!Number.isFinite(meters)) return null;
+    if (meters >= 1000) {
+      return `${(meters / 1000).toFixed(1)} km away`;
+    }
+    return `${Math.round(meters)} m away`;
+  }, [myLocation, selectedCenter]);
+
+  // --------------------------------------------------
+  // Sheets: only one open at a time
+  // --------------------------------------------------
+
+  function openSheet(name) {
+    setLayersOpen(false);
+    setLegendOpen(false);
+    setMoreMenuOpen(name === "more");
+    setHelpOpen(name === "help");
+
+    if (selectedCenter) {
+      closeCenterDetails();
+    }
+  }
+
+  // --------------------------------------------------
+  // Shared UI pieces (used by desktop popovers AND the
+  // phone/tablet Help sheet)
+  // --------------------------------------------------
+
+  const statusChip = (
+    <div
+      className={`status-chip ${isMobile ? "compact" : ""}`}
+      role="status"
+      aria-live="polite"
+    >
+      <span
+        className={`status-chip-dot ${activeHazardCount > 0 ? "has-hazards" : "all-clear"
+          }`}
+        aria-hidden="true"
+      />
+      <span>
+        {isMobile
+          ? activeHazardCount === 0
+            ? "No danger reported right now"
+            : `${activeHazardCount} ${activeHazardCount === 1 ? "danger" : "dangers"
+            } reported nearby`
+          : `${activeHazardCount} active ${activeHazardCount === 1 ? "hazard" : "hazards"
+          } · Updated ${updatedTimeText}`}
+      </span>
+    </div>
+  );
+
+  const layerOptionsContent = (
+    <>
+      <div className="popover-section">
+        <div className="popover-section-label">Hazard Zones</div>
+        <button
+          type="button"
+          onClick={() => setVisibleLayers((v) => ({ ...v, flood: !v.flood }))}
+          className={`layer-option-row ${visibleLayers.flood ? "active" : ""}`}
+          aria-pressed={!!visibleLayers.flood}
+        >
+          <div className="layer-option-left">
+            <FontAwesomeIcon icon={faWater} className="layer-icon-blue" />
+            <span>Flood Zones</span>
+          </div>
+          <span className="layer-checkbox">{visibleLayers.flood ? "✓" : ""}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() =>
+            setVisibleLayers((v) => ({ ...v, landslide: !v.landslide }))
+          }
+          className={`layer-option-row ${visibleLayers.landslide ? "active" : ""}`}
+          aria-pressed={!!visibleLayers.landslide}
+        >
+          <div className="layer-option-left">
+            <FontAwesomeIcon icon={faMountain} className="layer-icon-amber" />
+            <span>Landslide Zones</span>
+          </div>
+          <span className="layer-checkbox">{visibleLayers.landslide ? "✓" : ""}</span>
+        </button>
+      </div>
+
+      <div className="popover-section">
+        <div className="popover-section-label">Map View</div>
+        <button
+          type="button"
+          onClick={() => handleMapStyleChange("street")}
+          className={`layer-option-row ${mapStyle === "street" ? "active" : ""}`}
+          aria-pressed={mapStyle === "street"}
+        >
+          <div className="layer-option-left">
+            <FontAwesomeIcon icon={faMapPin} />
+            <span>Street View</span>
+          </div>
+          <span className="layer-checkbox">{mapStyle === "street" ? "✓" : ""}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleMapStyleChange("satellite")}
+          className={`layer-option-row ${mapStyle === "satellite" ? "active" : ""}`}
+          aria-pressed={mapStyle === "satellite"}
+        >
+          <div className="layer-option-left">
+            <FontAwesomeIcon icon={faSatelliteDish} />
+            <span>Satellite</span>
+          </div>
+          <span className="layer-checkbox">{mapStyle === "satellite" ? "✓" : ""}</span>
+        </button>
+      </div>
+    </>
+  );
+
+  const legendContent = (
+    <div className="legend-groups">
+      {/* Hazards */}
+      <div className="legend-group">
+        <div className="legend-group-title">Hazards</div>
+        <div className="legend-item">
+          <div className="legend-icon-wrapper hazard-flood">
+            <FontAwesomeIcon icon={faWater} />
+          </div>
+          <span>Flood hazard</span>
+        </div>
+        <div className="legend-item">
+          <div className="legend-icon-wrapper hazard-landslide">
+            <FontAwesomeIcon icon={faMountain} />
+          </div>
+          <span>Landslide hazard</span>
+        </div>
+        <div className="legend-item">
+          <div className="legend-icon-wrapper hazard-report">
+            <FontAwesomeIcon icon={faTriangleExclamation} />
+          </div>
+          <span>Hazard report</span>
+        </div>
+      </div>
+
+      {/* Roads */}
+      <div className="legend-group">
+        <div className="legend-group-title">Roads</div>
+        <div className="legend-item">
+          <div className="legend-icon-wrapper road-blocked">
+            <FontAwesomeIcon icon={faBan} />
+          </div>
+          <span>Blocked road</span>
+        </div>
+        <div className="legend-item">
+          <div className="legend-icon-wrapper road-closed">
+            <span className="legend-line-closed" />
+          </div>
+          <span>Closed road</span>
+        </div>
+      </div>
+
+      {/* Places */}
+      <div className="legend-group">
+        <div className="legend-group-title">Places</div>
+        <div className="legend-item">
+          <div className="legend-icon-wrapper place-center">
+            <FontAwesomeIcon icon={faBuildingColumns} />
+          </div>
+          <span>Evacuation center</span>
+        </div>
+        <div className="legend-item">
+          <div className="legend-icon-wrapper place-room">
+            <FontAwesomeIcon icon={faDoorOpen} />
+          </div>
+          <span>Room</span>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="resident-home">
       {/* Mapbox map */}
       <div ref={mapContainerRef} className="map-container" />
 
-      {/* Top bar */}
-      <div className="top-bar">
+      {/* Header (slim 48px bar on phones) */}
+      <header className="top-bar">
         <div className="brand">EvacWay</div>
 
-        <Link to="/" className="home-btn">
-          <FontAwesomeIcon icon={faHome} />
+        <div className="top-bar-actions">
+          <Link
+            to="/"
+            className="home-ghost-btn"
+            aria-label="Go to home page"
+            title="Home"
+          >
+            <FontAwesomeIcon icon={faHome} />
+            <span className="home-ghost-label">Home</span>
+          </Link>
+        </div>
+      </header>
 
-          {!isMobile && <span>Home</span>}
-        </Link>
-      </div>
+      {/* Desktop: status chip centered under the header */}
+      {!isMobile && statusChip}
 
-      {/* Search */}
-      <div
-        className={
-          isMobile
-            ? "resident-search-container mobile"
-            : "resident-search-container"
-        }
-      >
+      {/* Top area: search (+ status chip on phones/tablets, filter chips on desktop) */}
+      <div className={`top-left-panel ${isMobile ? "compact" : ""}`}>
         <div className="resident-search-box">
           <FontAwesomeIcon
             icon={faMagnifyingGlass}
             className="resident-search-icon"
+            aria-hidden="true"
           />
 
           <input
-            type="text"
+            type="search"
+            enterKeyHint="search"
             value={searchText}
             onChange={(e) => {
               setSearchText(e.target.value);
@@ -2838,12 +3402,28 @@ const ResidentHome = () => {
                 setShowSearchResults(true);
               }
             }}
-            placeholder="Search evacuation center or barangay"
+            placeholder="Search centers or barangays"
             className="resident-search-input"
+            aria-label="Search centers or barangays"
           />
 
           {searching && (
             <span className="resident-search-loading">Searching...</span>
+          )}
+
+          {searchText && (
+            <button
+              type="button"
+              className="search-clear-btn"
+              onClick={() => {
+                setSearchText("");
+                setSearchResults([]);
+                setShowSearchResults(false);
+              }}
+              aria-label="Clear search"
+            >
+              <FontAwesomeIcon icon={faXmark} />
+            </button>
           )}
         </div>
 
@@ -2856,7 +3436,7 @@ const ResidentHome = () => {
                 onClick={() => zoomToSearchResult(result)}
               >
                 <FontAwesomeIcon
-                  icon={result.type === "barangay" ? faLocationDot : faMapPin}
+                  icon={result.type === "barangay" ? faLocationDot : faBuildingColumns}
                   className="resident-search-result-icon"
                 />
 
@@ -2877,326 +3457,555 @@ const ResidentHome = () => {
               No evacuation center or barangay found.
             </div>
           )}
-      </div>
 
-      {/* Map Options */}
-      <div className={isMobile ? "map-options mobile" : "map-options"}>
-        <button
-          onClick={() => setMapOptionsOpen((value) => !value)}
-          className={
-            mapOptionsOpen ? "map-options-toggle active" : "map-options-toggle"
-          }
-          title="Map options"
-        >
-          <FontAwesomeIcon icon={faSliders} />
+        {isMobile ? (
+          statusChip
+        ) : (
+          /* Desktop: horizontally scrollable filter chips */
+          <div className="filter-chips-row" role="toolbar" aria-label="Map layer filters">
+            <button
+              type="button"
+              className={`filter-chip ${showCentersLayer ? "active" : ""}`}
+              onClick={() => setShowCentersLayer((prev) => !prev)}
+              aria-pressed={showCentersLayer}
+            >
+              <FontAwesomeIcon icon={faBuildingColumns} />
+              <span>Evacuation Centers</span>
+            </button>
 
-          {!isMobile && <span>Map Options</span>}
-        </button>
+            <button
+              type="button"
+              className={`filter-chip ${showHazardsLayer ? "active" : ""}`}
+              onClick={() => setShowHazardsLayer((prev) => !prev)}
+              aria-pressed={showHazardsLayer}
+            >
+              <FontAwesomeIcon icon={faTriangleExclamation} />
+              <span>Hazards</span>
+            </button>
 
-        {mapOptionsOpen && (
-          <div className="map-options-dropdown">
-            {/* Hazards */}
-            <div className="map-options-group">
-              <div className="map-options-label">Hazards</div>
-
-              <button
-                onClick={() =>
-                  setVisibleLayers((v) => ({
-                    ...v,
-                    flood: !v.flood,
-                  }))
-                }
-                className={
-                  visibleLayers.flood
-                    ? "map-options-item flood-active"
-                    : "map-options-item"
-                }
-              >
-                <FontAwesomeIcon icon={faWater} />
-
-                <span>Flood</span>
-
-                {visibleLayers.flood && (
-                  <span className="map-options-check">✓</span>
-                )}
-              </button>
-
-              <button
-                onClick={() =>
-                  setVisibleLayers((v) => ({
-                    ...v,
-                    landslide: !v.landslide,
-                  }))
-                }
-                className={
-                  visibleLayers.landslide
-                    ? "map-options-item landslide-active"
-                    : "map-options-item"
-                }
-              >
-                <FontAwesomeIcon icon={faMountain} />
-
-                <span>Landslide</span>
-
-                {visibleLayers.landslide && (
-                  <span className="map-options-check">✓</span>
-                )}
-              </button>
-            </div>
-
-            {/* Map View */}
-            <div className="map-options-group">
-              <div className="map-options-label">Map View</div>
-
-              <button
-                onClick={() => handleMapStyleChange("street")}
-                className={
-                  mapStyle === "street"
-                    ? "map-options-item view-active"
-                    : "map-options-item"
-                }
-              >
-                <FontAwesomeIcon icon={faMapPin} />
-
-                <span>Street</span>
-
-                {mapStyle === "street" && (
-                  <span className="map-options-check">✓</span>
-                )}
-              </button>
-
-              <button
-                onClick={() => handleMapStyleChange("satellite")}
-                className={
-                  mapStyle === "satellite"
-                    ? "map-options-item view-active"
-                    : "map-options-item"
-                }
-              >
-                <FontAwesomeIcon icon={faSatelliteDish} />
-
-                <span>Satellite</span>
-
-                {mapStyle === "satellite" && (
-                  <span className="map-options-check">✓</span>
-                )}
-              </button>
-            </div>
+            <button
+              type="button"
+              className={`filter-chip ${showClosedRoadsLayer ? "active" : ""}`}
+              onClick={() => setShowClosedRoadsLayer((prev) => !prev)}
+              aria-pressed={showClosedRoadsLayer}
+            >
+              <FontAwesomeIcon icon={faBan} />
+              <span>Closed Roads</span>
+            </button>
           </div>
         )}
       </div>
 
-      {/* Evacuation center details */}
-      {selectedCenter && (
-        <aside className={isMobile ? "cd-panel mobile" : "cd-panel"}>
-          <header className="cd-header">
-            <div className="cd-badge">
-              <FontAwesomeIcon icon={faBuildingColumns} />
+      {/* Right control stack.
+          Phones/tablets: only "My location" + "Help", sitting above the dock.
+          Desktop: Locate, Layers, Legend. */}
+      <div
+        className={`right-control-stack ${isMobile ? "compact" : ""} ${isMobile && route ? "route-open" : ""
+          } ${isMobile && navigationActive ? "navigating" : ""}`}
+        role="group"
+        aria-label="Map controls"
+      >
+        <button
+          type="button"
+          onClick={handleLocateMe}
+          disabled={locating}
+          className="control-stack-btn"
+          title="My location"
+          aria-label="My location"
+        >
+          <FontAwesomeIcon icon={faLocationCrosshairs} spin={locating} />
+        </button>
+
+        {isMobile ? (
+          <button
+            type="button"
+            onClick={() => (helpOpen ? setHelpOpen(false) : openSheet("help"))}
+            className={`control-stack-btn ${helpOpen ? "active" : ""}`}
+            title="Help and map key"
+            aria-label="Help"
+            aria-expanded={helpOpen}
+          >
+            <FontAwesomeIcon icon={faCircleQuestion} />
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setLayersOpen((prev) => !prev);
+                setLegendOpen(false);
+              }}
+              className={`control-stack-btn ${layersOpen ? "active" : ""}`}
+              title="Map layers & view"
+              aria-label="Layers"
+              aria-expanded={layersOpen}
+            >
+              <FontAwesomeIcon icon={faLayerGroup} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setLegendOpen((prev) => !prev);
+                setLayersOpen(false);
+              }}
+              className={`control-stack-btn ${legendOpen ? "active" : ""}`}
+              title="Map key & legend"
+              aria-label="Legend"
+              aria-expanded={legendOpen}
+            >
+              <FontAwesomeIcon icon={faMapPin} />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Desktop: Layers popover */}
+      {layersOpen && !isMobile && (
+        <div className="layers-popover" role="dialog" aria-label="Map Layers">
+          <div className="popover-header">
+            <h4>Map Layers</h4>
+            <button
+              type="button"
+              className="popover-close-btn"
+              onClick={() => setLayersOpen(false)}
+              aria-label="Close layers"
+            >
+              <FontAwesomeIcon icon={faXmark} />
+            </button>
+          </div>
+
+          {layerOptionsContent}
+        </div>
+      )}
+
+      {/* Desktop: Legend popover */}
+      {legendOpen && !isMobile && (
+        <div className="legend-popover" role="dialog" aria-label="Map Legend">
+          <div className="popover-header">
+            <h4>Map Legend</h4>
+            <button
+              type="button"
+              className="popover-close-btn"
+              onClick={() => setLegendOpen(false)}
+              aria-label="Close legend"
+            >
+              <FontAwesomeIcon icon={faXmark} />
+            </button>
+          </div>
+
+          {legendContent}
+        </div>
+      )}
+
+      {/* Phones/tablets: Help bottom sheet (layers, map view and map key) */}
+      {helpOpen && isMobile && (
+        <>
+          <div
+            className="popover-backdrop"
+            onClick={() => setHelpOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            className="rh-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Help and map key"
+          >
+            <div className="sheet-handle" aria-hidden="true" />
+
+            <div className="popover-header">
+              <h4>Help &amp; map key</h4>
+              <button
+                type="button"
+                className="popover-close-btn"
+                onClick={() => setHelpOpen(false)}
+                aria-label="Close help"
+              >
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
             </div>
 
-            <div className="cd-heading">
-              <small>Evacuation center</small>
-              <h3>{selectedCenterName}</h3>
+            <div className="sheet-body">
+              <div className="popover-section">
+                <div className="popover-section-label">Show on map</div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowCentersLayer((prev) => !prev)}
+                  className={`layer-option-row ${showCentersLayer ? "active" : ""}`}
+                  aria-pressed={showCentersLayer}
+                >
+                  <div className="layer-option-left">
+                    <FontAwesomeIcon icon={faBuildingColumns} className="layer-icon-blue" />
+                    <span>Evacuation centers</span>
+                  </div>
+                  <span className="layer-checkbox">{showCentersLayer ? "✓" : ""}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowHazardsLayer((prev) => !prev)}
+                  className={`layer-option-row ${showHazardsLayer ? "active" : ""}`}
+                  aria-pressed={showHazardsLayer}
+                >
+                  <div className="layer-option-left">
+                    <FontAwesomeIcon icon={faTriangleExclamation} className="layer-icon-red" />
+                    <span>Reported dangers</span>
+                  </div>
+                  <span className="layer-checkbox">{showHazardsLayer ? "✓" : ""}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowClosedRoadsLayer((prev) => !prev)}
+                  className={`layer-option-row ${showClosedRoadsLayer ? "active" : ""}`}
+                  aria-pressed={showClosedRoadsLayer}
+                >
+                  <div className="layer-option-left">
+                    <FontAwesomeIcon icon={faBan} className="layer-icon-red" />
+                    <span>Closed roads</span>
+                  </div>
+                  <span className="layer-checkbox">{showClosedRoadsLayer ? "✓" : ""}</span>
+                </button>
+              </div>
+
+              {layerOptionsContent}
+
+              <div className="popover-section">
+                <div className="popover-section-label">Map key</div>
+                {legendContent}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Evacuation Center Bottom Card (bottom sheet on phones/tablets) */}
+      {selectedCenter && isMobile && (
+        <div
+          className="popover-backdrop"
+          onClick={closeCenterDetails}
+          aria-hidden="true"
+        />
+      )}
+      {selectedCenter && (
+        <div
+          className={`center-bottom-card ${isMobile ? "mobile" : ""}`}
+          role="dialog"
+          aria-label="Evacuation Center Details"
+        >
+          {isMobile && <div className="sheet-handle" aria-hidden="true" />}
+          <div className="center-card-header">
+            <div className="center-card-title-group">
+              <div className="center-card-name-row">
+                <h3>{selectedCenterName}</h3>
+                {selectedCenterIsMine ? (
+                  <span className="center-status-badge mine">Your Assigned Center</span>
+                ) : (
+                  <span className="center-status-badge open">Open Center</span>
+                )}
+              </div>
+              <div className="center-card-meta">
+                {selectedCenterDistance && (
+                  <span className="center-meta-item">
+                    <FontAwesomeIcon icon={faLocationCrosshairs} />
+                    <strong>{selectedCenterDistance}</strong>
+                  </span>
+                )}
+                {selectedCenterCapacity != null && (
+                  <span className="center-meta-item">
+                    Capacity: <strong>{selectedCenterCapacity} people</strong>
+                  </span>
+                )}
+                {selectedCenterBarangays.length > 0 && (
+                  <span className="center-meta-item">
+                    {selectedCenterBarangays
+                      .map((b) => displayEntityName(b.name))
+                      .join(", ")}
+                  </span>
+                )}
+              </div>
             </div>
 
             <button
               type="button"
-              className="cd-close"
+              className="center-card-close"
               onClick={closeCenterDetails}
-              aria-label="Close"
+              aria-label="Close details"
             >
               <FontAwesomeIcon icon={faXmark} />
             </button>
-          </header>
+          </div>
 
-          <div className="cd-body">
-            {selectedCenterIsMine && (
-              <span className="cd-pill">Your evacuation center</span>
-            )}
-
-            {selectedCenterIsMine && myCenter?.room?.room_number && (
-              <div className="cd-your-room">
-                <FontAwesomeIcon icon={faCircleCheck} />
-                <span>
-                  Your assigned room: <strong>{myCenter.room.room_number}</strong>
-                </span>
-              </div>
-            )}
-
-            <div className="cd-rows">
-              {selectedCenterBarangays.length > 0 && (
-                <div className="cd-row">
-                  <span>Barangay</span>
-                  <div className="cd-barangay-badges">
-                    {selectedCenterBarangays.map((barangay) => (
-                      <span
-                        key={barangay.id ?? barangay.name}
-                        style={{ "--barangay-color": barangay.color || "#2563eb" }}
-                      >
-                        {displayEntityName(barangay.name)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {selectedCenterCapacity != null && (
-                <div className="cd-row">
-                  <span>Capacity</span>
-                  <strong>{selectedCenterCapacity} people</strong>
-                </div>
-              )}
-
-              {selectedCenterBuildingMaterial && (
-                <div className="cd-row">
-                  <span>Building</span>
-                  <strong>{selectedCenterBuildingMaterial}</strong>
-                </div>
-              )}
+          {selectedCenterIsMine && myCenter?.room?.room_number && (
+            <div className="cd-your-room">
+              <FontAwesomeIcon icon={faCircleCheck} />
+              <span>
+                Your assigned room: <strong>{myCenter.room.room_number}</strong>
+              </span>
             </div>
+          )}
 
-            {selectedCenterAccessibility && (
-              <p className="cd-note">{selectedCenterAccessibility}</p>
-            )}
+          <div className="center-card-actions">
+            <button
+              type="button"
+              className="center-navigate-btn"
+              onClick={() => {
+                handleFindRoute(selectedCenterId);
+                closeCenterDetails();
+              }}
+              disabled={findingRoute || locationPermission === "denied"}
+            >
+              <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
+              <span>Navigate to this Center</span>
+            </button>
+          </div>
 
-            <h4 className="cd-section-title">
-              Rooms ({selectedCenterRooms.length})
-            </h4>
-
-            {selectedCenterRooms.length === 0 ? (
-              <div className="cd-empty">
-                No rooms have been added for this center yet.
+          {selectedCenterRooms.length > 0 && (
+            <div className="center-card-rooms-preview">
+              <div className="rooms-preview-header">
+                <span>Rooms ({selectedCenterRooms.length})</span>
               </div>
-            ) : (
-              <div className="cd-list">
+              <div className="rooms-preview-list">
                 {selectedCenterRooms.map((room, index) => {
                   const isMineRoom =
                     myCenter?.room?.id != null &&
                     String(myCenter.room.id) === String(room.id);
-
                   const isMapped =
                     room.latitude != null && room.longitude != null;
-
                   return (
                     <button
                       type="button"
                       key={room.id ?? `${room.room_number}-${index}`}
-                      className="cd-list-item"
+                      className={`room-preview-chip ${isMineRoom ? "is-mine" : ""}`}
                       onClick={() => handleRoomRowClick(room)}
                       disabled={!isMapped}
+                      title={
+                        isMapped
+                          ? `Zoom to room ${room.room_number}`
+                          : "Location not yet mapped"
+                      }
                     >
-                      <span className="cd-list-icon">
-                        <FontAwesomeIcon icon={faDoorOpen} />
-                      </span>
-
-                      <span className="cd-list-text">
-                        <strong>{room.room_number || "Room"}</strong>
-                        <small>
-                          {room.capacity != null
-                            ? `Capacity ${room.capacity}`
-                            : "Capacity unknown"}
-                          {!isMapped && " - location not yet mapped"}
-                        </small>
-                      </span>
-
-                      {isMineRoom && (
-                        <span className="cd-list-tag">Your room</span>
+                      <FontAwesomeIcon icon={faDoorOpen} />
+                      <span>{room.room_number || "Room"}</span>
+                      {room.capacity != null && (
+                        <small>({room.capacity})</small>
                       )}
-
-                      <FontAwesomeIcon
-                        icon={faChevronRight}
-                        className="cd-chevron"
-                      />
                     </button>
                   );
                 })}
               </div>
-            )}
-          </div>
-        </aside>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Locate Me */}
-      <button
-        onClick={handleLocateMe}
-        disabled={locating}
-        className="locate-btn"
-        title="Update my location"
-      >
-        <FontAwesomeIcon icon={faLocationCrosshairs} spin={locating} />
-      </button>
-
+      {/* Floating rescue action during active navigation */}
       {navigationActive && (
         <button
           type="button"
           className="rescue-floating-action"
           onClick={() => setRescueAlertOpen(true)}
+          aria-label="Request emergency rescue"
         >
           <FontAwesomeIcon icon={faTriangleExclamation} /> Request Rescue
         </button>
       )}
 
-      {/* Bottom action bar */}
-      <div
-        className={`bottom-bar ${isMobile ? "mobile" : ""} ${
-          navigationActive ? "navigation-active" : ""
-        }`}
-      >
-        <button onClick={handleReportMapClick} className="action-btn">
-          <FontAwesomeIcon icon={faMapPin} />
+      {/* Bottom Action Bar */}
+      {!navigationActive && (
+        <div className={`bottom-actions-container ${isMobile ? "mobile" : ""}`}>
+          {isMobile ? (
+            /* Phones/tablets: 2-row dock */
+            <div className="mobile-action-dock">
+              {locationPermission !== "granted" ? (
+                <button
+                  type="button"
+                  onClick={handleEnableLocation}
+                  className="action-btn-primary mobile-route-btn"
+                >
+                  <FontAwesomeIcon icon={faLocationCrosshairs} />
+                  <span>Turn on my location</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleFindRoute()}
+                  disabled={findingRoute}
+                  className="action-btn-primary mobile-route-btn"
+                >
+                  <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
+                  <span>
+                    {findingRoute
+                      ? "Finding route..."
+                      : myCenter
+                        ? "Go to my evacuation center"
+                        : "Go to nearest safe place"}
+                  </span>
+                </button>
+              )}
 
-          <span>{pickingLocation ? "Tap the map..." : "Report Hazard"}</span>
-        </button>
+              <div className="mobile-dock-row">
+                <button
+                  type="button"
+                  onClick={() => openSheet("more")}
+                  className="action-btn-secondary mobile-more-btn"
+                  aria-label="More options"
+                  aria-expanded={moreMenuOpen}
+                >
+                  <FontAwesomeIcon icon={faEllipsis} />
+                  <span>More</span>
+                </button>
 
-        <button
-          type="button"
-          onClick={() => setRescueAlertOpen(true)}
-          className="action-btn-rescue"
-          title="Request emergency rescue"
-          aria-label="Request emergency rescue"
-        >
-          <FontAwesomeIcon icon={faTriangleExclamation} />
-          {!isMobile && <span>Request Rescue</span>}
-        </button>
+                <button
+                  type="button"
+                  onClick={() => setRescueAlertOpen(true)}
+                  className="action-btn-sos mobile-sos-btn"
+                  aria-label="I need rescue"
+                >
+                  <FontAwesomeIcon icon={faTriangleExclamation} />
+                  <span>I need rescue</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Desktop Row */
+            <div className="desktop-action-bar">
+              <div className="desktop-primary-group">
+                <button
+                  type="button"
+                  onClick={handleReportMapClick}
+                  className="action-btn-secondary"
+                >
+                  <FontAwesomeIcon icon={faMapPin} />
+                  <span>{pickingLocation ? "Tap map..." : "Report Hazard"}</span>
+                </button>
 
-        <button
-          onClick={openMyCenter}
-          className={myCenter ? "action-btn verified" : "action-btn"}
-          title={myCenter ? "My Evacuation Center" : "Find My Evacuation Center"}
-        >
-          <FontAwesomeIcon icon={myCenter ? faCircleCheck : faUser} />
+                <button
+                  type="button"
+                  onClick={openMyCenter}
+                  className={`action-btn-secondary ${myCenter ? "verified" : ""}`}
+                  title={myCenter ? "My Evacuation Center" : "Find My Evacuation Center"}
+                >
+                  <FontAwesomeIcon icon={myCenter ? faCircleCheck : faUser} />
+                  <span>{myCenter ? `My Center (${firstName})` : "My Evacuation Center"}</span>
+                </button>
 
-          {!isMobile && (
-            <span>{myCenter ? `My Center (${firstName})` : "My Evacuation Center"}</span>
+                {locationPermission !== "granted" ? (
+                  <button
+                    type="button"
+                    onClick={handleEnableLocation}
+                    className="action-btn-primary"
+                  >
+                    <FontAwesomeIcon icon={faLocationCrosshairs} />
+                    <span>Enable Location</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleFindRoute()}
+                    disabled={findingRoute}
+                    className="action-btn-primary"
+                  >
+                    <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
+                    <span>
+                      {findingRoute
+                        ? "Finding route..."
+                        : myCenter
+                          ? "Find My Center"
+                          : "Find Nearest Evacuation Route"}
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              <div className="desktop-sos-divider" aria-hidden="true" />
+
+              <button
+                type="button"
+                onClick={() => setRescueAlertOpen(true)}
+                className="action-btn-sos"
+                aria-label="Request emergency rescue"
+              >
+                <FontAwesomeIcon icon={faTriangleExclamation} />
+                <span>Request Rescue</span>
+              </button>
+            </div>
           )}
-        </button>
+        </div>
+      )}
 
-        {locationPermission !== "granted" ? (
-          <button onClick={handleEnableLocation} className="action-btn-primary">
-            <FontAwesomeIcon icon={faLocationCrosshairs} />
-
-            {!isMobile && <span>Enable Location</span>}
-          </button>
-        ) : (
-          <button
-            onClick={handleFindRoute}
-            disabled={findingRoute}
-            className="action-btn-primary"
+      {/* Phones/tablets: More bottom sheet */}
+      {moreMenuOpen && isMobile && (
+        <>
+          <div
+            className="popover-backdrop"
+            onClick={() => setMoreMenuOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            className="rh-sheet more-bottom-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label="More actions"
           >
-            <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
+            <div className="sheet-handle" aria-hidden="true" />
 
-            {!isMobile && (
-              <span>
-                {findingRoute
-                  ? "Finding route..."
-                  : myCenter
-                  ? "Find My Center"
-                  : "Find Nearest Evacuation Route"}
-              </span>
-            )}
-          </button>
-        )}
-      </div>
+            <div className="popover-header">
+              <h4>More</h4>
+              <button
+                type="button"
+                className="popover-close-btn"
+                onClick={() => setMoreMenuOpen(false)}
+                aria-label="Close"
+              >
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
+            </div>
+
+            <div className="sheet-body more-sheet-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  handleReportMapClick();
+                }}
+                className="more-sheet-item"
+              >
+                <span className="more-item-icon danger">
+                  <FontAwesomeIcon icon={faMapPin} />
+                </span>
+                <div className="more-item-text">
+                  <strong>{pickingLocation ? "Tap the map..." : "Report a danger"}</strong>
+                  <small>Flood, landslide or blocked road</small>
+                </div>
+                <FontAwesomeIcon icon={faChevronRight} className="more-item-chevron" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  openMyCenter();
+                }}
+                className={`more-sheet-item ${myCenter ? "verified" : ""}`}
+              >
+                <span className="more-item-icon">
+                  <FontAwesomeIcon icon={myCenter ? faCircleCheck : faUser} />
+                </span>
+                <div className="more-item-text">
+                  <strong>
+                    {myCenter ? `My evacuation center (${firstName})` : "My evacuation center"}
+                  </strong>
+                  <small>Find where your family should go</small>
+                </div>
+                <FontAwesomeIcon icon={faChevronRight} className="more-item-chevron" />
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Route panel */}
       {route && (
@@ -3224,8 +4033,8 @@ const ResidentHome = () => {
           <div className="route-panel-distance">
             {navigationActive && navigationRemainingMeters != null
               ? `${(navigationRemainingMeters / 1000).toFixed(1)} km remaining · ${Math.ceil(
-                  (navigationRemainingSeconds || 0) / 60
-                )} min`
+                (navigationRemainingSeconds || 0) / 60
+              )} min`
               : `${Number(route.distance_km || 0).toFixed(1)} km by walking`}
           </div>
 
@@ -3444,38 +4253,29 @@ const ResidentHome = () => {
         </div>
       )}
 
-      {/* Hazard report modal */}
+      {/* Deep-link / notification opening a saved hazard report */}
+      {/* Rescue Alert Modal */}
       {rescueAlertOpen && (
         <RescueAlertModal
-          onClose={() => setRescueAlertOpen(false)}
-          onSubmitted={() => {
-            setRescueAlertOpen(false);
-            setReportConfirmation("Rescue alert sent to response staff.");
-            window.setTimeout(() => setReportConfirmation(""), 5000);
-          }}
+          onClose={handleCloseRescueModal}
+          onSubmitted={handleRescueSubmitted}
+          initialCoordinates={rescueCoordinates}
+          onPinOnMap={handlePinRescueOnMap}
+          onLocationCaptured={handleRescueLocationCaptured}
         />
       )}
 
+      {/* Hazard Report Modal */}
       {pendingReportLocation && (
         <HazardReportModal
           location={pendingReportLocation}
-          onClose={() => setPendingReportLocation(null)}
+          onClose={handleCloseReportModal}
           onSubmitted={handleReportSubmitted}
+          onLocationChange={handleReportLocationChange}
+          onAdjustOnMap={() => { }}
         />
       )}
 
-      <MapLegend
-        bottomOffset={100}
-        items={[
-          { id: "flood-zone", label: "Flood hazard" },
-          { id: "landslide-zone", label: "Landslide hazard" },
-          { id: "report", label: "Hazard report" },
-          { id: "blocked", label: "Road blocked" },
-          { id: "closed", label: "Closed road" },
-          { id: "center", label: "Evacuation center" },
-          { id: "room", label: "Room" },
-        ]}
-      />
     </div>
   );
 };

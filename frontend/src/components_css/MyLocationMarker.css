@@ -1,15 +1,20 @@
 .my-location-marker {
   position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .my-location-marker .dot {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
-  background: var(--brand);
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  background: var(--brand, #2563eb);
   border: 3px solid white;
   border-radius: 50%;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
@@ -20,10 +25,10 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 24px;
-  height: 24px;
-  margin: -12px 0 0 -12px;
-  background: rgba(27, 95, 193, 0.3);
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  background: rgba(37, 99, 235, 0.35);
   border-radius: 50%;
   animation: pulse 2s ease-out infinite;
   z-index: 1;
@@ -36,6 +41,134 @@
   }
   100% {
     transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+/* =========================================================
+   CASE 1: SELECTED LOCATION DRAGGABLE PULSING MARKER
+   ========================================================= */
+
+.selected-location-marker {
+  position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+}
+
+.selected-location-marker:active {
+  cursor: grabbing;
+}
+
+.selected-location-dot-wrap {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.selected-location-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--brand, #2563eb);
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  z-index: 2;
+  box-sizing: border-box;
+}
+
+.selected-location-pulse {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: rgba(37, 99, 235, 0.4);
+  animation: selected-loc-pulse 1.8s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  z-index: 1;
+  pointer-events: none;
+}
+
+@keyframes selected-loc-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.selected-location-label {
+  margin-top: 5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--ink, #0f172a);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+/* =========================================================
+   CASE 3: HIGHLIGHTED SAVED REPORT WITH 3-SECOND PULSING RING
+   ========================================================= */
+
+.hazard-highlight-marker-wrap {
+  position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.hazard-highlight-core {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid var(--alert, #dc2626);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.4);
+  z-index: 2;
+}
+
+.hazard-highlight-ring {
+  position: absolute;
+  inset: -14px;
+  border-radius: 50%;
+  border: 3px solid var(--alert, #dc2626);
+  background: rgba(220, 38, 38, 0.2);
+  animation: highlight-pulse-3s 3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  pointer-events: none;
+  z-index: 1;
+}
+
+@keyframes highlight-pulse-3s {
+  0% {
+    transform: scale(0.6);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.6);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.4);
     opacity: 0;
   }
 }

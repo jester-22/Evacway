@@ -146,6 +146,10 @@ export default function ManageProfile() {
       navigate("/dashboard");
       return;
     }
+    if (nextTab === "map") {
+      navigate("/admin/map");
+      return;
+    }
     const path = isAdmin ? "/admin" : "/lgu";
     navigate(`${path}?tab=${encodeURIComponent(nextTab)}`);
   }

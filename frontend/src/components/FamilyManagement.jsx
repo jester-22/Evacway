@@ -37,6 +37,7 @@ import {
   useRooms,
 } from "../hooks/useEvacuationQueries";
 import { displayEntityName } from "../utils/displayEntityName";
+import { formatRoomLabel } from "../utils/formatRoomLabel";
 import LoadingState from "./LoadingState";
 import "../components_css/FamilyManagement.css";
 
@@ -134,6 +135,8 @@ function getVulnerabilityBadges(member) {
 
 function isFamilyAssigned(fam) {
   if (!fam) return false;
+  if (fam.assignment_status === "Assigned") return true;
+  if (fam.assignment_status === "Unassigned") return false;
   if (fam.current_room_id) return true;
   if (Number(fam.assigned_members || 0) > 0) return true;
   if (Array.isArray(fam.assignments) && fam.assignments.length > 0) return true;
@@ -141,7 +144,7 @@ function isFamilyAssigned(fam) {
   if (fam.evacuation_status) {
     const s = fam.evacuation_status.toLowerCase();
     if (
-      (s.includes("assigned") && !s.includes("not assigned")) ||
+      (s.includes("assigned") && !s.includes("not assigned") && !s.includes("unassigned")) ||
       (s.includes("evacuated") && !s.includes("not evacuated"))
     ) {
       return true;
@@ -180,6 +183,7 @@ export default function FamilyManagement({
 
   // List filters & pagination
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [barangayFilter, setBarangayFilter] = useState(
@@ -233,14 +237,14 @@ export default function FamilyManagement({
   const familyFilters = useMemo(
     () => ({
       page,
-      per_page: 15,
+      per_page: pageSize,
       search,
       barangay_id: effectiveBarangayId,
       assignment_status: assignmentStatus,
       sort_by: sortBy,
       direction,
     }),
-    [page, search, effectiveBarangayId, assignmentStatus, sortBy, direction]
+    [page, pageSize, search, effectiveBarangayId, assignmentStatus, sortBy, direction]
   );
 
   const familiesQuery = useFamilies(familyFilters);
@@ -1124,7 +1128,7 @@ export default function FamilyManagement({
       room.available ?? Math.max(room.capacity - (room.occupied || 0), 0);
     if (needed > available) {
       setError(
-        `Room ${room.room_number} only has ${available} space(s) available, but this household has ${needed} member(s).`
+        `${formatRoomLabel(room.room_number)} only has ${available} space(s) available, but this household has ${needed} member(s).`
       );
       return;
     }
@@ -1138,7 +1142,7 @@ export default function FamilyManagement({
       });
       await refreshAllData(activeFamily.id);
       setNotice(
-        result.message || `Household assigned to Room ${room.room_number}.`
+        result.message || `Household assigned to ${formatRoomLabel(room.room_number)}.`
       );
       setModal("");
     } catch (requestError) {
@@ -1199,7 +1203,7 @@ export default function FamilyManagement({
 
     setConfirmDialog({
       title: "Confirm Room Transfer",
-      message: `Move household "${activeFamily.head_name}" (${needed} member${needed === 1 ? "" : "s"}) to ${destCenter ? displayEntityName(destCenter.name) + " — " : ""}Room ${destRoom.room_number}? Occupancy in both rooms will update automatically.`,
+      message: `Move household "${activeFamily.head_name}" (${needed} member${needed === 1 ? "" : "s"}) to ${destCenter ? displayEntityName(destCenter.name) + " — " : ""}${formatRoomLabel(destRoom.room_number)}? Occupancy in both rooms will update automatically.`,
       confirmText: "Transfer Household",
       danger: false,
       onConfirm: async () => {
@@ -1215,7 +1219,7 @@ export default function FamilyManagement({
           await refreshAllData(activeFamily.id);
           setNotice(
             res.message ||
-              `Household transferred to Room ${destRoom.room_number}.`
+              `Household transferred to ${formatRoomLabel(destRoom.room_number)}.`
           );
         } catch (err) {
           setError(err.message || "Failed to transfer household.");
@@ -1231,11 +1235,11 @@ export default function FamilyManagement({
     const memberCount = fam.member_count || fam.resident_count || 1;
     const currentCenter =
       fam.current_center || fam.evacuation_center || "the evacuation center";
-    const currentRoom = fam.current_room || fam.rooms || "the room";
+    const currentRoom = fam.current_room || fam.rooms || "";
 
     setConfirmDialog({
       title: "Unassign Household from Room",
-      message: `Unassign household "${fam.head_name}" (${memberCount} member${memberCount === 1 ? "" : "s"}) from ${displayEntityName(currentCenter)} — Room ${currentRoom}? This will release ${memberCount} space(s).`,
+      message: `Unassign household "${fam.head_name}" (${memberCount} member${memberCount === 1 ? "" : "s"}) from ${displayEntityName(currentCenter)} — ${formatRoomLabel(currentRoom)}? This will release ${memberCount} space(s).`,
       confirmText: "Unassign Household",
       danger: true,
       onConfirm: async () => {
@@ -2131,7 +2135,7 @@ export default function FamilyManagement({
                                 value={room.id}
                                 disabled={!enough}
                               >
-                                Room {room.room_number} — {room.occupied || 0}/
+                                {formatRoomLabel(room.room_number)} — {room.occupied || 0}/
                                 {room.capacity} assigned ({available} remaining)
                                 {!enough ? " [Insufficient capacity]" : ""}
                               </option>
@@ -2171,8 +2175,8 @@ export default function FamilyManagement({
                               >
                                 <div className="fm-room-pick-top">
                                   <strong>
-                                    <FontAwesomeIcon icon={faDoorOpen} /> Room{" "}
-                                    {room.room_number}
+                                    <FontAwesomeIcon icon={faDoorOpen} />{" "}
+                                    {formatRoomLabel(room.room_number)}
                                   </strong>
                                   <span
                                     className={`fm-badge ${enough ? "fm-badge-green" : "fm-badge-red"}`}
@@ -2280,12 +2284,13 @@ export default function FamilyManagement({
                         <div>
                           <dt>Room</dt>
                           <dd>
-                            Room{" "}
-                            {wizardRooms.find(
-                              (r) =>
-                                String(r.id) ===
-                                String(wizardForm.assignment_room_id)
-                            )?.room_number || wizardForm.assignment_room_id}
+                            {formatRoomLabel(
+                              wizardRooms.find(
+                                (r) =>
+                                  String(r.id) ===
+                                  String(wizardForm.assignment_room_id)
+                              )?.room_number || wizardForm.assignment_room_id
+                            )}
                           </dd>
                         </div>
                         <div>
@@ -2740,7 +2745,7 @@ export default function FamilyManagement({
                             activeFamily.current_center ||
                             activeFamily.evacuation_center ||
                             activeFamily.assignments?.[0]?.center
-                        ) || "Not Assigned"}
+                        ) || "Unassigned"}
                       </strong>
                     </dd>
                   </div>
@@ -2748,17 +2753,12 @@ export default function FamilyManagement({
                     <dt>Assigned Room</dt>
                     <dd>
                       <strong>
-                        {activeMember.assigned_room_number ||
-                        activeFamily.current_room ||
-                        activeFamily.rooms ||
-                        activeFamily.assignments?.[0]?.room
-                          ? `Room ${
-                              activeMember.assigned_room_number ||
-                              activeFamily.current_room ||
-                              activeFamily.rooms ||
-                              activeFamily.assignments?.[0]?.room
-                            }`
-                          : "Not Assigned"}
+                        {formatRoomLabel(
+                          activeMember.assigned_room_number ||
+                            activeFamily.current_room ||
+                            activeFamily.rooms ||
+                            activeFamily.assignments?.[0]?.room
+                        )}
                       </strong>
                     </dd>
                   </div>
@@ -2931,11 +2931,11 @@ export default function FamilyManagement({
                           <dt>Assigned Room</dt>
                           <dd>
                             <strong>
-                              Room{" "}
-                              {activeFamily.current_room ||
-                                activeFamily.rooms ||
-                                activeFamily.assignments?.[0]?.room ||
-                                "—"}
+                              {formatRoomLabel(
+                                activeFamily.current_room ||
+                                  activeFamily.rooms ||
+                                  activeFamily.assignments?.[0]?.room
+                              )}
                             </strong>
                           </dd>
                         </div>
@@ -2981,7 +2981,7 @@ export default function FamilyManagement({
                     <div className="fm-assignment-empty-box">
                       <p>
                         This household is currently{" "}
-                        <strong>Not Assigned</strong> to any evacuation room.
+                        <strong>Unassigned</strong> to any evacuation room.
                       </p>
                       <button
                         type="button"
@@ -3352,16 +3352,22 @@ export default function FamilyManagement({
             </div>
           ) : (
             <>
-              {/* Desktop Compact Table */}
+              {/* Count above the table */}
+              <div className="fm-table-meta-bar">
+                <span className="fm-households-count">
+                  {total.toLocaleString()} {total === 1 ? "household" : "households"}
+                </span>
+              </div>
+
+              {/* Desktop Table */}
               <div className="fm-table-wrap fm-desktop-only">
                 <table className="fm-table">
                   <thead>
                     <tr>
-                      <th>Household ID</th>
-                      <th>Household Head</th>
+                      <th>Household</th>
                       {!lockedBarangayId && <th>Barangay</th>}
                       <th>Members</th>
-                      <th>Assigned Center / Room</th>
+                      <th>Center / Room</th>
                       <th>Status</th>
                       <th className="fm-col-actions">Actions</th>
                     </tr>
@@ -3376,18 +3382,21 @@ export default function FamilyManagement({
                       return (
                         <tr key={fam.id}>
                           <td>
-                            <span className="fm-code-badge">
-                              {fam.family_code}
-                            </span>
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="fm-link-btn"
-                              onClick={() => openHouseholdDetails(fam)}
-                            >
-                              {fam.head_name}
-                            </button>
+                            <div className="fm-household-cell">
+                              <button
+                                type="button"
+                                className="fm-link-btn fm-head-name-btn"
+                                onClick={() => openHouseholdDetails(fam)}
+                              >
+                                {fam.head_name}
+                              </button>
+                              <span
+                                className="fm-household-id-sub"
+                                title={fam.family_code}
+                              >
+                                {fam.family_code}
+                              </span>
+                            </div>
                           </td>
                           {!lockedBarangayId && <td>{fam.barangay || "—"}</td>}
                           <td>
@@ -3398,8 +3407,12 @@ export default function FamilyManagement({
                           <td>
                             {assigned && (centerName || roomNum) ? (
                               <div className="fm-assignment-cell">
-                                <strong>{centerName || "Center"}</strong>
-                                {roomNum && <span>Room {roomNum}</span>}
+                                <span className="fm-center-name">
+                                  {centerName || "Center"}
+                                </span>
+                                <span className="fm-room-name">
+                                  {formatRoomLabel(roomNum)}
+                                </span>
                               </div>
                             ) : (
                               <span className="fm-muted-inline">
@@ -3411,45 +3424,36 @@ export default function FamilyManagement({
                             <span
                               className={`fm-badge ${assigned ? "fm-badge-green" : "fm-badge-amber"}`}
                             >
-                              {assigned ? "Assigned" : "Not Assigned"}
+                              {assigned ? "Assigned" : "Unassigned"}
                             </span>
                           </td>
                           <td className="fm-col-actions">
                             <div className="fm-row-actions">
                               <button
                                 type="button"
-                                className="fm-btn fm-btn-secondary fm-btn-sm"
+                                className="fm-btn fm-btn-secondary fm-action-btn"
                                 onClick={() => openHouseholdDetails(fam)}
                               >
-                                <FontAwesomeIcon icon={faEye} /> View
+                                View
                               </button>
                               <button
                                 type="button"
-                                className="fm-btn fm-btn-ghost fm-btn-sm"
+                                className="fm-btn fm-btn-outline fm-action-btn"
                                 onClick={() => openEditHouseholdModal(fam)}
-                                title="Edit Household"
                               >
-                                <FontAwesomeIcon icon={faPenToSquare} />
+                                Edit
                               </button>
-                              {assigned ? (
-                                <button
-                                  type="button"
-                                  className="fm-btn fm-btn-ghost fm-btn-sm"
-                                  onClick={() => openMoveModal(fam)}
-                                  title="Change Room"
-                                >
-                                  <FontAwesomeIcon icon={faRightLeft} />
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="fm-btn fm-btn-ghost fm-btn-sm"
-                                  onClick={() => openAssignModal(fam)}
-                                  title="Assign Room"
-                                >
-                                  <FontAwesomeIcon icon={faDoorOpen} />
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                className="fm-text-btn fm-action-text-btn"
+                                onClick={() =>
+                                  assigned
+                                    ? openMoveModal(fam)
+                                    : openAssignModal(fam)
+                                }
+                              >
+                                Reassign
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -3459,7 +3463,7 @@ export default function FamilyManagement({
                 </table>
               </div>
 
-              {/* Mobile Stacked Cards */}
+              {/* Mobile Stacked Cards (768px and below) */}
               <div className="fm-mobile-cards fm-mobile-only">
                 {families.map((fam) => {
                   const assigned = isFamilyAssigned(fam);
@@ -3467,76 +3471,94 @@ export default function FamilyManagement({
                     fam.current_center || fam.evacuation_center
                   );
                   const roomNum = fam.current_room || fam.rooms;
+                  const memberCount =
+                    fam.resident_count ?? fam.member_count ?? 0;
                   return (
                     <article key={fam.id} className="fm-mobile-card">
                       <div className="fm-mobile-card-top">
-                        <div>
-                          <span className="fm-code-badge">
-                            {fam.family_code}
-                          </span>
-                          <h4 className="fm-mobile-head-name">
+                        <div className="fm-mobile-top-content">
+                          <button
+                            type="button"
+                            className="fm-link-btn fm-mobile-head-name"
+                            onClick={() => openHouseholdDetails(fam)}
+                          >
                             {fam.head_name}
-                          </h4>
+                          </button>
+                          <div className="fm-mobile-sub-info">
+                            <span
+                              className="fm-mobile-id"
+                              title={fam.family_code}
+                            >
+                              {fam.family_code}
+                            </span>
+                            {!lockedBarangayId && fam.barangay && (
+                              <>
+                                <span className="fm-dot-sep">•</span>
+                                <span>{fam.barangay}</span>
+                              </>
+                            )}
+                            <span className="fm-dot-sep">•</span>
+                            <span>
+                              {memberCount}{" "}
+                              {memberCount === 1 ? "member" : "members"}
+                            </span>
+                          </div>
                         </div>
                         <span
-                          className={`fm-badge ${assigned ? "fm-badge-green" : "fm-badge-amber"}`}
+                          className={`fm-badge ${assigned ? "fm-badge-green" : "fm-badge-amber"} fm-mobile-badge`}
                         >
-                          {assigned ? "Assigned" : "Not Assigned"}
+                          {assigned ? "Assigned" : "Unassigned"}
                         </span>
                       </div>
 
-                      <div className="fm-mobile-card-grid">
-                        {!lockedBarangayId && (
-                          <div>
-                            <span>Barangay</span>
-                            <strong>{fam.barangay || "—"}</strong>
-                          </div>
-                        )}
-                        <div>
-                          <span>Members</span>
-                          <strong>
-                            {fam.resident_count ?? fam.member_count ?? 0}{" "}
-                            member
-                            {(fam.resident_count ?? fam.member_count ?? 0) === 1
-                              ? ""
-                              : "s"}
-                          </strong>
-                        </div>
-                        <div>
-                          <span>Evacuation Room</span>
-                          <strong>
-                            {assigned && (centerName || roomNum)
-                              ? `${centerName || "Center"}${roomNum ? ` • Rm ${roomNum}` : ""}`
-                              : "Unassigned"}
-                          </strong>
+                      <div className="fm-mobile-card-center-room">
+                        <span className="fm-mobile-loc-label">
+                          Center / Room
+                        </span>
+                        <div className="fm-mobile-center-room-val">
+                          {assigned && (centerName || roomNum) ? (
+                            <>
+                              <strong className="fm-mobile-center-name">
+                                {centerName || "Center"}
+                              </strong>
+                              {roomNum && (
+                                <span className="fm-mobile-room-name">
+                                  {formatRoomLabel(roomNum)}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="fm-muted-inline">Unassigned</span>
+                          )}
                         </div>
                       </div>
 
                       <div className="fm-mobile-card-actions">
                         <button
                           type="button"
-                          className="fm-btn fm-btn-primary fm-btn-sm"
+                          className="fm-btn fm-btn-secondary fm-btn-mobile"
                           onClick={() => openHouseholdDetails(fam)}
                         >
-                          <FontAwesomeIcon icon={faEye} /> View Details
+                          View
                         </button>
-                        {assigned ? (
-                          <button
-                            type="button"
-                            className="fm-btn fm-btn-secondary fm-btn-sm"
-                            onClick={() => openMoveModal(fam)}
-                          >
-                            <FontAwesomeIcon icon={faRightLeft} /> Change Room
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="fm-btn fm-btn-secondary fm-btn-sm"
-                            onClick={() => openAssignModal(fam)}
-                          >
-                            <FontAwesomeIcon icon={faDoorOpen} /> Assign Room
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          className="fm-btn fm-btn-outline fm-btn-mobile"
+                          onClick={() => openEditHouseholdModal(fam)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="fm-text-btn fm-btn-mobile fm-mobile-reassign-btn"
+                          onClick={() =>
+                            assigned
+                              ? openMoveModal(fam)
+                              : openAssignModal(fam)
+                          }
+                        >
+                          Reassign
+                        </button>
                       </div>
                     </article>
                   );
@@ -3545,10 +3567,32 @@ export default function FamilyManagement({
 
               {/* Pagination Footer */}
               <div className="fm-pagination">
-                <span>
-                  Showing <strong>{families.length}</strong> of{" "}
-                  <strong>{total}</strong> household{total === 1 ? "" : "s"}
+                <div className="fm-pagination-page-size">
+                  <label htmlFor="fm-page-size-select">Per page:</label>
+                  <select
+                    id="fm-page-size-select"
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPage(1);
+                      setPageSize(Number(e.target.value));
+                    }}
+                    aria-label="Select households per page"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
+
+                <span className="fm-pagination-range">
+                  {total === 0
+                    ? "0 of 0"
+                    : `${((page - 1) * pageSize + 1).toLocaleString()}-${Math.min(
+                        page * pageSize,
+                        total
+                      ).toLocaleString()} of ${total.toLocaleString()}`}
                 </span>
+
                 <div className="fm-pagination-controls">
                   <button
                     type="button"
@@ -3558,9 +3602,6 @@ export default function FamilyManagement({
                   >
                     Previous
                   </button>
-                  <span className="fm-page-indicator">
-                    Page {page} of {pages}
-                  </span>
                   <button
                     type="button"
                     className="fm-btn fm-btn-secondary fm-btn-sm"
@@ -3913,7 +3954,7 @@ export default function FamilyManagement({
                             value={r.id}
                             disabled={avail < assignFamilyMembers}
                           >
-                            Room {r.room_number} ({avail} available /{" "}
+                            {formatRoomLabel(r.room_number)} ({avail} available /{" "}
                             {r.capacity} cap)
                           </option>
                         );
@@ -3977,7 +4018,7 @@ export default function FamilyManagement({
                         activeFamily.current_center ||
                           activeFamily.evacuation_center
                       )}{" "}
-                      — Room {activeFamily.current_room || activeFamily.rooms}
+                      — {formatRoomLabel(activeFamily.current_room || activeFamily.rooms)}
                     </strong>
                   </div>
                   <div>
@@ -4035,7 +4076,7 @@ export default function FamilyManagement({
                             value={r.id}
                             disabled={avail < moveFamilyMembers}
                           >
-                            Room {r.room_number} ({avail} available /{" "}
+                            {formatRoomLabel(r.room_number)} ({avail} available /{" "}
                             {r.capacity} cap)
                           </option>
                         );

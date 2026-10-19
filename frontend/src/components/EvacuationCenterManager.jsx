@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useLocation } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import { queryKeys, useBarangays, useRoomFamilies, useRooms } from "../hooks/useEvacuationQueries";
-import DashboardMap from "./DashboardMap";
 import LoadingState from "./LoadingState";
 import BarangaysServedPicker from "./BarangaysServedPicker";
 import { displayEntityName } from "../utils/displayEntityName";
+import { formatRoomLabel } from "../utils/formatRoomLabel";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faPlus,
@@ -32,8 +33,69 @@ import {
   faSliders,
   faChevronDown,
   faChevronUp,
+  faHand,
+  faDownload,
+  faPrint,
+  faFileCsv,
+  faBuilding,
 } from "@fortawesome/free-solid-svg-icons";
 import "../components_css/EvacuationCenterManager.css";
+
+function getOccupancyStatus(occupied = 0, capacity = 0) {
+  const cap = Number(capacity) || 0;
+  const occ = Number(occupied) || 0;
+  const percent = cap > 0 ? Math.min(100, Math.round((occ / cap) * 100)) : (occ > 0 ? 100 : 0);
+
+  if (percent >= 90) {
+    return {
+      percent,
+      color: "#dc2626", // Red: 90% and above
+      barClass: "is-full",
+      level: "full",
+    };
+  }
+  if (percent >= 70) {
+    return {
+      percent,
+      color: "#d97706", // Amber: 70% to 89%
+      barClass: "is-high",
+      level: "high",
+    };
+  }
+  return {
+    percent,
+    color: "#16a34a", // Green: below 70%
+    barClass: "is-low",
+    level: "normal",
+  };
+}
+
+function getOccupancyColor(occupied = 0, capacity = 0) {
+  return getOccupancyStatus(occupied, capacity).color;
+}
+
+function RoomHouseholdsButton({ room, onClick, title }) {
+  const occ = Number(room?.occupied || 0);
+  const roomId = room?.id;
+  const { data } = useRoomFamilies(occ > 0 && roomId ? roomId : null);
+  const householdCount =
+    occ === 0
+      ? 0
+      : data?.families
+      ? data.families.length
+      : (room?.assigned_families ?? 0);
+
+  return (
+    <button
+      type="button"
+      className="btn btn-sm btn-primary"
+      onClick={onClick}
+      title={title || "View households assigned to this room"}
+    >
+      <FontAwesomeIcon icon={faUsers} /> Households ({householdCount})
+    </button>
+  );
+}
 
 function isCenterMapped(item) {
   if (!item) return false;
@@ -59,29 +121,19 @@ function normalizeCenter(c) {
   return c;
 }
 
-function polygonToPoints(geometry) {
-  if (!geometry || !geometry.coordinates) return [];
-  const ring = geometry.coordinates[0];
-  if (!ring || ring.length < 4) return [];
-  return ring.slice(0, ring.length - 1).map(([lng, lat]) => ({ lat, lng }));
-}
-
 function EvacuationCenterManager({
   centers,
   hazardZones,
   onRefresh,
   canDeactivate = true,
-  focusLocation,
 }) {
-  // List-first by default: "table" | "map"
-  const [viewMode, setViewMode] = useState("table");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isLgu = location.pathname.startsWith("/lgu");
+  const mapBasePath = isLgu ? "/lgu/map" : "/admin/map";
 
-  // Center detail view section: "overview" | "rooms" | "households" | "map"
+  // Center detail view section: "overview" | "rooms" | "households"
   const [centerSection, setCenterSection] = useState("overview");
-
-  // Drawer drilldown level inside map view: "center" | "rooms" | "families"
-  const [drawerTab, setDrawerTab] = useState("center");
-  const [drawerExpanded, setDrawerExpanded] = useState(false);
 
   // Mobile filters bottom sheet
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
@@ -104,10 +156,47 @@ function EvacuationCenterManager({
   const centerRooms = centerRoomsQuery.data || [];
   const loadingRooms = centerRoomsQuery.isLoading;
 
+  const [roomAssignmentFilter, setRoomAssignmentFilter] = useState("all"); // "all" | "assigned" | "unassigned"
+
+  const assignedRoomCount = useMemo(() => {
+    return centerRooms.filter((r) =>
+      Boolean(r.is_assigned || r.assignment_status === "Assigned" || (r.occupied && r.occupied > 0))
+    ).length;
+  }, [centerRooms]);
+
+  const unassignedRoomCount = Math.max(0, centerRooms.length - assignedRoomCount);
+
+  const filteredCenterRooms = useMemo(() => {
+    return centerRooms.filter((room) => {
+      const isAssigned = Boolean(
+        room.is_assigned ||
+        room.assignment_status === "Assigned" ||
+        (room.occupied && room.occupied > 0)
+      );
+      if (roomAssignmentFilter === "assigned") return isAssigned;
+      if (roomAssignmentFilter === "unassigned") return !isAssigned;
+      return true;
+    });
+  }, [centerRooms, roomAssignmentFilter]);
+
   const [selectedRoom, setSelectedRoom] = useState(null);
-  const roomFamiliesQuery = useRoomFamilies(selectedRoom?.id);
+  const roomFamiliesQuery = useRoomFamilies(
+    selectedRoom?.id && selectedRoom?.id !== "all" ? selectedRoom.id : null
+  );
   const roomFamilies = roomFamiliesQuery.data?.families || [];
   const loadingRoomFamilies = roomFamiliesQuery.isLoading;
+
+  // Center details query to fetch assigned_families across the whole center
+  const centerDetailsQuery = useQuery({
+    queryKey: ["evacuation-center-details", selectedCenter?.id],
+    queryFn: () => api.getEvacuationCenter(selectedCenter.id),
+    enabled: Boolean(selectedCenter?.id),
+  });
+  const allCenterFamilies = centerDetailsQuery.data?.assigned_families || [];
+  const loadingAllCenterFamilies = centerDetailsQuery.isLoading;
+
+  // Search filter inside Assigned Households tab
+  const [householdSearch, setHouseholdSearch] = useState("");
 
   // Available unassigned families for assignment
   const [availableFamilies, setAvailableFamilies] = useState([]);
@@ -158,13 +247,7 @@ function EvacuationCenterManager({
   const [confirmDialog, setConfirmDialog] = useState(null);
 
   // Mapbox drawing states
-  const [step, setStep] = useState("idle"); // "idle" | "footprint" | "entrance" | "room-map"
-  const [footprintPoints, setFootprintPoints] = useState([]);
-  const [entrancePoints, setEntrancePoints] = useState([]);
-  const [editingCenter, setEditingCenter] = useState(null);
-  const [roomLocation, setRoomLocation] = useState(null);
-  const [savingRoomLocation, setSavingRoomLocation] = useState(false);
-  const [savingMap, setSavingMap] = useState(false);
+
 
   async function loadCenterRooms(centerId) {
     if (!centerId) return;
@@ -179,6 +262,7 @@ function EvacuationCenterManager({
   async function invalidateCenterData() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
+      queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] }),
       queryClient.invalidateQueries({ queryKey: ["barangay-centers"] }),
       queryClient.invalidateQueries({ queryKey: ["rooms"] }),
       queryClient.invalidateQueries({ queryKey: ["room-families"] }),
@@ -191,6 +275,7 @@ function EvacuationCenterManager({
       queryClient.invalidateQueries({ queryKey: ["rooms"] }),
       queryClient.invalidateQueries({ queryKey: ["room-families"] }),
       queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
+      queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] }),
       queryClient.invalidateQueries({ queryKey: ["barangay-centers"] }),
     ]);
   }
@@ -288,8 +373,7 @@ function EvacuationCenterManager({
         setNotice(`Evacuation center "${payload.name}" created successfully.`);
         if (created?.data) {
           setSelectedCenter(normalizeCenter(created.data));
-          setDrawerTab("center");
-          setViewMode("map");
+          setCenterSection("overview");
         }
       } else {
         await api.updateEvacuationCenter(selectedCenter.id, payload);
@@ -403,10 +487,10 @@ function EvacuationCenterManager({
 
       if (roomModalMode === "add") {
         await api.addRoom(selectedCenter.id, payload);
-        setNotice(`Room "${payload.room_number}" added successfully.`);
+        setNotice(`${formatRoomLabel(payload.room_number)} added successfully.`);
       } else {
         await api.updateRoom(selectedRoom.id, payload);
-        setNotice(`Room "${payload.room_number}" updated successfully.`);
+        setNotice(`${formatRoomLabel(payload.room_number)} updated successfully.`);
         setSelectedRoom((prev) => (prev ? { ...prev, ...payload } : prev));
       }
 
@@ -424,14 +508,14 @@ function EvacuationCenterManager({
     setConfirmDialog({
       title: `${isCurrentlyActive ? "Deactivate" : "Reactivate"} Room`,
       message: isCurrentlyActive
-        ? `Are you sure you want to deactivate Room "${room.room_number}"? Assigned families must be unassigned or moved first.`
-        : `Reactivate Room "${room.room_number}"?`,
+        ? `Are you sure you want to deactivate ${formatRoomLabel(room.room_number)}? Assigned families must be unassigned or moved first.`
+        : `Reactivate ${formatRoomLabel(room.room_number)}?`,
       confirmText: isCurrentlyActive ? "Deactivate" : "Reactivate",
       danger: isCurrentlyActive,
       onConfirm: async () => {
         try {
           await api.toggleRoomActive(room.id);
-          setNotice(`Room "${room.room_number}" ${isCurrentlyActive ? "deactivated" : "reactivated"}.`);
+          setNotice(`${formatRoomLabel(room.room_number)} ${isCurrentlyActive ? "deactivated" : "reactivated"}.`);
           await loadCenterRooms(selectedCenter.id);
           if (selectedRoom?.id === room.id) {
             setSelectedRoom((prev) => (prev ? { ...prev, is_active: !isCurrentlyActive } : prev));
@@ -446,13 +530,13 @@ function EvacuationCenterManager({
   function confirmDeleteRoom(room) {
     setConfirmDialog({
       title: "Delete Room",
-      message: `Are you sure you want to delete Room "${room.room_number}"? Deletion will be safely blocked if families are assigned.`,
+      message: `Are you sure you want to delete ${formatRoomLabel(room.room_number)}? Deletion will be safely blocked if families are assigned.`,
       confirmText: "Delete Room",
       danger: true,
       onConfirm: async () => {
         try {
           await api.deleteRoom(room.id);
-          setNotice(`Room "${room.room_number}" deleted/deactivated.`);
+          setNotice(`${formatRoomLabel(room.room_number)} deleted/deactivated.`);
           if (selectedRoom?.id === room.id) {
             setSelectedRoom(null);
             setDrawerTab("rooms");
@@ -494,7 +578,7 @@ function EvacuationCenterManager({
         room_id: selectedRoom.id,
       });
 
-      setNotice(`Family "${family.household_head_name || family.head_name}" assigned to Room ${selectedRoom.room_number}.`);
+      setNotice(`Family "${family.household_head_name || family.head_name}" assigned to ${formatRoomLabel(selectedRoom.room_number)}.`);
       setAssignModalOpen(false);
 
       await invalidateFamilyAssignments();
@@ -524,7 +608,7 @@ function EvacuationCenterManager({
 
     setConfirmDialog({
       title: "Confirm Family Transfer",
-      message: `Move family "${movingFamily.household_head_name || movingFamily.head_name}" (${needed} members) to Room ${destRoom.room_number}? Occupancy will update automatically.`,
+      message: `Move family "${movingFamily.household_head_name || movingFamily.head_name}" (${needed} members) to ${formatRoomLabel(destRoom.room_number)}? Occupancy will update automatically.`,
       confirmText: "Move Family",
       danger: false,
       onConfirm: async () => {
@@ -536,7 +620,7 @@ function EvacuationCenterManager({
             center_id: targetCenterId ? Number(targetCenterId) : undefined,
           });
 
-          setNotice(`Family "${movingFamily.household_head_name || movingFamily.head_name}" moved to Room ${destRoom.room_number}.`);
+          setNotice(`Family "${movingFamily.household_head_name || movingFamily.head_name}" moved to ${formatRoomLabel(destRoom.room_number)}.`);
           setMoveModalOpen(false);
           setMovingFamily(null);
 
@@ -552,9 +636,14 @@ function EvacuationCenterManager({
 
   function confirmUnassignFamily(family) {
     const headName = family.household_head_name || family.head_name || "this family";
+    const roomLabel = family.room_number
+      ? formatRoomLabel(family.room_number)
+      : selectedRoom && selectedRoom.id !== "all"
+      ? formatRoomLabel(selectedRoom.room_number)
+      : "their room";
     setConfirmDialog({
       title: "Remove Family Assignment",
-      message: `Are you sure you want to remove family "${headName}" from Room ${selectedRoom.room_number}? Their room occupancy will be freed.`,
+      message: `Are you sure you want to remove family "${headName}" from ${roomLabel}? Their room occupancy will be freed.`,
       confirmText: "Remove Assignment",
       danger: true,
       onConfirm: async () => {
@@ -569,45 +658,7 @@ function EvacuationCenterManager({
     });
   }
 
-  // --- Map Coordinates & Footprint Mapping ---
-  function cancelMapping() {
-    setStep("idle");
-    setEditingCenter(null);
-    setFootprintPoints([]);
-    setEntrancePoints([]);
-    setRoomLocation(null);
-    setError("");
-    setSavingMap(false);
-    setSavingRoomLocation(false);
-  }
 
-  // Cleanup on unmount or when leaving map view
-  useEffect(() => {
-    return () => {
-      cancelMapping();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (viewMode !== "map" && step !== "idle") {
-      cancelMapping();
-    }
-  }, [viewMode, step]);
-
-  function startMappingCenterOnMap(center) {
-    const props = center.properties || center;
-    setEditingCenter(center);
-    setFootprintPoints(polygonToPoints(center.geometry));
-    setEntrancePoints(props.entrances || []);
-    setViewMode("map");
-    setStep("footprint");
-  }
-
-  function startMappingRoomLocation(room) {
-    setSelectedRoom(room);
-    setViewMode("map");
-    setStep("room-map");
-  }
 
   async function handleBeforeDeselectBarangay(barangayId, barangayName) {
     if (centerModalMode !== "edit" || !selectedCenter) return true;
@@ -632,48 +683,7 @@ function EvacuationCenterManager({
     return true;
   }
 
-  async function handleSaveMapPlacement() {
-    if (!editingCenter) return;
-    setSavingMap(true);
-    setError("");
-    try {
-      const centerId = editingCenter.properties?.id || editingCenter.id;
-      await api.updateEvacuationCenter(centerId, {
-        polygon: footprintPoints,
-        entrances: entrancePoints,
-      });
-      setNotice("Evacuation center outline and entrances saved!");
-      cancelMapping();
-      await invalidateCenterData();
-      await queryClient.invalidateQueries({ queryKey: queryKeys.evacuationCenters });
-    } catch (err) {
-      setError(err.message || "Failed to save center map location.");
-    } finally {
-      setSavingMap(false);
-    }
-  }
 
-  async function handleSaveRoomMapLocation() {
-    if (!roomLocation || !selectedRoom) return;
-    setSavingRoomLocation(true);
-    setError("");
-    try {
-      await api.updateRoomLocation(selectedRoom.id, {
-        latitude: roomLocation.lat,
-        longitude: roomLocation.lng,
-      });
-      setNotice(`Room ${selectedRoom.room_number} location saved!`);
-      const cId = selectedCenter?.id;
-      cancelMapping();
-      if (cId) await loadCenterRooms(cId);
-      await invalidateCenterData();
-      await queryClient.invalidateQueries({ queryKey: queryKeys.evacuationCenters });
-    } catch (err) {
-      setError(err.message || "Failed to save room location.");
-    } finally {
-      setSavingRoomLocation(false);
-    }
-  }
 
   // --- Multi-Criteria Filters ---
   const centerFeatures = centers?.features || [];
@@ -724,12 +734,6 @@ function EvacuationCenterManager({
     });
   }, [centerFeatures, searchQuery, barangayFilter, statusFilter, mappingFilter, occupancyFilter]);
 
-  // Keep the map synchronized with filtered features
-  const filteredFeatureCollection = useMemo(() => ({
-    type: "FeatureCollection",
-    features: filteredCenters,
-  }), [filteredCenters]);
-
   // Count unmapped centers in total dataset
   const unmappedCount = useMemo(() => {
     return centerFeatures.filter((c) => !isCenterMapped(c)).length;
@@ -744,7 +748,6 @@ function EvacuationCenterManager({
       if (!stillVisible) {
         setSelectedCenter(null);
         setSelectedRoom(null);
-        setDrawerTab("center");
       }
     }
   }, [filteredCenters, selectedCenter]);
@@ -775,116 +778,336 @@ function EvacuationCenterManager({
   const centerCapacity = selectedCenter?.capacity || 0;
   const centerOccupied = selectedCenter?.occupied || 0;
   const centerAvailable = selectedCenter?.available ?? Math.max(centerCapacity - centerOccupied, 0);
-  const centerPercent = centerCapacity > 0 ? Math.min(100, Math.round((centerOccupied / centerCapacity) * 100)) : 0;
-  const centerProgressClass =
-    centerPercent >= 90 ? "is-full" : centerPercent >= 60 ? "is-high" : "";
+  const centerOccupancyStatus = getOccupancyStatus(centerOccupied, centerCapacity);
+  const centerPercent = centerOccupancyStatus.percent;
+  const centerProgressClass = centerOccupancyStatus.barClass;
+
+  // Executive Municipal Overview Statistics
+  const totalCenters = centerFeatures.length;
+  const activeCentersCount = useMemo(
+    () => centerFeatures.filter((c) => (c.properties || c).is_active).length,
+    [centerFeatures]
+  );
+  const totalCapacity = useMemo(
+    () => centerFeatures.reduce((acc, c) => acc + Number((c.properties || c).capacity || 0), 0),
+    [centerFeatures]
+  );
+  const totalOccupied = useMemo(
+    () =>
+      centerFeatures.reduce(
+        (acc, c) => acc + Number((c.properties || c).occupied || (c.properties || c).current_occupancy || 0),
+        0
+      ),
+    [centerFeatures]
+  );
+  const totalAvailable = Math.max(0, totalCapacity - totalOccupied);
+  const overallPercent = totalCapacity > 0 ? Math.round((totalOccupied / totalCapacity) * 100) : 0;
+  const mappedCount = totalCenters - unmappedCount;
+
+  // Tab 3: Evacuee list computation
+  const currentFamiliesList = useMemo(() => {
+    if (!selectedRoom || selectedRoom.id === "all") {
+      return allCenterFamilies.length > 0 ? allCenterFamilies : roomFamilies;
+    }
+    return roomFamilies.length > 0
+      ? roomFamilies
+      : allCenterFamilies.filter((f) => String(f.room_id) === String(selectedRoom.id));
+  }, [selectedRoom, allCenterFamilies, roomFamilies]);
+
+  const filteredHouseholds = useMemo(() => {
+    if (!householdSearch.trim()) return currentFamiliesList;
+    const q = householdSearch.trim().toLowerCase();
+    return currentFamiliesList.filter((fam) => {
+      const head = String(fam.household_head_name || fam.head_name || "").toLowerCase();
+      const code = String(fam.family_code || "").toLowerCase();
+      const contact = String(fam.contact_number || "").toLowerCase();
+      const rm = String(fam.room_number || "").toLowerCase();
+      return head.includes(q) || code.includes(q) || contact.includes(q) || rm.includes(q);
+    });
+  }, [currentFamiliesList, householdSearch]);
+
+  const totalFilteredPersons = useMemo(() => {
+    return filteredHouseholds.reduce(
+      (acc, f) => acc + Number(f.assigned_members || f.family_members || 1),
+      0
+    );
+  }, [filteredHouseholds]);
+
+  function exportCentersCsv() {
+    const headers = [
+      "Center ID",
+      "Center Name",
+      "Barangays Served",
+      "Capacity",
+      "Occupied",
+      "Available Spaces",
+      "Occupancy Rate (%)",
+      "Operating Status",
+      "GIS Status",
+      "Contact Number",
+      "Building Material",
+      "Accessibility Notes",
+    ];
+
+    const escapeCell = (val) => {
+      const str = val === null || val === undefined ? "" : String(val);
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const rows = filteredCenters.map((feature) => {
+      const c = feature.properties || feature;
+      const mapped = isCenterMapped(feature);
+      const cap = Number(c.capacity || 0);
+      const occ = Number(c.occupied || c.current_occupancy || 0);
+      const avail = cap > 0 ? Math.max(cap - occ, 0) : 0;
+      const pct = cap > 0 ? Math.round((occ / cap) * 100) : 0;
+      const brgys = (c.barangays || []).map((b) => b.name).join("; ");
+
+      return [
+        c.id,
+        c.name,
+        brgys,
+        cap,
+        occ,
+        avail,
+        `${pct}%`,
+        c.is_active ? "Active" : "Inactive",
+        mapped ? "Mapped on GIS" : "Not Mapped",
+        c.contact_number || "",
+        c.building_material || "",
+        c.accessibility_notes || "",
+      ];
+    });
+
+    const csvContent = [
+      headers.map(escapeCell).join(","),
+      ...rows.map((r) => r.map(escapeCell).join(",")),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const dateStr = new Date().toISOString().split("T")[0];
+    link.setAttribute("download", `Evacuation_Centers_Sogod_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportCenterEvacueesCsv() {
+    if (!selectedCenter) return;
+    const centerName = selectedCenter.name || "Center";
+    const families = currentFamiliesList;
+
+    const headers = [
+      "Family ID",
+      "Family Code",
+      "Household Head",
+      "Room Assigned",
+      "Origin Barangay",
+      "Members Sheltered",
+      "Contact Number",
+      "Evacuation Status",
+    ];
+
+    const escapeCell = (val) => {
+      const str = val === null || val === undefined ? "" : String(val);
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const rows = families.map((fam) => [
+      fam.family_id || fam.id || "",
+      fam.family_code || "",
+      fam.household_head_name || fam.head_name || "Unnamed",
+      formatRoomLabel(fam.room_number) ||
+        (selectedRoom && selectedRoom.id !== "all" ? formatRoomLabel(selectedRoom.room_number) : "—"),
+      displayEntityName(fam.barangay, "—"),
+      fam.assigned_members || fam.family_members || 1,
+      fam.contact_number || "—",
+      fam.evacuation_status || "Evacuated",
+    ]);
+
+    const csvContent = [
+      headers.map(escapeCell).join(","),
+      ...rows.map((r) => r.map(escapeCell).join(",")),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const dateStr = new Date().toISOString().split("T")[0];
+    const safeName = centerName.replace(/[^a-zA-Z0-9_-]/g, "_");
+    link.setAttribute("download", `Evacuee_Manifest_${safeName}_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function handlePrintManifest() {
+    window.print();
+  }
+
+  function handleAssignHouseholdClick() {
+    if (!selectedRoom || selectedRoom.id === "all") {
+      const firstAvailable = centerRooms.find(
+        (r) => r.is_active && (r.available ?? r.capacity - (r.occupied || 0)) > 0
+      );
+      if (firstAvailable) {
+        setSelectedRoom(firstAvailable);
+        setTimeout(() => openAssignModal(), 50);
+      } else {
+        setError(
+          "All rooms in this evacuation center are at full capacity or inactive. Please create a new room or adjust room capacity."
+        );
+      }
+    } else {
+      openAssignModal();
+    }
+  }
 
   return (
-    <div className={`ecm-container ${viewMode === "map" ? "in-map-view" : "in-list-view"} ${step !== "idle" ? "in-mapping-mode" : ""}`}>
-      {/* =========================================================
-          TOP BAR (Focused Mapping Bar or Standard Navigation Bar)
-          ========================================================= */}
-      {step !== "idle" ? (
-        <header className="ecm-mapping-top-bar">
-          <div className="ecm-mapping-title">
-            <strong>{editingCenter?.properties?.name || editingCenter?.name || selectedCenter?.name || "Evacuation Center"}</strong>
-            <span className="ecm-mapping-step-chip">
-              {step === "footprint"
-                ? "Step 1: Outline"
-                : step === "entrance"
-                ? "Step 2: Entrances"
-                : `Position Room ${selectedRoom?.room_number || ""}`}
-            </span>
-          </div>
+    <div className="ecm-container in-list-view">
+      <header className="ecm-top-bar">
+        <div className="ecm-title-group">
+          <h2>Evacuation Centers</h2>
+          <p>Monitor center status, manage rooms and capacities, and assign displaced households.</p>
+        </div>
+
+        <div className="ecm-controls">
+          {/* Mobile Filter Button (opens bottom sheet on mobile) */}
           <button
             type="button"
-            className="btn btn-sm btn-secondary ecm-touch-btn"
-            onClick={cancelMapping}
+            className={`btn btn-secondary btn-icon ecm-filter-trigger ${hasActiveFilters ? "has-active" : ""}`}
+            onClick={() => setMobileFiltersOpen(true)}
+            title="Filter Centers"
+            aria-label="Filter Centers"
           >
-            Cancel
-          </button>
-        </header>
-      ) : (
-        <header className="ecm-top-bar">
-          <div className="ecm-title-group">
-            <h2>Evacuation Centers</h2>
-            <p>Monitor center status, manage rooms and capacities, and assign displaced households.</p>
-          </div>
-
-          <div className="ecm-controls">
-            {/* Segmented View Switcher: List View (default) vs Map View */}
-            <div className="ecm-view-switcher" role="group" aria-label="View Mode">
-              <button
-                type="button"
-                className={`ecm-view-btn ${viewMode === "table" ? "is-active" : ""}`}
-                onClick={() => {
-                  setViewMode("table");
-                  setSelectedCenter(null);
-                  setSelectedRoom(null);
-                }}
-                title="List View"
-              >
-                <FontAwesomeIcon icon={faList} /> <span className="ecm-btn-label">List View</span>
-              </button>
-              <button
-                type="button"
-                className={`ecm-view-btn ${viewMode === "map" ? "is-active" : ""}`}
-                onClick={() => {
-                  setViewMode("map");
-                  setSelectedCenter(null);
-                  setSelectedRoom(null);
-                  setDrawerTab("center");
-                }}
-                title="Map View"
-              >
-                <FontAwesomeIcon icon={faMap} /> <span className="ecm-btn-label">Map View</span>
-              </button>
-            </div>
-
-            {/* Mobile Filter Button (opens bottom sheet on mobile) */}
-            <button
-              type="button"
-              className={`btn btn-secondary btn-icon ecm-filter-trigger ${hasActiveFilters ? "has-active" : ""}`}
-              onClick={() => setMobileFiltersOpen(true)}
-              title="Filter Centers"
-              aria-label="Filter Centers"
-            >
-              <FontAwesomeIcon icon={faSliders} />
-              {activeFilterCount > 0 && (
-                <span className="ecm-filter-badge">{activeFilterCount}</span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              className="btn btn-primary ecm-add-btn"
-              onClick={openAddCenterModal}
-            >
-              <FontAwesomeIcon icon={faPlus} /> <span className="ecm-btn-label">Add Center</span>
-            </button>
-
-            {onRefresh && (
-              <button
-                type="button"
-                className="btn btn-secondary btn-icon"
-                onClick={onRefresh}
-                title="Refresh Center Data"
-                aria-label="Refresh Center Data"
-              >
-                <FontAwesomeIcon icon={faRotate} />
-              </button>
+            <FontAwesomeIcon icon={faSliders} />
+            {activeFilterCount > 0 && (
+              <span className="ecm-filter-badge">{activeFilterCount}</span>
             )}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-primary ecm-add-btn"
+            onClick={openAddCenterModal}
+          >
+            <FontAwesomeIcon icon={faPlus} /> <span className="ecm-btn-label">Add Center</span>
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={exportCentersCsv}
+            title="Export evacuation centers summary to CSV"
+          >
+            <FontAwesomeIcon icon={faDownload} /> <span className="ecm-btn-label">Export CSV</span>
+          </button>
+
+          {onRefresh && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-icon"
+              onClick={onRefresh}
+              title="Refresh Center Data"
+              aria-label="Refresh Center Data"
+            >
+              <FontAwesomeIcon icon={faRotate} />
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* =========================================================
+          EXECUTIVE STAT CARDS (Overview of All Evacuation Centers)
+          ========================================================= */}
+      {!selectedCenter && (
+        <div className="ecm-stats-grid">
+          <button
+            type="button"
+            className={`ecm-stat-card ${!hasActiveFilters ? "is-selected" : ""}`}
+            onClick={clearFilters}
+            title="Click to show all evacuation centers"
+          >
+            <span className="ecm-stat-label">Total Centers</span>
+            <strong className="ecm-stat-value">{totalCenters}</strong>
+            <span className="ecm-stat-sub">Facilities in Sogod</span>
+          </button>
+
+          <button
+            type="button"
+            className={`ecm-stat-card accent-green ${statusFilter === "active" ? "is-selected" : ""}`}
+            onClick={() => setStatusFilter(statusFilter === "active" ? "all" : "active")}
+            title="Click to filter active/operational centers"
+          >
+            <span className="ecm-stat-label">Active Centers</span>
+            <strong className="ecm-stat-value" style={{ color: "#16a34a" }}>
+              {activeCentersCount}
+            </strong>
+            <span className="ecm-stat-sub">{totalCenters - activeCentersCount} inactive</span>
+          </button>
+
+          <div className="ecm-stat-card">
+            <span className="ecm-stat-label">Total Capacity</span>
+            <strong className="ecm-stat-value">{totalCapacity.toLocaleString()}</strong>
+            <span className="ecm-stat-sub">Max evacuees supported</span>
           </div>
-        </header>
+
+          <button
+            type="button"
+            className={`ecm-stat-card ${totalAvailable > 0 ? "accent-blue" : "accent-amber"} ${occupancyFilter !== "all" ? "is-selected" : ""}`}
+            onClick={() => {
+              if (occupancyFilter === "all") setOccupancyFilter("available");
+              else if (occupancyFilter === "available") setOccupancyFilter("full");
+              else setOccupancyFilter("all");
+            }}
+            title="Click to toggle Available vs Full centers"
+          >
+            <span className="ecm-stat-label">Sheltered / Vacant</span>
+            <strong className="ecm-stat-value">
+              <span style={{ color: "#2563eb" }}>{totalOccupied.toLocaleString()}</span>
+              <span style={{ fontSize: 16, fontWeight: 500, color: "var(--muted)", margin: "0 4px" }}>/</span>
+              <span style={{ color: totalAvailable > 0 ? "#16a34a" : "#dc2626" }}>
+                {totalAvailable.toLocaleString()}
+              </span>
+            </strong>
+            <span className="ecm-stat-sub">
+              {overallPercent}% capacity ({occupancyFilter === "all" ? "All" : occupancyFilter === "available" ? "Filtered: Available" : "Filtered: Full"})
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`ecm-stat-card ${unmappedCount > 0 ? "accent-amber" : "accent-green"} ${mappingFilter === "unmapped" ? "is-selected" : ""}`}
+            onClick={() => setMappingFilter(mappingFilter === "unmapped" ? "all" : "unmapped")}
+            title={unmappedCount > 0 ? "Click to view centers needing GIS placement" : "All centers placed on map"}
+          >
+            <span className="ecm-stat-label">GIS Placement</span>
+            <strong className="ecm-stat-value" style={{ color: unmappedCount > 0 ? "#d97706" : "#16a34a" }}>
+              {unmappedCount > 0 ? `${unmappedCount} Unmapped` : "All Mapped"}
+            </strong>
+            <span className="ecm-stat-sub">
+              {unmappedCount > 0 ? "Needs map boundary" : `${mappedCount} on GIS map`}
+            </span>
+          </button>
+        </div>
       )}
 
-      {/* Only show filter bar, unmapped banner, and alerts when idle (not actively mapping) */}
-      {step === "idle" && (
-        <>
-          {/* =========================================================
-              FILTER BAR (Search + at most 2 filters: Barangay & Status)
-              ========================================================= */}
-          <div className="ecm-filter-bar">
+      {/* =========================================================
+          FILTER BAR (Search, Barangay, Status, Placement & Occupancy)
+          ========================================================= */}
+      <div className="ecm-filter-bar">
             <div className="ecm-search">
               <FontAwesomeIcon icon={faMagnifyingGlass} />
               <input
@@ -942,6 +1165,17 @@ function EvacuationCenterManager({
               <option value="unmapped">Not Mapped {unmappedCount > 0 ? `(${unmappedCount})` : ""}</option>
             </select>
 
+            <select
+              className="ecm-select"
+              value={occupancyFilter}
+              onChange={(e) => setOccupancyFilter(e.target.value)}
+              aria-label="Filter by Occupancy"
+            >
+              <option value="all">All Capacities</option>
+              <option value="available">Available Spaces</option>
+              <option value="full">At Capacity / Full</option>
+            </select>
+
             {hasActiveFilters && (
               <button
                 type="button"
@@ -992,695 +1226,11 @@ function EvacuationCenterManager({
               )}
             </div>
           )}
-        </>
-      )}
 
       {/* =========================================================
-          VIEW MODE 1: MAP-FIRST (DEFAULT WEB-GIS WORKSPACE)
+          EVACUATION CENTERS DIRECTORY (List / Details)
           ========================================================= */}
-      {viewMode === "map" ? (
-        <div className="ecm-map-workspace">
-          {/* MAP CANVAS (Passed filtered feature collection and hides duplicate search) */}
-          <DashboardMap
-            centers={filteredFeatureCollection}
-            hazardZones={hazardZones}
-            hideInternalPanel={true}
-            hideSearch={true}
-            selectedCenter={selectedCenter}
-            onCenterClick={(c) => {
-              setSelectedCenter(normalizeCenter(c));
-              setDrawerTab("center");
-            }}
-            drawMode={
-              step === "footprint"
-                ? "footprint"
-                : step === "entrance"
-                ? "entrance"
-                : step === "room-map"
-                ? "room"
-                : "none"
-            }
-            onMapClick={(latlng) => {
-              if (step === "footprint") {
-                setFootprintPoints((pts) => [...pts, latlng]);
-              } else if (step === "entrance") {
-                setEntrancePoints((pts) => [...pts, latlng]);
-              } else if (step === "room-map" && selectedRoom) {
-                setRoomLocation(latlng);
-              }
-            }}
-            pendingFootprint={footprintPoints}
-            pendingEntrances={entrancePoints}
-            rooms={centerRooms}
-            onRoomClick={(r) => {
-              setSelectedRoom(r);
-              setDrawerTab("families");
-            }}
-            pendingRoomLocation={roomLocation}
-            focusLocation={focusLocation}
-          />
-
-          {/* LOADING OVERLAY ON MAP */}
-          {!centers && (
-            <LoadingState overlay={true} message="Loading evacuation centers on map..." />
-          )}
-
-
-
-          {/* MAPPING FIXED BOTTOM DOCK BAR: SINGLE COMPACT GUIDE AND CONTROLS */}
-          {step !== "idle" && (
-            <div className="ecm-mapping-dock-bar">
-              <div className="ecm-mapping-guide-line">
-                <FontAwesomeIcon
-                  icon={
-                    step === "footprint"
-                      ? faDrawPolygon
-                      : step === "entrance"
-                      ? faDoorOpen
-                      : faLocationDot
-                  }
-                />
-                <span>
-                  {step === "footprint" &&
-                    `Tap the map to draw building outline (${footprintPoints.length} points placed).`}
-                  {step === "entrance" &&
-                    `Tap the map to mark building entrances (${entrancePoints.length} placed).`}
-                  {step === "room-map" &&
-                    (roomLocation
-                      ? `Room ${selectedRoom?.room_number || ""} placed (${roomLocation.lat.toFixed(4)}, ${roomLocation.lng.toFixed(4)}). Tap Save Room.`
-                      : `Tap inside the building footprint to position Room ${selectedRoom?.room_number || ""}.`)}
-                </span>
-              </div>
-
-              <div className="ecm-mapping-dock-actions">
-                {step === "footprint" && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-secondary ecm-touch-btn"
-                      onClick={cancelMapping}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary ecm-touch-btn"
-                      onClick={() => setFootprintPoints((p) => p.slice(0, -1))}
-                      disabled={!footprintPoints.length}
-                    >
-                      Undo
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary ecm-touch-btn"
-                      onClick={() => setStep("entrance")}
-                      disabled={footprintPoints.length < 3}
-                    >
-                      Next: Entrances
-                    </button>
-                  </>
-                )}
-
-                {step === "entrance" && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-secondary ecm-touch-btn"
-                      onClick={cancelMapping}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary ecm-touch-btn"
-                      onClick={() => setStep("footprint")}
-                    >
-                      Back
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary ecm-touch-btn"
-                      onClick={() => setEntrancePoints((p) => p.slice(0, -1))}
-                      disabled={!entrancePoints.length}
-                    >
-                      Undo
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary ecm-touch-btn"
-                      disabled={entrancePoints.length < 1 || savingMap}
-                      onClick={handleSaveMapPlacement}
-                    >
-                      <FontAwesomeIcon icon={faFloppyDisk} spin={savingMap} /> Save Map
-                    </button>
-                  </>
-                )}
-
-                {step === "room-map" && selectedRoom && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-secondary ecm-touch-btn"
-                      onClick={cancelMapping}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary ecm-touch-btn"
-                      disabled={!roomLocation || savingRoomLocation}
-                      onClick={handleSaveRoomMapLocation}
-                    >
-                      <FontAwesomeIcon icon={faFloppyDisk} spin={savingRoomLocation} /> Save Room
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* =========================================================
-              FLOATING MAP DRAWER (CONNECTED TO MAP SELECTION)
-              On mobile: functions as expandable bottom sheet
-              ========================================================= */}
-          {step === "idle" && selectedCenter && (
-            <aside
-              className={`ecm-map-drawer ${drawerExpanded ? "is-expanded" : "is-collapsed"}`}
-              aria-label="Center details panel"
-            >
-              {/* Mobile grab handle to expand/collapse bottom sheet */}
-              <div
-                className="ecm-drawer-handle-bar"
-                onClick={() => setDrawerExpanded((exp) => !exp)}
-                role="button"
-                tabIndex={0}
-                aria-label={drawerExpanded ? "Collapse sheet" : "Expand sheet"}
-              >
-                <span className="ecm-drawer-handle" />
-              </div>
-
-              {/* DRAWER HEADER */}
-              <div className="ecm-drawer-header">
-                <div className="ecm-drawer-title-wrap">
-                  <p className="ecm-drawer-subtitle">
-                    {drawerTab === "families" && selectedRoom
-                      ? `Room ${selectedRoom.room_number} Households`
-                      : drawerTab === "rooms"
-                      ? `${selectedCenter.name} Rooms`
-                      : selectedCenter.barangay || "Evacuation Center"}
-                  </p>
-                  <h3 className="ecm-drawer-title">
-                    {drawerTab === "families" && selectedRoom
-                      ? `Assigned to Room ${selectedRoom.room_number}`
-                      : selectedCenter.name}
-                  </h3>
-                </div>
-
-                <div className="ecm-drawer-header-actions">
-                  <button
-                    type="button"
-                    className="ecm-drawer-toggle-btn"
-                    onClick={() => setDrawerExpanded((exp) => !exp)}
-                    aria-label={drawerExpanded ? "Collapse" : "Expand"}
-                    title={drawerExpanded ? "Collapse" : "Expand"}
-                  >
-                    <FontAwesomeIcon icon={drawerExpanded ? faChevronDown : faChevronUp} />
-                  </button>
-
-                  <button
-                    type="button"
-                    className="ecm-drawer-close-btn"
-                    onClick={() => {
-                      setSelectedCenter(null);
-                      setSelectedRoom(null);
-                      setDrawerTab("center");
-                      setDrawerExpanded(false);
-                    }}
-                    aria-label="Close center panel"
-                    title="Close panel"
-                  >
-                    <FontAwesomeIcon icon={faXmark} />
-                  </button>
-                </div>
-              </div>
-
-              {/* DRAWER BODY (DRILLDOWN LEVELS) */}
-              <div className="ecm-drawer-body">
-                {/* ---------------- LEVEL 1: CENTER DETAILS ---------------- */}
-                {drawerTab === "center" && (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
-                      <span className={`status-pill ${selectedCenter.is_active ? "is-active" : "is-inactive"}`}>
-                        {selectedCenter.is_active ? "Active" : "Inactive"}
-                      </span>
-                      {isCenterMapped(selectedCenter) ? (
-                        <span className="status-pill is-mapped">
-                          <FontAwesomeIcon icon={faLocationDot} /> On Map
-                        </span>
-                      ) : (
-                        <span className="status-pill is-unmapped">
-                          <FontAwesomeIcon icon={faTriangleExclamation} /> Not Mapped
-                        </span>
-                      )}
-                    </div>
-
-                    {!isCenterMapped(selectedCenter) && (
-                      <div className="alert alert-warning" style={{ fontSize: 12 }}>
-                        <FontAwesomeIcon icon={faTriangleExclamation} />
-                        <span>This center is not placed on the map yet. Click &ldquo;Draw Outline&rdquo; below to mark its location.</span>
-                      </div>
-                    )}
-
-                    {/* STATS GRID */}
-                    <div className="ecm-stats-grid">
-                      <div className="ecm-stat-box">
-                        <strong>{centerCapacity}</strong>
-                        <span>Capacity</span>
-                      </div>
-                      <div className="ecm-stat-box">
-                        <strong style={{ color: "#2563eb" }}>{centerOccupied}</strong>
-                        <span>Assigned</span>
-                      </div>
-                      <div className="ecm-stat-box">
-                        <strong style={{ color: centerAvailable > 0 ? "#16a34a" : "#dc2626" }}>
-                          {centerAvailable}
-                        </strong>
-                        <span>Remaining</span>
-                      </div>
-                    </div>
-
-                    {/* OCCUPANCY BAR */}
-                    {centerCapacity > 0 && (
-                      <div className="ecm-progress-wrap">
-                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--muted)" }}>
-                          <span>Assignment Rate</span>
-                          <strong>{centerPercent}% ({centerOccupied} / {centerCapacity})</strong>
-                        </div>
-                        <div className="ecm-progress-bar">
-                          <div
-                            className={`ecm-progress-fill ${centerProgressClass}`}
-                            style={{ width: `${centerPercent}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* CENTER DETAILS TABLE */}
-                    <table className="ecm-info-table">
-                      <tbody>
-                        <tr>
-                          <td>Barangays Served</td>
-                          <td>
-                            <div className="ecm-barangays-plain">
-                              {(selectedCenter.barangays || []).map((b) => displayEntityName(b.name, `Barangay ${b.id}`)).join(", ") || "Not specified"}
-                            </div>
-                          </td>
-                        </tr>
-                        <tr>
-                          <td>Map Location</td>
-                          <td>
-                            {isCenterMapped(selectedCenter) ? "Placed on map" : "Not mapped yet"}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td>Rooms</td>
-                          <td>{centerRooms.length} room{centerRooms.length !== 1 ? "s" : ""}</td>
-                        </tr>
-                        {selectedCenter.contact_number && (
-                          <tr>
-                            <td>Contact</td>
-                            <td>{selectedCenter.contact_number}</td>
-                          </tr>
-                        )}
-                        {selectedCenter.building_material && (
-                          <tr>
-                            <td>Building</td>
-                            <td>{selectedCenter.building_material}</td>
-                          </tr>
-                        )}
-                        {selectedCenter.accessibility_notes && (
-                          <tr>
-                            <td>Accessibility</td>
-                            <td>{selectedCenter.accessibility_notes}</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-
-                    <div className="ecm-breakdown-wrap">
-                      <h4 className="ecm-section-title">Capacity by Barangay</h4>
-                      <table className="ecm-breakdown-table">
-                        <thead>
-                          <tr>
-                            <th style={{ width: "42%" }}>Barangay</th>
-                            <th style={{ width: "18%", textAlign: "center" }}>Rooms</th>
-                            <th style={{ width: "20%", textAlign: "right" }}>Assigned</th>
-                            <th style={{ width: "20%", textAlign: "right" }}>Available</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(selectedCenter.barangay_breakdown || []).map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                <div className="ecm-brgy-cell" title={row.name}>
-                                  <span
-                                    className="ecm-brgy-dot"
-                                    style={{ backgroundColor: row.color || "#2563eb" }}
-                                  />
-                                  <span className="ecm-brgy-name">
-                                    {displayEntityName(row.name, `Barangay ${row.id}`)}
-                                  </span>
-                                </div>
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <span className="ecm-rooms-pill">{row.rooms}</span>
-                              </td>
-                              <td style={{ textAlign: "right" }}>
-                                <strong style={{ color: "#2563eb" }}>{row.assigned || 0}</strong>
-                              </td>
-                              <td style={{ textAlign: "right" }}>
-                                <strong style={{ color: (row.available || 0) > 0 ? "#16a34a" : "#dc2626" }}>
-                                  {row.available || 0}
-                                </strong>
-                              </td>
-                            </tr>
-                          ))}
-                          {!selectedCenter.barangay_breakdown?.length && (
-                            <tr>
-                              <td colSpan="4" className="ecm-breakdown-empty-td">
-                                No barangay allocation data available.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* MANAGE ROOMS ACTION TRIGGER */}
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      style={{ width: "100%", justifyContent: "center" }}
-                      onClick={() => setDrawerTab("rooms")}
-                    >
-                      <FontAwesomeIcon icon={faDoorOpen} />
-                      Manage Rooms ({centerRooms.length})
-                    </button>
-                  </>
-                )}
-
-                {/* ---------------- LEVEL 2: ROOMS LIST ---------------- */}
-                {drawerTab === "rooms" && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      style={{ alignSelf: "flex-start" }}
-                      onClick={() => setDrawerTab("center")}
-                    >
-                      <FontAwesomeIcon icon={faArrowLeft} /> Back to Center Details
-                    </button>
-
-                    <div className="ecm-section-header">
-                      <h4 className="ecm-section-title">
-                        Rooms in {selectedCenter.name} ({centerRooms.length})
-                      </h4>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={openAddRoomModal}
-                      >
-                        <FontAwesomeIcon icon={faPlus} /> Add Room
-                      </button>
-                    </div>
-
-                    {loadingRooms ? (
-                      <LoadingState message="Loading rooms..." size="sm" />
-                    ) : centerRooms.length === 0 ? (
-                      <div className="empty-state">
-                        <FontAwesomeIcon icon={faDoorOpen} style={{ fontSize: 24, marginBottom: 6, opacity: 0.6 }} />
-                        <p style={{ margin: 0, fontWeight: 600 }}>No rooms created yet</p>
-                        <p style={{ margin: "4px 0 10px", fontSize: 12 }}>
-                          Click &ldquo;Add Room&rdquo; to create a room inside this evacuation center.
-                        </p>
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-primary"
-                          onClick={openAddRoomModal}
-                        >
-                          <FontAwesomeIcon icon={faPlus} /> Add Room
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="ecm-room-list">
-                        {centerRooms.map((room) => {
-                          const rCap = room.capacity || 0;
-                          const rOcc = room.occupied || 0;
-                          const rAvail = room.available ?? Math.max(rCap - rOcc, 0);
-
-                          return (
-                            <div key={room.id} className="ecm-room-card">
-                              <div className="ecm-room-card-head">
-                                <strong>Room {room.room_number}</strong>
-                                <span className={`status-pill ${room.is_active ? "is-active" : "is-inactive"}`}>
-                                  {room.is_active ? "Active" : "Inactive"}
-                                </span>
-                              </div>
-
-                              <div className="ecm-room-card-stats">
-                                <span>Cap: <strong>{rCap}</strong></span>
-                                <span>Occ: <strong style={{ color: "#2563eb" }}>{rOcc}</strong></span>
-                                <span>
-                                  Avail:{" "}
-                                  <strong style={{ color: rAvail > 0 ? "#16a34a" : "#dc2626" }}>
-                                    {rAvail}
-                                  </strong>
-                                </span>
-                              </div>
-
-                              <div className="ecm-room-card-actions">
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-primary"
-                                  onClick={() => {
-                                    setSelectedRoom(room);
-                                    setDrawerTab("families");
-                                  }}
-                                  title="View and manage assigned households"
-                                >
-                                  <FontAwesomeIcon icon={faUsers} /> Households ({rOcc})
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-secondary"
-                                  onClick={() => openEditRoomModal(room)}
-                                  title="Edit room capacity and details"
-                                >
-                                  <FontAwesomeIcon icon={faPen} /> Edit
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-secondary"
-                                  onClick={() => startMappingRoomLocation(room)}
-                                  title="Place room on map"
-                                >
-                                  <FontAwesomeIcon icon={faLocationDot} /> Map Pin
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-secondary"
-                                  onClick={() => confirmToggleRoomActive(room)}
-                                  title={room.is_active ? "Deactivate room" : "Activate room"}
-                                >
-                                  {room.is_active ? "Deactivate" : "Activate"}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-danger"
-                                  onClick={() => confirmDeleteRoom(room)}
-                                  title="Delete room"
-                                >
-                                  <FontAwesomeIcon icon={faTrash} />
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* ---------------- LEVEL 3: ASSIGNED HOUSEHOLDS ---------------- */}
-                {drawerTab === "families" && selectedRoom && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      style={{ alignSelf: "flex-start" }}
-                      onClick={() => setDrawerTab("rooms")}
-                    >
-                      <FontAwesomeIcon icon={faArrowLeft} /> Back to Rooms
-                    </button>
-
-                    {/* ROOM OCCUPANCY RECAP */}
-                    <div className="ecm-stat-box" style={{ textAlign: "left" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: 12, color: "var(--muted)", textTransform: "none" }}>
-                          Room {selectedRoom.room_number} Summary
-                        </span>
-                        <span className={`status-pill ${selectedRoom.is_active ? "is-active" : "is-inactive"}`}>
-                          {selectedRoom.is_active ? "Active" : "Inactive"}
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 13 }}>
-                        <span>Capacity: <strong>{selectedRoom.capacity}</strong></span>
-                        <span>Assigned: <strong style={{ color: "#2563eb" }}>{selectedRoom.occupied || 0}</strong></span>
-                        <span>
-                          Remaining:{" "}
-                          <strong style={{ color: (selectedRoom.available ?? 0) > 0 ? "#16a34a" : "#dc2626" }}>
-                            {selectedRoom.available ?? (selectedRoom.capacity - (selectedRoom.occupied || 0))}
-                          </strong>
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="ecm-section-header">
-                      <h4 className="ecm-section-title">
-                        Assigned Households ({roomFamilies.length})
-                      </h4>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={openAssignModal}
-                        disabled={!selectedRoom.is_active || (selectedRoom.available ?? 0) <= 0}
-                        title={(selectedRoom.available ?? 0) <= 0 ? "Room is at capacity" : "Assign household"}
-                      >
-                        <FontAwesomeIcon icon={faPlus} /> Assign Household
-                      </button>
-                    </div>
-
-                    {loadingRoomFamilies ? (
-                      <LoadingState message="Loading assigned households..." size="sm" />
-                    ) : roomFamilies.length === 0 ? (
-                      <div className="empty-state">
-                        <FontAwesomeIcon icon={faUsers} style={{ fontSize: 24, marginBottom: 6, opacity: 0.6 }} />
-                        <p style={{ margin: 0, fontWeight: 600 }}>No households assigned</p>
-                        <p style={{ margin: "4px 0 10px", fontSize: 12 }}>
-                          This room currently has space for evacuees.
-                        </p>
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-primary"
-                          onClick={openAssignModal}
-                          disabled={!selectedRoom.is_active || (selectedRoom.available ?? 0) <= 0}
-                        >
-                          <FontAwesomeIcon icon={faPlus} /> Assign Household
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="ecm-family-list">
-                        {roomFamilies.map((fam, idx) => {
-                          const members = fam.assigned_members || fam.family_members || 1;
-                          const head = fam.household_head_name || fam.head_name || "Unnamed Household";
-
-                          return (
-                            <div key={fam.family_id || idx} className="ecm-family-card">
-                              <div className="ecm-family-card-head">
-                                <div>
-                                  <strong>{head}</strong>
-                                  <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: 6 }}>
-                                    {fam.family_code ? `(${fam.family_code})` : ""}
-                                  </span>
-                                </div>
-                                <span className="status-pill is-assigned">
-                                  {members} member{members !== 1 ? "s" : ""}
-                                </span>
-                              </div>
-
-                              <div className="ecm-family-meta">
-                                <div>Barangay: <strong>{displayEntityName(fam.barangay, "—")}</strong></div>
-                                {fam.contact_number && <div>Contact: {fam.contact_number}</div>}
-                                {fam.address && <div>Address: {fam.address}</div>}
-                              </div>
-
-                              <div className="ecm-family-card-actions">
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-secondary"
-                                  onClick={() => openMoveModal(fam)}
-                                  title="Transfer household to another room or center"
-                                >
-                                  <FontAwesomeIcon icon={faArrowRightArrowLeft} /> Move Room
-                                </button>
-
-                                <button
-                                  type="button"
-                                  className="btn btn-sm btn-danger"
-                                  onClick={() => confirmUnassignFamily(fam)}
-                                  title="Remove assignment and free capacity"
-                                >
-                                  <FontAwesomeIcon icon={faUserMinus} /> Remove
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {/* DRAWER FOOTER (QUICK CENTER ACTIONS) */}
-              <div className="ecm-drawer-footer">
-                <button
-                  type="button"
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => openEditCenterModal(selectedCenter)}
-                >
-                  <FontAwesomeIcon icon={faPen} /> Edit Center
-                </button>
-
-                <button
-                  type="button"
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => startMappingCenterOnMap(selectedCenter)}
-                  title="Draw building outline and entrances on map"
-                >
-                  <FontAwesomeIcon icon={faDrawPolygon} /> Draw Outline
-                </button>
-
-                {canDeactivate && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => confirmToggleCenterActive(selectedCenter)}
-                  >
-                    {selectedCenter.is_active ? "Deactivate" : "Activate"}
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger"
-                  onClick={() => confirmDeleteCenter(selectedCenter)}
-                >
-                  <FontAwesomeIcon icon={faTrash} />
-                </button>
-              </div>
-            </aside>
-          )}
-        </div>
-      ) : (
-        /* =========================================================
-            VIEW MODE: LIST VIEW (PRIMARY WORKSPACE)
-            ========================================================= */
-        <div className="ecm-table-view">
+      <div className="ecm-table-view">
           {selectedCenter ? (
             /* ---------------------------------------------------------
                CENTER DETAILS VIEW (Overview, Rooms, Assigned Households, Map)
@@ -1704,6 +1254,24 @@ function EvacuationCenterManager({
                   <button
                     type="button"
                     className="btn btn-sm btn-secondary"
+                    onClick={handlePrintManifest}
+                    title="Print official evacuee manifest"
+                  >
+                    <FontAwesomeIcon icon={faPrint} /> Print Manifest
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={exportCenterEvacueesCsv}
+                    title="Export center evacuees to CSV"
+                  >
+                    <FontAwesomeIcon icon={faDownload} /> Export CSV
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
                     onClick={() => openEditCenterModal(selectedCenter)}
                   >
                     <FontAwesomeIcon icon={faPen} /> Edit Center
@@ -1720,21 +1288,39 @@ function EvacuationCenterManager({
                   )}
 
                   {isCenterMapped(selectedCenter) ? (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => {
-                        setViewMode("map");
-                        setDrawerTab("center");
-                      }}
-                    >
-                      <FontAwesomeIcon icon={faMap} /> View on Map
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => {
+                          const cId = selectedCenter?.id || selectedCenter?.properties?.id;
+                          navigate(`${mapBasePath}?center=${cId}`);
+                        }}
+                        title="View center on map"
+                      >
+                        <FontAwesomeIcon icon={faMap} /> View on Map
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => {
+                          const cId = selectedCenter?.id || selectedCenter?.properties?.id;
+                          navigate(`${mapBasePath}?center=${cId}&mode=place`);
+                        }}
+                        title="Edit building outline and entrances on map"
+                      >
+                        <FontAwesomeIcon icon={faDrawPolygon} /> Edit outline
+                      </button>
+                    </>
                   ) : (
                     <button
                       type="button"
                       className="btn btn-sm btn-primary"
-                      onClick={() => startMappingCenterOnMap(selectedCenter)}
+                      onClick={() => {
+                        const cId = selectedCenter?.id || selectedCenter?.properties?.id;
+                        navigate(`${mapBasePath}?center=${cId}&mode=place`);
+                      }}
+                      title="Place center on map"
                     >
                       <FontAwesomeIcon icon={faDrawPolygon} /> Place on Map
                     </button>
@@ -1802,22 +1388,14 @@ function EvacuationCenterManager({
                   className={`ecm-section-tab ${centerSection === "households" ? "is-active" : ""}`}
                   onClick={() => {
                     setCenterSection("households");
-                    if (!selectedRoom && centerRooms.length > 0) {
-                      setSelectedRoom(centerRooms[0]);
+                    if (!selectedRoom) {
+                      setSelectedRoom({ id: "all", room_number: "All Rooms" });
                     }
                   }}
                 >
-                  Assigned Households
+                  Assigned Households ({allCenterFamilies.length || centerOccupied})
                 </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={centerSection === "map"}
-                  className={`ecm-section-tab ${centerSection === "map" ? "is-active" : ""}`}
-                  onClick={() => setCenterSection("map")}
-                >
-                  Map
-                </button>
+
               </div>
 
               {/* Section 1: Overview */}
@@ -1839,7 +1417,7 @@ function EvacuationCenterManager({
                     <div className="bm-summary-divider" />
                     <div className="bm-summary-item">
                       <span className="bm-summary-label">Remaining Spaces</span>
-                      <span className="bm-summary-val" style={{ color: centerAvailable > 0 ? "#16a34a" : "#dc2626" }}>
+                      <span className="bm-summary-val" style={{ color: getOccupancyColor(centerOccupied, centerCapacity) }}>
                         {centerAvailable}
                       </span>
                       <span className="bm-summary-sub">{centerAvailable > 0 ? "vacant spaces" : "full capacity"}</span>
@@ -1913,35 +1491,44 @@ function EvacuationCenterManager({
                           </tr>
                         </thead>
                         <tbody>
-                          {(selectedCenter.barangay_breakdown || []).map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                <div className="ecm-brgy-cell" title={row.name}>
-                                  <span
-                                    className="ecm-brgy-dot"
-                                    style={{ backgroundColor: row.color || "#2563eb" }}
-                                  />
-                                  <span className="ecm-brgy-name">
-                                    {displayEntityName(row.name, `Barangay ${row.id}`)}
-                                  </span>
-                                </div>
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                <span className="ecm-rooms-pill">{row.rooms}</span>
-                              </td>
-                              <td style={{ textAlign: "right" }}>
-                                <strong style={{ color: "#2563eb" }}>{row.assigned || 0}</strong>
-                                {row.assigned_families > 0 && (
-                                  <span className="ecm-sub-fams"> ({row.assigned_families}f)</span>
-                                )}
-                              </td>
-                              <td style={{ textAlign: "right" }}>
-                                <strong style={{ color: (row.available || 0) > 0 ? "#16a34a" : "#dc2626" }}>
-                                  {row.available || 0}
-                                </strong>
-                              </td>
-                            </tr>
-                          ))}
+                          {(selectedCenter.barangay_breakdown || []).map((row) => {
+                            const rowAssigned = row.assigned || 0;
+                            const rowAvail = row.available || 0;
+                            const rowCap = rowAssigned + rowAvail;
+                            const rowColor = getOccupancyColor(rowAssigned, rowCap);
+
+                            return (
+                              <tr key={row.id}>
+                                <td>
+                                  <div className="ecm-brgy-cell" title={row.name}>
+                                    <span
+                                      className="ecm-brgy-dot"
+                                      style={{ backgroundColor: row.color || "#2563eb" }}
+                                    />
+                                    <span className="ecm-brgy-name">
+                                      {displayEntityName(row.name, `Barangay ${row.id}`)}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td style={{ textAlign: "center" }}>
+                                  <span className="ecm-rooms-pill">{row.rooms}</span>
+                                </td>
+                                <td style={{ textAlign: "right" }}>
+                                  <strong style={{ color: "#2563eb" }}>{rowAssigned}</strong>
+                                  {row.assigned_families > 0 && (
+                                    <span className="ecm-sub-fams" style={{ display: "block" }}>
+                                      {row.assigned_families} {row.assigned_families === 1 ? "household" : "households"}
+                                    </span>
+                                  )}
+                                </td>
+                                <td style={{ textAlign: "right" }}>
+                                  <strong style={{ color: rowColor }}>
+                                    {rowAvail}
+                                  </strong>
+                                </td>
+                              </tr>
+                            );
+                          })}
                           {!selectedCenter.barangay_breakdown?.length && (
                             <tr>
                               <td colSpan="4" className="ecm-breakdown-empty-td">
@@ -1950,28 +1537,38 @@ function EvacuationCenterManager({
                             </tr>
                           )}
                         </tbody>
-                        {(selectedCenter.barangay_breakdown || []).length > 1 && (
-                          <tfoot>
-                            <tr className="ecm-breakdown-total-row">
-                              <td><strong>Total</strong></td>
-                              <td style={{ textAlign: "center" }}>
-                                <span className="ecm-rooms-pill">
-                                  {(selectedCenter.barangay_breakdown || []).reduce((sum, r) => sum + (r.rooms || 0), 0)}
-                                </span>
-                              </td>
-                              <td style={{ textAlign: "right" }}>
-                                <strong style={{ color: "#2563eb" }}>
-                                  {(selectedCenter.barangay_breakdown || []).reduce((sum, r) => sum + (r.assigned || 0), 0)}
-                                </strong>
-                              </td>
-                              <td style={{ textAlign: "right" }}>
-                                <strong style={{ color: "#16a34a" }}>
-                                  {(selectedCenter.barangay_breakdown || []).reduce((sum, r) => sum + (r.available || 0), 0)}
-                                </strong>
-                              </td>
-                            </tr>
-                          </tfoot>
-                        )}
+                        {(selectedCenter.barangay_breakdown || []).length > 1 && (() => {
+                          const totalRooms = (selectedCenter.barangay_breakdown || []).reduce((sum, r) => sum + (r.rooms || 0), 0);
+                          const totalAssigned = (selectedCenter.barangay_breakdown || []).reduce((sum, r) => sum + (r.assigned || 0), 0);
+                          const totalAvailable = (selectedCenter.barangay_breakdown || []).reduce((sum, r) => sum + (r.available || 0), 0);
+                          const totalFamilies = (selectedCenter.barangay_breakdown || []).reduce((sum, r) => sum + (r.assigned_families || 0), 0);
+                          const totalCap = totalAssigned + totalAvailable;
+                          const totalColor = getOccupancyColor(totalAssigned, totalCap);
+
+                          return (
+                            <tfoot>
+                              <tr className="ecm-breakdown-total-row">
+                                <td><strong>Total</strong></td>
+                                <td style={{ textAlign: "center" }}>
+                                  <span className="ecm-rooms-pill">{totalRooms}</span>
+                                </td>
+                                <td style={{ textAlign: "right" }}>
+                                  <strong style={{ color: "#2563eb" }}>{totalAssigned}</strong>
+                                  {totalFamilies > 0 && (
+                                    <span className="ecm-sub-fams" style={{ display: "block" }}>
+                                      {totalFamilies} {totalFamilies === 1 ? "household" : "households"}
+                                    </span>
+                                  )}
+                                </td>
+                                <td style={{ textAlign: "right" }}>
+                                  <strong style={{ color: totalColor }}>
+                                    {totalAvailable}
+                                  </strong>
+                                </td>
+                              </tr>
+                            </tfoot>
+                          );
+                        })()}
                       </table>
                     </div>
                   </div>
@@ -1988,13 +1585,32 @@ function EvacuationCenterManager({
                         Manage room capacities, floor locations, and assigned occupants.
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={openAddRoomModal}
-                    >
-                      <FontAwesomeIcon icon={faPlus} /> Add Room
-                    </button>
+                    <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                      <select
+                        value={roomAssignmentFilter}
+                        onChange={(e) => setRoomAssignmentFilter(e.target.value)}
+                        aria-label="Filter rooms by assignment status"
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: "8px",
+                          border: "1px solid var(--line, #cbd5e1)",
+                          fontSize: "13px",
+                          background: "#fff",
+                          fontWeight: 500,
+                        }}
+                      >
+                        <option value="all">All Rooms ({centerRooms.length})</option>
+                        <option value="assigned">Assigned ({assignedRoomCount})</option>
+                        <option value="unassigned">Unassigned ({unassignedRoomCount})</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={openAddRoomModal}
+                      >
+                        <FontAwesomeIcon icon={faPlus} /> Add Room
+                      </button>
+                    </div>
                   </div>
 
                   {loadingRooms ? (
@@ -2013,6 +1629,20 @@ function EvacuationCenterManager({
                         <FontAwesomeIcon icon={faPlus} /> Add Room
                       </button>
                     </div>
+                  ) : filteredCenterRooms.length === 0 ? (
+                    <div className="empty-state">
+                      <FontAwesomeIcon icon={faDoorOpen} style={{ fontSize: 32, marginBottom: 8, opacity: 0.6 }} />
+                      <h4>No rooms found</h4>
+                      <p>No rooms match the selected assignment status ({roomAssignmentFilter === "assigned" ? "Assigned" : "Unassigned"}).</p>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setRoomAssignmentFilter("all")}
+                        style={{ marginTop: 10 }}
+                      >
+                        Show All Rooms
+                      </button>
+                    </div>
                   ) : (
                     <div className="ecm-table-wrap">
                       <table className="ecm-table">
@@ -2020,22 +1650,30 @@ function EvacuationCenterManager({
                           <tr>
                             <th>Room</th>
                             <th>Capacity</th>
-                            <th>Occupancy</th>
-                            <th>Available</th>
-                            <th>Status</th>
+                            <th>Assigned Evacuees</th>
+                            <th>Assignment Status</th>
                             <th style={{ textAlign: "right" }}>Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {centerRooms.map((room) => {
+                          {filteredCenterRooms.map((room) => {
                             const rCap = room.capacity || 0;
                             const rOcc = room.occupied || 0;
-                            const rAvail = room.available ?? Math.max(rCap - rOcc, 0);
+                            const isRoomAssigned = Boolean(
+                              room.is_assigned ||
+                              room.assignment_status === "Assigned" ||
+                              rOcc > 0
+                            );
 
                             return (
                               <tr key={room.id}>
                                 <td>
-                                  <strong>Room {room.room_number}</strong>
+                                  <strong>{formatRoomLabel(room.room_number)}</strong>
+                                  {!room.is_active && (
+                                    <span className="status-pill is-inactive" style={{ marginLeft: 6, fontSize: 11 }}>
+                                      Inactive
+                                    </span>
+                                  )}
                                   {room.latitude && room.longitude && (
                                     <div style={{ fontSize: 11, color: "var(--muted)" }}>
                                       <FontAwesomeIcon icon={faLocationDot} /> Pinned on map
@@ -2044,32 +1682,25 @@ function EvacuationCenterManager({
                                 </td>
                                 <td>{rCap} people</td>
                                 <td>
-                                  <strong style={{ color: rOcc > 0 ? "#2563eb" : "inherit" }}>{rOcc}</strong> people
+                                  <strong style={{ color: rOcc > 0 ? "#2563eb" : "inherit" }}>
+                                    {rOcc > 0 ? `${rOcc} people` : "None"}
+                                  </strong>
                                 </td>
                                 <td>
-                                  <strong style={{ color: rAvail > 0 ? "#16a34a" : "#dc2626" }}>
-                                    {rAvail}
-                                  </strong>{" "}
-                                  spaces
-                                </td>
-                                <td>
-                                  <span className={`status-pill ${room.is_active ? "is-active" : "is-inactive"}`}>
-                                    {room.is_active ? "Active" : "Inactive"}
+                                  <span className={`status-pill ${isRoomAssigned ? "is-assigned" : "is-unassigned"}`}>
+                                    {isRoomAssigned ? "Assigned" : "Unassigned"}
                                   </span>
                                 </td>
                                 <td>
                                   <div className="ecm-row-actions">
-                                    <button
-                                      type="button"
-                                      className="btn btn-sm btn-primary"
+                                    <RoomHouseholdsButton
+                                      room={room}
                                       onClick={() => {
                                         setSelectedRoom(room);
                                         setCenterSection("households");
                                       }}
                                       title="View households assigned to this room"
-                                    >
-                                      <FontAwesomeIcon icon={faUsers} /> Households ({rOcc})
-                                    </button>
+                                    />
                                     <button
                                       type="button"
                                       className="btn btn-sm btn-secondary"
@@ -2078,14 +1709,7 @@ function EvacuationCenterManager({
                                     >
                                       <FontAwesomeIcon icon={faPen} /> Edit
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-sm btn-secondary"
-                                      onClick={() => startMappingRoomLocation(room)}
-                                      title="Place room pin on map"
-                                    >
-                                      <FontAwesomeIcon icon={faLocationDot} /> Pin on Map
-                                    </button>
+
                                     <button
                                       type="button"
                                       className="btn btn-sm btn-secondary"
@@ -2118,66 +1742,124 @@ function EvacuationCenterManager({
               {centerSection === "households" && (
                 <div className="ecm-tab-panel">
                   <div className="ecm-tab-header">
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flex: 1 }}>
                       <label className="ecm-room-picker-label">
                         <span>Filter by Room:</span>
                         <select
                           className="ecm-select"
-                          value={selectedRoom?.id || ""}
+                          value={selectedRoom?.id || "all"}
                           onChange={(e) => {
-                            const r = centerRooms.find((rm) => String(rm.id) === String(e.target.value));
-                            setSelectedRoom(r || null);
+                            const val = e.target.value;
+                            if (val === "all") {
+                              setSelectedRoom({ id: "all", room_number: "All Rooms" });
+                            } else {
+                              const r = centerRooms.find((rm) => String(rm.id) === String(val));
+                              setSelectedRoom(r || null);
+                            }
                           }}
                         >
+                          <option value="all">
+                            All Rooms (Center Masterlist • {allCenterFamilies.length || centerOccupied} evacuees)
+                          </option>
                           {centerRooms.map((r) => (
                             <option key={r.id} value={r.id}>
-                              Room {r.room_number} ({r.occupied || 0}/{r.capacity} people)
+                              {formatRoomLabel(r.room_number)} ({r.occupied || 0}/{r.capacity} people)
                             </option>
                           ))}
                         </select>
                       </label>
-                      {selectedRoom && (
-                        <span className="ecm-badge ecm-badge-blue">
-                          Remaining: {selectedRoom.available ?? (selectedRoom.capacity - (selectedRoom.occupied || 0))} spaces
-                        </span>
-                      )}
+
+                      <div className="ecm-search ecm-search-sm">
+                        <FontAwesomeIcon icon={faMagnifyingGlass} />
+                        <input
+                          type="text"
+                          placeholder="Search evacuees or code..."
+                          value={householdSearch}
+                          onChange={(e) => setHouseholdSearch(e.target.value)}
+                        />
+                        {householdSearch && (
+                          <button
+                            type="button"
+                            className="ecm-search-clear"
+                            onClick={() => setHouseholdSearch("")}
+                            title="Clear search"
+                          >
+                            <FontAwesomeIcon icon={faXmark} />
+                          </button>
+                        )}
+                      </div>
+
+                      <span className="ecm-badge ecm-badge-blue">
+                        {filteredHouseholds.length} Households • {totalFilteredPersons} Evacuees
+                      </span>
                     </div>
 
-                    {selectedRoom && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={handlePrintManifest}
+                        title="Print Evacuee Manifest"
+                      >
+                        <FontAwesomeIcon icon={faPrint} /> Print Manifest
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={exportCenterEvacueesCsv}
+                        title="Export Center Evacuees to CSV"
+                      >
+                        <FontAwesomeIcon icon={faDownload} /> Export CSV
+                      </button>
+
                       <button
                         type="button"
                         className="btn btn-primary"
-                        onClick={openAssignModal}
-                        disabled={!selectedRoom.is_active || (selectedRoom.available ?? 0) <= 0}
-                        title={(selectedRoom.available ?? 0) <= 0 ? "Room is at capacity" : "Assign household"}
+                        onClick={handleAssignHouseholdClick}
+                        title="Assign displaced household to room"
                       >
                         <FontAwesomeIcon icon={faPlus} /> Assign Household
                       </button>
-                    )}
+                    </div>
                   </div>
 
-                  {!selectedRoom ? (
-                    <div className="empty-state">
-                      <FontAwesomeIcon icon={faDoorOpen} style={{ fontSize: 32, marginBottom: 8, opacity: 0.6 }} />
-                      <h4>Select a room to view assigned households</h4>
-                      <p>Choose a room above to see evacuee occupants or assign a household.</p>
-                    </div>
-                  ) : loadingRoomFamilies ? (
-                    <LoadingState message={`Loading households in Room ${selectedRoom.room_number}...`} />
-                  ) : roomFamilies.length === 0 ? (
+                  {loadingRoomFamilies || loadingAllCenterFamilies ? (
+                    <LoadingState message="Loading evacuee households..." />
+                  ) : filteredHouseholds.length === 0 ? (
                     <div className="empty-state">
                       <FontAwesomeIcon icon={faUsers} style={{ fontSize: 32, marginBottom: 8, opacity: 0.6 }} />
-                      <h4>No households assigned to Room {selectedRoom.room_number}</h4>
-                      <p>This room has available space for displaced residents.</p>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        onClick={openAssignModal}
-                        disabled={!selectedRoom.is_active || (selectedRoom.available ?? 0) <= 0}
-                        style={{ marginTop: 10 }}
-                      >
-                        <FontAwesomeIcon icon={faPlus} /> Assign Household
-                      </button>
+                      <h4>
+                        {householdSearch.trim()
+                          ? "No evacuees match your search"
+                          : selectedRoom && selectedRoom.id !== "all"
+                          ? `No households assigned to ${formatRoomLabel(selectedRoom.room_number)}`
+                          : "No households currently sheltered in this center"}
+                      </h4>
+                      <p>
+                        {householdSearch.trim()
+                          ? "Try checking the spelling or clearing the search filter."
+                          : "This center has available space to shelter displaced residents."}
+                      </p>
+                      {householdSearch.trim() ? (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setHouseholdSearch("")}
+                          style={{ marginTop: 10 }}
+                        >
+                          <FontAwesomeIcon icon={faXmark} /> Clear Search
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={handleAssignHouseholdClick}
+                          style={{ marginTop: 10 }}
+                        >
+                          <FontAwesomeIcon icon={faPlus} /> Assign Household
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="ecm-table-wrap">
@@ -2186,28 +1868,40 @@ function EvacuationCenterManager({
                           <tr>
                             <th>Household Head</th>
                             <th>Household ID</th>
-                            <th>Barangay</th>
+                            {(!selectedRoom || selectedRoom.id === "all") && <th>Room</th>}
+                            <th>Origin Barangay</th>
                             <th>Members Assigned</th>
                             <th>Contact</th>
                             <th style={{ textAlign: "right" }}>Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {roomFamilies.map((fam, idx) => {
+                          {filteredHouseholds.map((fam, idx) => {
                             const members = fam.assigned_members || fam.family_members || 1;
                             const head = fam.household_head_name || fam.head_name || "Unnamed Household";
+                            const roomName = fam.room_number
+                              ? formatRoomLabel(fam.room_number)
+                              : selectedRoom && selectedRoom.id !== "all"
+                              ? formatRoomLabel(selectedRoom.room_number)
+                              : "—";
 
                             return (
-                              <tr key={fam.family_id || idx}>
+                              <tr key={fam.family_id || fam.id || idx}>
                                 <td>
                                   <strong>{head}</strong>
                                 </td>
                                 <td>
                                   <span className="ecm-code-badge">{fam.family_code || "—"}</span>
                                 </td>
+                                {(!selectedRoom || selectedRoom.id === "all") && (
+                                  <td>
+                                    <span className="ecm-rooms-pill">{roomName}</span>
+                                  </td>
+                                )}
                                 <td>{displayEntityName(fam.barangay, "—")}</td>
                                 <td>
-                                  <strong style={{ color: "#2563eb" }}>{members}</strong> {members === 1 ? "person" : "people"}
+                                  <strong style={{ color: "#2563eb" }}>{members}</strong>{" "}
+                                  {members === 1 ? "person" : "people"}
                                 </td>
                                 <td>{fam.contact_number || "—"}</td>
                                 <td>
@@ -2240,43 +1934,7 @@ function EvacuationCenterManager({
                 </div>
               )}
 
-              {/* Section 4: Map */}
-              {centerSection === "map" && (
-                <div className="ecm-tab-panel" style={{ padding: 0 }}>
-                  <div className="ecm-embedded-map-wrap" style={{ height: 500, position: "relative" }}>
-                    <DashboardMap
-                      centers={filteredFeatureCollection}
-                      hazardZones={hazardZones}
-                      hideInternalPanel={true}
-                      hideSearch={true}
-                      selectedCenter={selectedCenter}
-                      drawMode={
-                        step === "footprint"
-                          ? "footprint"
-                          : step === "entrance"
-                          ? "entrance"
-                          : step === "room-map"
-                          ? "room"
-                          : "none"
-                      }
-                      onMapClick={(latlng) => {
-                        if (step === "footprint") {
-                          setFootprintPoints((pts) => [...pts, latlng]);
-                        } else if (step === "entrance") {
-                          setEntrancePoints((pts) => [...pts, latlng]);
-                        } else if (step === "room-map" && selectedRoom) {
-                          setRoomLocation(latlng);
-                        }
-                      }}
-                      pendingFootprint={footprintPoints}
-                      pendingEntrances={entrancePoints}
-                      rooms={centerRooms}
-                      pendingRoomLocation={roomLocation}
-                      focusLocation={focusLocation}
-                    />
-                  </div>
-                </div>
-              )}
+              
             </div>
           ) : (
             /* ---------------------------------------------------------
@@ -2323,7 +1981,6 @@ function EvacuationCenterManager({
                         const mapped = isCenterMapped(feature);
                         const cap = center.capacity || 0;
                         const occ = center.occupied || center.current_occupancy || 0;
-                        const avail = center.available ?? Math.max(cap - occ, 0);
                         const pct = cap > 0 ? Math.min(100, Math.round((occ / cap) * 100)) : 0;
                         const isSelected = selectedCenter && String(selectedCenter.id) === String(center.id);
 
@@ -2367,14 +2024,17 @@ function EvacuationCenterManager({
                                   </strong>{" "}
                                   of {cap} people <small style={{ color: "var(--muted)" }}>({pct}%)</small>
                                 </span>
-                                {cap > 0 && (
-                                  <div className="ecm-mini-progress">
-                                    <div
-                                      className={`ecm-mini-progress-fill ${pct >= 90 ? "is-full" : pct >= 60 ? "is-high" : ""}`}
-                                      style={{ width: `${pct}%` }}
-                                    />
-                                  </div>
-                                )}
+                                {cap > 0 && (() => {
+                                  const occStatus = getOccupancyStatus(occ, cap);
+                                  return (
+                                    <div className="ecm-mini-progress">
+                                      <div
+                                        className={`ecm-mini-progress-fill ${occStatus.barClass}`}
+                                        style={{ width: `${occStatus.percent}%`, backgroundColor: occStatus.color }}
+                                      />
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </td>
                             <td>
@@ -2397,23 +2057,38 @@ function EvacuationCenterManager({
                                 </button>
 
                                 {mapped ? (
-                                  <button
-                                    type="button"
-                                    className="btn btn-sm btn-secondary"
-                                    onClick={() => {
-                                      setSelectedCenter(normalizeCenter(feature));
-                                      setDrawerTab("center");
-                                      setViewMode("map");
-                                    }}
-                                    title="View on map"
-                                  >
-                                    <FontAwesomeIcon icon={faMap} /> Map
-                                  </button>
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn btn-sm btn-secondary"
+                                      onClick={() => {
+                                        const cId = center.id ?? feature.id;
+                                        navigate(`${mapBasePath}?center=${cId}`);
+                                      }}
+                                      title="View on map"
+                                    >
+                                      <FontAwesomeIcon icon={faMap} /> Map
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-sm btn-secondary"
+                                      onClick={() => {
+                                        const cId = center.id ?? feature.id;
+                                        navigate(`${mapBasePath}?center=${cId}&mode=place`);
+                                      }}
+                                      title="Edit outline on map"
+                                    >
+                                      <FontAwesomeIcon icon={faDrawPolygon} /> Edit outline
+                                    </button>
+                                  </>
                                 ) : (
                                   <button
                                     type="button"
                                     className="btn btn-sm btn-secondary"
-                                    onClick={() => startMappingCenterOnMap(feature)}
+                                    onClick={() => {
+                                      const cId = center.id ?? feature.id;
+                                      navigate(`${mapBasePath}?center=${cId}&mode=place`);
+                                    }}
                                     title="Set center coordinates on map"
                                   >
                                     <FontAwesomeIcon icon={faDrawPolygon} /> Place on Map
@@ -2497,14 +2172,17 @@ function EvacuationCenterManager({
                           </div>
                         </div>
 
-                        {cap > 0 && (
-                          <div className="ecm-mini-progress" style={{ margin: "4px 0 8px" }}>
-                            <div
-                              className={`ecm-mini-progress-fill ${pct >= 90 ? "is-full" : pct >= 60 ? "is-high" : ""}`}
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                        )}
+                        {cap > 0 && (() => {
+                          const occStatus = getOccupancyStatus(occ, cap);
+                          return (
+                            <div className="ecm-mini-progress" style={{ margin: "4px 0 8px" }}>
+                              <div
+                                className={`ecm-mini-progress-fill ${occStatus.barClass}`}
+                                style={{ width: `${occStatus.percent}%`, backgroundColor: occStatus.color }}
+                              />
+                            </div>
+                          );
+                        })()}
 
                         <div className="ecm-mobile-card-actions">
                           <button
@@ -2519,24 +2197,41 @@ function EvacuationCenterManager({
                             View Details
                           </button>
                           {mapped ? (
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm ecm-touch-btn"
-                              style={{ minHeight: 44 }}
-                              onClick={() => {
-                                setSelectedCenter(normalizeCenter(feature));
-                                setDrawerTab("center");
-                                setViewMode("map");
-                              }}
-                            >
-                              <FontAwesomeIcon icon={faMap} /> Map
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm ecm-touch-btn"
+                                style={{ minHeight: 44 }}
+                                onClick={() => {
+                                  const cId = center.id ?? feature.id;
+                                  navigate(`${mapBasePath}?center=${cId}`);
+                                }}
+                                title="View on map"
+                              >
+                                <FontAwesomeIcon icon={faMap} /> Map
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm ecm-touch-btn"
+                                style={{ minHeight: 44 }}
+                                onClick={() => {
+                                  const cId = center.id ?? feature.id;
+                                  navigate(`${mapBasePath}?center=${cId}&mode=place`);
+                                }}
+                                title="Edit outline on map"
+                              >
+                                <FontAwesomeIcon icon={faDrawPolygon} /> Edit outline
+                              </button>
+                            </>
                           ) : (
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm ecm-touch-btn"
                               style={{ minHeight: 44 }}
-                              onClick={() => startMappingCenterOnMap(feature)}
+                              onClick={() => {
+                                const cId = center.id ?? feature.id;
+                                navigate(`${mapBasePath}?center=${cId}&mode=place`);
+                              }}
                             >
                               <FontAwesomeIcon icon={faDrawPolygon} /> Place on Map
                             </button>
@@ -2561,7 +2256,6 @@ function EvacuationCenterManager({
             </>
           )}
         </div>
-      )}
 
       {/* =========================================================
           MODALS (EvacWay Standard Dialogs)
@@ -2689,7 +2383,7 @@ function EvacuationCenterManager({
               <h3>
                 {roomModalMode === "add"
                   ? `Add Room to ${selectedCenter?.name}`
-                  : `Edit Room ${selectedRoom?.room_number}`}
+                  : `Edit ${formatRoomLabel(selectedRoom?.room_number)}`}
               </h3>
               <button
                 type="button"
@@ -2762,7 +2456,7 @@ function EvacuationCenterManager({
         >
           <div className="modal-dialog">
             <div className="modal-header">
-              <h3>Assign Family to Room {selectedRoom.room_number}</h3>
+              <h3>Assign Family to {formatRoomLabel(selectedRoom.room_number)}</h3>
               <button
                 type="button"
                 className="modal-close-btn"
@@ -2820,7 +2514,7 @@ function EvacuationCenterManager({
                         </tr>
                         <tr>
                           <td>Room</td>
-                          <td>Room {selectedRoom.room_number}</td>
+                          <td>{formatRoomLabel(selectedRoom.room_number)}</td>
                         </tr>
                         <tr>
                           <td>Room Capacity</td>
@@ -2833,7 +2527,7 @@ function EvacuationCenterManager({
                         <tr>
                           <td>Remaining Capacity</td>
                           <td>
-                            <strong style={{ color: remaining > 0 ? "#16a34a" : "#dc2626" }}>
+                            <strong style={{ color: getOccupancyColor(selectedRoom.occupied || 0, selectedRoom.capacity) }}>
                               {remaining} spaces
                             </strong>
                           </td>
@@ -2946,7 +2640,7 @@ function EvacuationCenterManager({
                     </tr>
                     <tr>
                       <td>Current Room</td>
-                      <td>{selectedRoom ? `Room ${selectedRoom.room_number}` : "Assigned"}</td>
+                      <td>{selectedRoom ? formatRoomLabel(selectedRoom.room_number) : "Assigned"}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -2996,7 +2690,7 @@ function EvacuationCenterManager({
                     const isCurrent = selectedRoom && String(r.id) === String(selectedRoom.id);
                     return (
                       <option key={r.id} value={r.id} disabled={isCurrent}>
-                        Room {r.room_number} · Capacity: {r.capacity} · Assigned: {r.occupied || 0} · Remaining: {r.available ?? (r.capacity - (r.occupied || 0))} {isCurrent ? "(Current)" : ""}
+                        {formatRoomLabel(r.room_number)} · Capacity: {r.capacity} · Assigned: {r.occupied || 0} · Remaining: {r.available ?? (r.capacity - (r.occupied || 0))} {isCurrent ? "(Current)" : ""}
                       </option>
                     );
                   })}
@@ -3024,7 +2718,7 @@ function EvacuationCenterManager({
                         <tr>
                           <td>Target Available Spaces</td>
                           <td>
-                            <strong style={{ color: destRemaining > 0 ? "#16a34a" : "#dc2626" }}>
+                            <strong style={{ color: getOccupancyColor(dest.occupied || 0, dest.capacity) }}>
                               {destRemaining} spaces
                             </strong>
                           </td>
@@ -3242,6 +2936,19 @@ function EvacuationCenterManager({
                   <option value="unmapped">Not Mapped Yet ({unmappedCount})</option>
                 </select>
               </div>
+
+              <div className="ecm-sheet-field">
+                <label>Occupancy & Space</label>
+                <select
+                  className="ecm-select"
+                  value={occupancyFilter}
+                  onChange={(e) => setOccupancyFilter(e.target.value)}
+                >
+                  <option value="all">All Capacities</option>
+                  <option value="available">Available Spaces Only</option>
+                  <option value="full">At Capacity / Full Only</option>
+                </select>
+              </div>
             </div>
 
             <div className="ecm-sheet-footer">
@@ -3262,6 +2969,150 @@ function EvacuationCenterManager({
               >
                 Apply ({filteredCenters.length} centers)
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* =========================================================
+          OFFICIAL PRINTABLE EVACUEE MANIFEST (DSWD / MDRRMO FORMAT)
+          ========================================================= */}
+      {selectedCenter && (
+        <div className="ecm-printable-manifest" aria-hidden="true">
+          <div className="ecm-print-header">
+            <div className="ecm-print-logo-text">
+              <h4>REPUBLIC OF THE PHILIPPINES</h4>
+              <h5>PROVINCE OF SOUTHERN LEYTE • MUNICIPALITY OF SOGOD</h5>
+              <h3>MUNICIPAL DISASTER RISK REDUCTION AND MANAGEMENT OFFICE (MDRRMO)</h3>
+              <h2>OFFICIAL EVACUATION CENTER MASTERLIST & EVACUEE MANIFEST</h2>
+            </div>
+            <div className="ecm-print-date">
+              Date Generated:{" "}
+              {new Date().toLocaleString("en-PH", { dateStyle: "medium", timeStyle: "short" })}
+            </div>
+          </div>
+
+          <div className="ecm-print-meta-grid">
+            <div className="ecm-print-meta-item">
+              <span className="ecm-print-label">Evacuation Center:</span>
+              <strong>{selectedCenter.name}</strong>
+            </div>
+            <div className="ecm-print-meta-item">
+              <span className="ecm-print-label">Barangays Served:</span>
+              <strong>
+                {(selectedCenter.barangays || []).map((b) => b.name).join(", ") || "—"}
+              </strong>
+            </div>
+            <div className="ecm-print-meta-item">
+              <span className="ecm-print-label">Operating Status:</span>
+              <strong>{selectedCenter.is_active ? "ACTIVE (Operational)" : "INACTIVE"}</strong>
+            </div>
+            <div className="ecm-print-meta-item">
+              <span className="ecm-print-label">Contact / Focal Person:</span>
+              <strong>{selectedCenter.contact_number || "Not provided"}</strong>
+            </div>
+            <div className="ecm-print-meta-item">
+              <span className="ecm-print-label">Total Capacity:</span>
+              <strong>{centerCapacity} persons</strong>
+            </div>
+            <div className="ecm-print-meta-item">
+              <span className="ecm-print-label">Sheltered Evacuees:</span>
+              <strong>
+                {centerOccupied} persons ({centerPercent}% occupancy)
+              </strong>
+            </div>
+            <div className="ecm-print-meta-item">
+              <span className="ecm-print-label">Vacant Space:</span>
+              <strong>{centerAvailable} persons</strong>
+            </div>
+            <div className="ecm-print-meta-item">
+              <span className="ecm-print-label">Registered Rooms:</span>
+              <strong>{centerRooms.length} rooms</strong>
+            </div>
+          </div>
+
+          <div className="ecm-print-section-title">
+            I. ROOM ALLOCATION & OCCUPANCY SUMMARY
+          </div>
+          <table className="ecm-print-table">
+            <thead>
+              <tr>
+                <th>Room Number</th>
+                <th>Designated Capacity</th>
+                <th>Occupied Count</th>
+                <th>Available Spaces</th>
+                <th>Room Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {centerRooms.map((rm) => (
+                <tr key={rm.id}>
+                  <td>
+                    <strong>{formatRoomLabel(rm.room_number)}</strong>
+                  </td>
+                  <td>{rm.capacity} persons</td>
+                  <td>{rm.occupied || 0} persons</td>
+                  <td>
+                    {rm.available ?? Math.max(rm.capacity - (rm.occupied || 0), 0)} spaces
+                  </td>
+                  <td>{rm.is_active ? "Operational" : "Deactivated"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="ecm-print-section-title" style={{ marginTop: 20 }}>
+            II. REGISTERED EVACUEE HOUSEHOLDS MANIFEST
+          </div>
+          <table className="ecm-print-table">
+            <thead>
+              <tr>
+                <th style={{ width: 30 }}>#</th>
+                <th>Household Head</th>
+                <th>Family Code</th>
+                <th>Room</th>
+                <th>Origin Barangay</th>
+                <th>Headcount</th>
+                <th>Contact</th>
+                <th>Remarks / Signature</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(allCenterFamilies.length > 0 ? allCenterFamilies : roomFamilies).map((fam, idx) => (
+                <tr key={fam.family_id || idx}>
+                  <td>{idx + 1}</td>
+                  <td>
+                    <strong>{fam.household_head_name || fam.head_name || "—"}</strong>
+                  </td>
+                  <td>{fam.family_code || "—"}</td>
+                  <td>{formatRoomLabel(fam.room_number) || "—"}</td>
+                  <td>{displayEntityName(fam.barangay, "—")}</td>
+                  <td>{fam.assigned_members || fam.family_members || 1}</td>
+                  <td>{fam.contact_number || "—"}</td>
+                  <td style={{ borderBottom: "1px dashed #cbd5e1" }}></td>
+                </tr>
+              ))}
+              {allCenterFamilies.length === 0 && roomFamilies.length === 0 && (
+                <tr>
+                  <td colSpan="8" style={{ textAlign: "center", padding: 16 }}>
+                    No evacuee households currently registered in this facility.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+
+          <div className="ecm-print-sign-grid">
+            <div className="ecm-print-sign-box">
+              <p>Prepared by:</p>
+              <div className="ecm-print-sign-line" />
+              <strong>Camp Manager / Evacuation Center Desk Officer</strong>
+              <span>Date: ________________________</span>
+            </div>
+            <div className="ecm-print-sign-box">
+              <p>Certified & Noted by:</p>
+              <div className="ecm-print-sign-line" />
+              <strong>MDRRMO Incident Commander / LGU Official</strong>
+              <span>Date: ________________________</span>
             </div>
           </div>
         </div>

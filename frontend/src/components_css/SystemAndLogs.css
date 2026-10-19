@@ -1,9 +1,11 @@
+/* SystemAndLogs.css */
 .sal-page {
   width: 100%;
-  height: 100%;
+  max-width: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 20px 24px;
+  padding: 24px;
   background: #f8fafc;
   overflow-y: auto;
   overflow-x: hidden;
@@ -15,31 +17,36 @@
 .sal-shell {
   width: 100%;
   max-width: 1400px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
+  box-sizing: border-box;
 }
 
+/* HEADER */
 .sal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
   flex-wrap: wrap;
 }
 
 .sal-title {
   margin: 0;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
   line-height: 1.25;
   color: #0f172a;
+  letter-spacing: -0.01em;
 }
 
 .sal-subtitle {
   margin: 4px 0 0;
   font-size: 13.5px;
   color: #64748b;
+  line-height: 1.4;
 }
 
 .sal-actions {
@@ -49,6 +56,7 @@
   flex-wrap: wrap;
 }
 
+/* ALL LOGS / MY LOGS TOGGLE */
 .sal-toggle-group {
   display: inline-flex;
   align-items: center;
@@ -60,16 +68,17 @@
 }
 
 .sal-toggle {
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 40px;
+  padding: 0 14px;
   border-radius: 6px;
   border: none;
   background: transparent;
   color: #64748b;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
 .sal-toggle.active {
@@ -82,14 +91,15 @@
   cursor: not-allowed;
 }
 
+/* EXPORT CSV BUTTON (at least 44px tall) */
 .sal-export-btn {
-  min-height: 38px;
-  padding: 0 16px;
+  min-height: 44px;
+  padding: 0 18px;
   border-radius: 8px;
   border: 1px solid #2563eb;
   background: #2563eb;
   color: #ffffff;
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
   font-family: inherit;
   display: inline-flex;
@@ -97,6 +107,7 @@
   gap: 8px;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
 }
 
 .sal-export-btn:hover:not(:disabled) {
@@ -109,40 +120,183 @@
   cursor: not-allowed;
 }
 
+/* 5. STAT CARDS: CLEAN WHITE, NO BLUE HIGHLIGHT UNLESS FILTERS */
 .sal-summary-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  width: 100%;
 }
 
 .sal-stat-card {
-  padding: 14px 16px;
+  padding: 16px;
   border-radius: 10px;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-
-.sal-stat-card.is-accent {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+  justify-content: space-between;
+  gap: 6px;
+  box-sizing: border-box;
 }
 
 .sal-stat-card span {
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   color: #64748b;
+  letter-spacing: 0.01em;
 }
 
 .sal-stat-card strong {
-  font-size: 18px;
-  line-height: 1.3;
+  font-size: 22px;
+  line-height: 1.2;
   font-weight: 700;
   color: #0f172a;
 }
 
+.sal-stat-sub {
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+/* 4. FILTERS TOOLBAR */
+.sal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.sal-search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 240px;
+  display: flex;
+  align-items: center;
+}
+
+.sal-search-icon {
+  position: absolute;
+  left: 14px;
+  color: #94a3b8;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.sal-search-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px 0 38px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 14px;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sal-search-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.sal-toolbar-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sal-select {
+  min-height: 44px;
+  padding: 0 28px 0 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.sal-select:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.sal-date-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sal-date-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.sal-date-label {
+  font-weight: 500;
+}
+
+.sal-date-input {
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.sal-date-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+/* CLEAR FILTERS BUTTON */
+.sal-clear-btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.sal-clear-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+
+/* MAIN CARD CONTAINER */
 .sal-card {
   border-radius: 10px;
   background: #ffffff;
@@ -159,6 +313,7 @@
   gap: 12px;
   padding: 14px 18px;
   border-bottom: 1px solid #e2e8f0;
+  background: #fafbfc;
 }
 
 .sal-card-header h4 {
@@ -168,93 +323,360 @@
   color: #0f172a;
 }
 
-.sal-card-header span {
+.sal-result-count {
   font-size: 12px;
   font-weight: 600;
   color: #64748b;
   padding: 4px 10px;
   border-radius: 999px;
-  background: #f8fafc;
+  background: #ffffff;
   border: 1px solid #e2e8f0;
 }
 
+/* 2. TABLE: DESKTOP (above 768px) */
 .sal-table-wrap {
+  width: 100%;
   overflow-x: auto;
+  box-sizing: border-box;
 }
 
 .sal-table {
   width: 100%;
   border-collapse: collapse;
-}
-
-.sal-table thead {
-  background: #f8fafc;
-}
-
-.sal-table th,
-.sal-table td {
-  padding: 12px 18px;
   text-align: left;
-  border-bottom: 1px solid #f1f5f9;
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .sal-table th {
-  font-size: 12px;
-  font-weight: 600;
+  padding: 12px 18px;
+  background: #f8fafc;
   color: #475569;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   border-bottom: 1px solid #e2e8f0;
-}
-
-.sal-table td:first-child {
-  width: 220px;
   white-space: nowrap;
-  color: #64748b;
 }
 
-.sal-table td:last-child {
-  color: #0f172a;
-  font-weight: 500;
+.sal-th-time {
+  width: 130px;
 }
 
-.sal-table tbody tr:hover {
+.sal-th-user {
+  width: 190px;
+}
+
+.sal-th-type {
+  width: 100px;
+}
+
+.sal-table td {
+  padding: 12px 18px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+}
+
+.sal-log-row:hover {
   background: #f8fafc;
 }
 
+/* DAY SEPARATOR ROW */
+.sal-day-row td {
+  background: #f1f5f9;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 8px 18px;
+}
+
+.sal-day-badge {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #334155;
+  display: inline-block;
+}
+
+.sal-td-time {
+  color: #64748b;
+  font-size: 13px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.sal-td-user {
+  white-space: nowrap;
+}
+
+.sal-user-name {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.sal-user-role {
+  display: block;
+  font-size: 11.5px;
+  color: #64748b;
+  margin-top: 1px;
+}
+
+/* 3. TYPE BADGES */
+.sal-type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-transform: capitalize;
+}
+
+.sal-type-badge.type-red {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.sal-type-badge.type-green {
+  background: #f0fdf4;
+  color: #16a34a;
+  border: 1px solid #bbf7d0;
+}
+
+.sal-type-badge.type-blue {
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+}
+
+.sal-type-badge.type-teal {
+  background: #f0fdfa;
+  color: #0d9488;
+  border: 1px solid #99f6e4;
+}
+
+.sal-type-badge.type-purple {
+  background: #faf5ff;
+  color: #9333ea;
+  border: 1px solid #e9d5ff;
+}
+
+.sal-type-badge.type-amber {
+  background: #fffbeb;
+  color: #d97706;
+  border: 1px solid #fde68a;
+}
+
+.sal-type-badge.type-grey {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+.sal-td-action {
+  color: #0f172a;
+  font-size: 13.5px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/* 7. MOBILE CARDS VIEW (HIDDEN ABOVE 768PX) */
+.sal-cards-wrap {
+  display: none;
+  padding: 14px;
+}
+
+.sal-card-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.sal-day-separator-mobile {
+  padding: 12px 4px 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569;
+}
+
+.sal-entry-card {
+  border-radius: 10px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+}
+
+.sal-entry-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sal-entry-time {
+  font-size: 12.5px;
+  color: #64748b;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sal-entry-action {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #0f172a;
+  word-break: break-word;
+}
+
+.sal-entry-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #f1f5f9;
+  color: #475569;
+  font-size: 12.5px;
+}
+
+.sal-entry-user-icon {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.sal-entry-user-info {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sal-entry-user-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.sal-entry-user-role {
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+/* 6. PAGINATION BAR */
+.sal-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-top: 1px solid #e2e8f0;
+  background: #ffffff;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.sal-pagination-info {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.sal-pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sal-page-btn {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.15s ease;
+}
+
+.sal-page-btn:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.sal-page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* EMPTY, LOADING & ERROR STATES */
 .sal-empty,
 .sal-loading,
 .sal-error-state {
-  padding: 32px 20px;
+  padding: 44px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
   text-align: center;
   color: #64748b;
 }
 
 .sal-loading-indicator,
 .sal-empty-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #eff6ff;
   color: #2563eb;
+  font-size: 18px;
+}
+
+.sal-empty-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.sal-empty-subtitle {
+  margin: 0;
+  font-size: 13.5px;
+  color: #64748b;
+  max-width: 360px;
+}
+
+.sal-empty-clear-btn {
+  margin-top: 6px;
 }
 
 .sal-loading-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
 .sal-loading-copy strong {
   color: #0f172a;
-  font-size: 14px;
+  font-size: 14.5px;
 }
 
 .sal-loading-copy span {
@@ -264,24 +686,138 @@
 
 .sal-error-state {
   margin: 16px;
+  padding: 14px 18px;
   border-radius: 8px;
   background: #fef2f2;
   border: 1px solid #fecaca;
   color: #b91c1c;
+  font-size: 13.5px;
+  font-weight: 600;
   flex-direction: row;
 }
 
-@media (max-width: 720px) {
+/* RESPONSIVE BREAKPOINTS */
+
+/* AT 768PX AND BELOW: SHOW MOBILE CARDS, HIDE TABLE, FULL-WIDTH 16PX FILTERS */
+@media (max-width: 768px) {
   .sal-page {
     padding: 16px;
   }
 
   .sal-summary-grid {
     grid-template-columns: 1fr;
+    gap: 10px;
   }
 
-  .sal-table td:first-child {
-    white-space: normal;
-    width: auto;
+  .sal-table-wrap {
+    display: none;
+  }
+
+  .sal-cards-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .sal-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sal-search-wrap {
+    width: 100%;
+  }
+
+  .sal-toolbar-filters {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .sal-select,
+  .sal-search-input,
+  .sal-date-input {
+    width: 100%;
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  .sal-date-group {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .sal-date-field {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .sal-clear-btn {
+    width: 100%;
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  .sal-pagination-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .sal-pagination-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .sal-page-btn {
+    justify-content: center;
+  }
+}
+
+/* MOBILE 320PX: NO HORIZONTAL SCROLLING */
+@media (max-width: 360px) {
+  .sal-page {
+    padding: 12px 8px;
+    gap: 14px;
+  }
+
+  .sal-title {
+    font-size: 19px;
+  }
+
+  .sal-stat-card {
+    padding: 12px 10px;
+  }
+
+  .sal-stat-card strong {
+    font-size: 18px;
+  }
+
+  .sal-export-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .sal-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sal-toggle-group {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .sal-toggle {
+    text-align: center;
   }
 }

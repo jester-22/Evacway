@@ -47,7 +47,6 @@ function AdminDashboard() {
   const [tab, setTab] = useState(ADMIN_TABS.includes(requestedTab) ? requestedTab : "centers");
   const [focusedReportId, setFocusedReportId] = useState(null);
   const [focusedRescueId, setFocusedRescueId] = useState(null);
-  const [mapFocusLocation, setMapFocusLocation] = useState(null);
   const { user, logout } = useAuth();
   const queryClient = useQueryClient();
   const notificationsQuery = useNotifications({ enabled: Boolean(notificationId) });
@@ -75,6 +74,10 @@ function AdminDashboard() {
     }
     if (nextTab === "profile") {
       navigate("/profile");
+      return;
+    }
+    if (nextTab === "map") {
+      navigate("/admin/map");
       return;
     }
     setTab(nextTab);
@@ -136,13 +139,21 @@ function AdminDashboard() {
   }
 
   function openMapLocation(item) {
-    if (!Number.isFinite(Number(item.latitude)) || !Number.isFinite(Number(item.longitude))) return;
-    setMapFocusLocation({
-      latitude: Number(item.latitude),
-      longitude: Number(item.longitude),
-      requestedAt: Date.now(),
+    const lat = Number(item.latitude ?? item.lat);
+    const lng = Number(item.longitude ?? item.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const query = new URLSearchParams({
+      lat: String(lat),
+      lng: String(lng),
     });
-    setTab("centers");
+    if (item.id) {
+      if (item.request_status || item.number_of_people !== undefined || item.people_count !== undefined) {
+        query.set("rescue", String(item.id));
+      } else {
+        query.set("hazard", String(item.id));
+      }
+    }
+    navigate(`/admin/map?${query.toString()}`);
   }
 
   function refreshCenters() {
@@ -169,7 +180,6 @@ function AdminDashboard() {
             hazardZones={hazardZones}
             onRefresh={refreshCenters}
             canDeactivate={true}
-            focusLocation={mapFocusLocation}
           />
         )}
 

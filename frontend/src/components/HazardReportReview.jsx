@@ -1,40 +1,77 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import mapboxgl from "mapbox-gl";
+import "mapbox-gl/dist/mapbox-gl.css";
+import { useAuth } from "../context/AuthContext";
 import { api, BASE_URL } from "../services/api";
-import { queryKeys, useHazardReports } from "../hooks/useEvacuationQueries";
+import { queryKeys, useHazardReports, useRoadSegments } from "../hooks/useEvacuationQueries";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faCheck,
   faXmark,
   faImage,
-  faArrowLeft,
   faLocationDot,
   faClock,
   faMagnifyingGlassPlus,
   faRoad,
   faWater,
   faMountain,
-  faLockOpen,
   faTriangleExclamation,
+  faSearch,
+  faLayerGroup,
+  faCompass,
+  faCircleCheck,
+  faChevronLeft,
+  faChevronRight,
+  faShieldHalved,
+  faFileCsv,
+  faFilter,
+  faUser,
 } from "@fortawesome/free-solid-svg-icons";
+import { highlightAndOpenSavedReport } from "../utils/mapLocationIndicators";
 import "../components_css/HazardReportReview.css";
 
-const FILTERS = ["pending", "validated", "rejected", "resolved", "all"];
+mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
+
+const STATUS_FILTERS = [
+  { key: "all", label: "All" },
+  { key: "pending", label: "Pending" },
+  { key: "validated", label: "Validated" },
+  { key: "resolved", label: "Resolved" },
+  { key: "rejected", label: "Rejected" },
+];
+
+const HAZARD_TYPE_FILTERS = [
+  { key: "all", label: "All Types" },
+  { key: "flood", label: "Flood" },
+  { key: "landslide", label: "Landslide" },
+  { key: "road blockage", label: "Road Blockage" },
+  { key: "other", label: "Other" },
+];
+
+const CANNED_RESPONSES = [
+  "Verified by Barangay Tanod",
+  "MDRRMO / DPWH clearing crew dispatched",
+  "Duplicate report — linked to existing incident",
+  "Hazard cleared — road safely reopened",
+  "Inaccurate location / unverifiable photo",
+];
 
 const STATUS_META = {
   pending: { label: "Pending", color: "#2563eb", bg: "rgba(37, 99, 235, 0.1)" },
-  validated: { label: "Validated", color: "#16a34a", bg: "rgba(22, 163, 74, 0.1)" },
-  rejected: { label: "Rejected", color: "#dc2626", bg: "rgba(220, 38, 38, 0.1)" },
-  resolved: { label: "Resolved", color: "#6b7280", bg: "rgba(107, 114, 128, 0.1)" },
-  all: { label: "All", color: "#374151", bg: "rgba(55, 65, 81, 0.08)" },
+  validated: { label: "Validated", color: "#dc2626", bg: "rgba(220, 38, 38, 0.1)" },
+  rejected: { label: "Rejected", color: "#64748b", bg: "rgba(100, 116, 139, 0.1)" },
+  resolved: { label: "Resolved", color: "#16a34a", bg: "rgba(22, 163, 74, 0.1)" },
+  all: { label: "All", color: "#0f172a", bg: "rgba(15, 23, 42, 0.08)" },
 };
 
 function statusMeta(status) {
-  return STATUS_META[status] || { label: status, color: "#6b7280", bg: "#f3f4f6" };
+  return STATUS_META[status] || { label: status, color: "#64748b", bg: "#f1f5f9" };
 }
 
 function reportIcon(reportType = "") {
-  const type = reportType.toLowerCase();
+  const type = String(reportType).toLowerCase();
   if (type.includes("road") || type.includes("block") || type.includes("obstruct")) return faRoad;
   if (type.includes("flood")) return faWater;
   if (type.includes("landslide")) return faMountain;
@@ -43,43 +80,237 @@ function reportIcon(reportType = "") {
 
 function reportPhotoUrl(path) {
   if (!path) return "";
-  return /^https?:\/\//i.test(path)
-    ? path
-    : `${BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+  if (/^https?:\/\//i.test(path)) return path;
+  const base = BASE_URL.endsWith("/") ? BASE_URL.slice(0, -1) : BASE_URL;
+  return `${base}${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
+function formatRelativeTime(dateString) {
+  if (!dateString) return "Recently";
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffInMinutes = Math.floor((now - date) / (1000 * 60));
+  if (diffInMinutes < 1) return "Just now";
+  if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+  const diffInHours = Math.floor(diffInMinutes / 60);
+  if (diffInHours < 24) return `${diffInHours}h ago`;
+  const diffInDays = Math.floor(diffInHours / 24);
+  return `${diffInDays}d ago`;
+}
+
+function distanceInMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) *
+      Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function createGeoJSONCircle(centerLng, centerLat, radiusInMeters = 100, points = 64) {
+  const km = radiusInMeters / 1000;
+  const distanceX = km / (111.32 * Math.cos((centerLat * Math.PI) / 180));
+  const distanceY = km / 110.574;
+  const ret = [];
+  for (let i = 0; i < points; i++) {
+    const theta = (i / points) * (2 * Math.PI);
+    const x = distanceX * Math.cos(theta);
+    const y = distanceY * Math.sin(theta);
+    ret.push([centerLng + x, centerLat + y]);
+  }
+  ret.push(ret[0]);
+  return {
+    type: "Feature",
+    geometry: {
+      type: "Polygon",
+      coordinates: [ret],
+    },
+    properties: {},
+  };
+}
+
+function getReportStreetOrPlace(report, roadSegmentsData) {
+  if (report?.street) return report.street;
+  if (report?.place_name) return report.place_name;
+  if (report?.address?.street) return report.address.street;
+  if (report?.location_name) return report.location_name;
+
+  const lat = Number(report?.latitude);
+  const lng = Number(report?.longitude);
+  if (roadSegmentsData && Number.isFinite(lat) && Number.isFinite(lng)) {
+    const features = Array.isArray(roadSegmentsData) ? roadSegmentsData : roadSegmentsData?.features || [];
+    let closestName = null;
+    let minDistance = 250;
+    for (const feat of features) {
+      const coords = feat.geometry?.coordinates;
+      if (!coords) continue;
+      const roadName = feat.properties?.road_name || feat.properties?.name;
+      if (!roadName) continue;
+      const lines = feat.geometry.type === "MultiLineString" ? coords : [coords];
+      for (const line of lines) {
+        for (const [pLng, pLat] of line) {
+          const d = distanceInMeters(lat, lng, pLat, pLng);
+          if (d < minDistance) {
+            minDistance = d;
+            closestName = roadName;
+          }
+        }
+      }
+    }
+    if (closestName) return closestName;
+  }
+
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+  }
+  return "Incident Location";
+}
+
+function getReportBarangay(report, resolvedBarangay) {
+  if (resolvedBarangay) return resolvedBarangay;
+  return (
+    report?.barangay_name ||
+    report?.barangay ||
+    report?.location?.barangay ||
+    report?.address?.barangay ||
+    "Barangay Poblacion"
+  );
+}
+
+function getReportReporter(report) {
+  return (
+    report?.reporter_name ||
+    report?.reporter ||
+    report?.submitted_by_name ||
+    report?.resident_name ||
+    "Citizen Reporter"
+  );
 }
 
 function HazardReportReview({ focusReportId, onOpenMap }) {
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState("pending");
-  const allReportsQuery = useHazardReports(null, { enabled: focusReportId != null });
-  const focusedReport = allReportsQuery.data?.find((item) => String(item.id) === String(focusReportId));
-  const effectiveStatusFilter = focusedReport?.status || statusFilter;
-  const reportsQuery = useHazardReports(effectiveStatusFilter === "all" ? null : effectiveStatusFilter);
+  const navigate = useNavigate();
+  const { user } = useAuth();
+
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const reportsQuery = useHazardReports("all");
   const reports = reportsQuery.data || [];
   const loading = reportsQuery.isLoading;
+
+  const roadSegmentsQuery = useRoadSegments();
+  const roadSegmentsData = roadSegmentsQuery.data;
+
   const [selected, setSelected] = useState(null);
+  const [activePhotoIdx, setActivePhotoIdx] = useState(0);
   const [responseNotes, setResponseNotes] = useState("");
   const [lightbox, setLightbox] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [barangayName, setBarangayName] = useState("");
   const [barangayLoading, setBarangayLoading] = useState(false);
-  const [photoError, setPhotoError] = useState(false);
+
+  // Drawer accessibility refs
+  const drawerRef = useRef(null);
+  const closeBtnRef = useRef(null);
+  const lastActiveRowRef = useRef(null);
+
+  const dynamicStatusFilters = useMemo(() => {
+    const base = [...STATUS_FILTERS];
+    const knownKeys = new Set(base.map((b) => b.key));
+    reports.forEach((r) => {
+      if (r.status && !knownKeys.has(r.status)) {
+        knownKeys.add(r.status);
+        base.push({
+          key: r.status,
+          label: r.status.charAt(0).toUpperCase() + r.status.slice(1),
+        });
+      }
+    });
+    return base;
+  }, [reports]);
+
+  const dynamicTypeFilters = useMemo(() => {
+    const base = [...HAZARD_TYPE_FILTERS];
+    const knownKeys = new Set(base.map((b) => b.key.toLowerCase()));
+    reports.forEach((r) => {
+      const type = (r.report_type || "").trim().toLowerCase();
+      if (type && !knownKeys.has(type)) {
+        knownKeys.add(type);
+        base.push({
+          key: type,
+          label: r.report_type.charAt(0).toUpperCase() + r.report_type.slice(1),
+        });
+      }
+    });
+    return base;
+  }, [reports]);
+
+  function clearAllFilters() {
+    setStatusFilter("all");
+    setTypeFilter("all");
+    setSearchQuery("");
+  }
+
+  // Mapbox mini-map refs
+  const mapContainerRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const mapMarkerRef = useRef(null);
+
+  // Top header section measurement for desktop height calc
+  const topSectionRef = useRef(null);
+  const [headerOffset, setHeaderOffset] = useState(280);
 
   useEffect(() => {
-    if (focusReportId == null) return undefined;
-    const data = allReportsQuery.data;
-    if (!data) return undefined;
+    if (!topSectionRef.current) return;
+    const updateOffset = () => {
+      if (topSectionRef.current) {
+        const rect = topSectionRef.current.getBoundingClientRect();
+        const offset = Math.round(rect.bottom + 16);
+        setHeaderOffset(offset > 0 ? offset : 280);
+      }
+    };
 
-    const report = data.find((item) => String(item.id) === String(focusReportId));
-    if (report) openReport(report);
-    return undefined;
-  }, [focusReportId, allReportsQuery.data]);
+    updateOffset();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateOffset) : null;
+    if (ro && topSectionRef.current) ro.observe(topSectionRef.current);
+    window.addEventListener("resize", updateOffset);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener("resize", updateOffset);
+    };
+  }, []);
 
+  // Auto-select focused report if provided from notification
+  useEffect(() => {
+    if (focusReportId == null || !reports.length) return;
+    const target = reports.find((item) => String(item.id) === String(focusReportId));
+    if (target) {
+      openReport(target);
+    }
+  }, [focusReportId, reports]);
+
+  // Keep selected report synchronized if reports list updates
+  useEffect(() => {
+    if (!selected) return;
+    const fresh = reports.find((r) => r.id === selected.id);
+    if (fresh && (fresh.status !== selected.status || fresh.response_notes !== selected.response_notes)) {
+      setSelected(fresh);
+    }
+  }, [reports, selected]);
+
+  // Resolve barangay for selected report
   useEffect(() => {
     if (!selected) {
       setBarangayName("");
       setBarangayLoading(false);
-      return;
+      return undefined;
     }
 
     const knownBarangay =
@@ -91,41 +322,38 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     if (knownBarangay) {
       setBarangayName(knownBarangay);
       setBarangayLoading(false);
-      return;
+      return undefined;
     }
 
-    const latitude = Number(selected.latitude);
-    const longitude = Number(selected.longitude);
+    const lat = Number(selected.latitude);
+    const lng = Number(selected.longitude);
     const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !token) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !token) {
       setBarangayName("");
       setBarangayLoading(false);
-      return;
+      return undefined;
     }
 
     let cancelled = false;
     setBarangayLoading(true);
 
     const url =
-      `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${longitude}` +
-      `&latitude=${latitude}&types=locality,neighborhood,place&access_token=${encodeURIComponent(token)}`;
+      `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lng}` +
+      `&latitude=${lat}&types=locality,neighborhood,place&access_token=${encodeURIComponent(token)}`;
 
     fetch(url)
-      .then((response) => {
-        if (!response.ok) throw new Error("Barangay lookup failed.");
-        return response.json();
-      })
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((data) => {
         if (cancelled) return;
         const properties = data.features?.[0]?.properties;
         const context = properties?.context || {};
-        const resolvedName =
+        const resolved =
           context.neighborhood?.name ||
           context.locality?.name ||
           context.place?.name ||
           properties?.name ||
           "";
-        setBarangayName(resolvedName);
+        setBarangayName(resolved);
       })
       .catch(() => {
         if (!cancelled) setBarangayName("");
@@ -139,25 +367,230 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     };
   }, [selected]);
 
-  function openReport(r) {
-    setSelected(r);
-    setResponseNotes(r.response_notes || "");
-    setPhotoError(false);
+  // Multi-photo normalized list for selected report
+  const selectedPhotos = useMemo(() => {
+    if (!selected) return [];
+    if (Array.isArray(selected.photos) && selected.photos.length > 0) {
+      return selected.photos;
+    }
+    return selected.photo_url ? [selected.photo_url] : [];
+  }, [selected]);
+
+  // Nearby affected road segments (within 100 meters)
+  const nearbyRoads = useMemo(() => {
+    if (!selected || !roadSegmentsData) return [];
+    const lat = Number(selected.latitude);
+    const lng = Number(selected.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+
+    const features = Array.isArray(roadSegmentsData)
+      ? roadSegmentsData
+      : roadSegmentsData?.features || [];
+
+    const matchedNames = new Set();
+
+    features.forEach((feat) => {
+      const coords = feat.geometry?.coordinates;
+      if (!coords) return;
+      const roadName = feat.properties?.road_name || feat.properties?.name || `Road #${feat.properties?.id || ""}`;
+
+      const lines = feat.geometry.type === "MultiLineString" ? coords : [coords];
+      for (const line of lines) {
+        for (const [pLng, pLat] of line) {
+          if (distanceInMeters(lat, lng, pLat, pLng) <= 100) {
+            matchedNames.add(roadName);
+            return;
+          }
+        }
+      }
+    });
+
+    return Array.from(matchedNames);
+  }, [selected, roadSegmentsData]);
+
+  // Mini-map initialization and lifecycle inside Drawer
+  useEffect(() => {
+    if (!selected || !mapContainerRef.current) return undefined;
+    const lat = Number(selected.latitude);
+    const lng = Number(selected.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
+
+    let map = mapInstanceRef.current;
+
+    if (!map) {
+      map = new mapboxgl.Map({
+        container: mapContainerRef.current,
+        style: "mapbox://styles/mapbox/streets-v12",
+        center: [lng, lat],
+        zoom: 15.5,
+        attributionControl: false,
+      });
+
+      mapInstanceRef.current = map;
+
+      map.on("load", () => {
+        const circleGeoJSON = createGeoJSONCircle(lng, lat, 100);
+        map.addSource("hazard-buffer", {
+          type: "geojson",
+          data: circleGeoJSON,
+        });
+
+        map.addLayer({
+          id: "hazard-buffer-fill",
+          type: "fill",
+          source: "hazard-buffer",
+          paint: {
+            "fill-color": "#ef4444",
+            "fill-opacity": 0.15,
+          },
+        });
+
+        map.addLayer({
+          id: "hazard-buffer-line",
+          type: "line",
+          source: "hazard-buffer",
+          paint: {
+            "line-color": "#dc2626",
+            "line-width": 2,
+            "line-dasharray": [2, 2],
+          },
+        });
+
+        map.resize();
+        highlightAndOpenSavedReport(map, mapMarkerRef, selected, false);
+      });
+    } else {
+      try {
+        if (typeof map.isStyleLoaded === "function" && map.isStyleLoaded() && map.getSource("hazard-buffer")) {
+          map.getSource("hazard-buffer").setData(createGeoJSONCircle(lng, lat, 100));
+        }
+      } catch (err) {
+        // ignore
+      }
+      highlightAndOpenSavedReport(map, mapMarkerRef, selected, false);
+      setTimeout(() => map.resize(), 100);
+    }
+
+    return () => {};
+  }, [selected]);
+
+  // Cleanup map instance on drawer close or unmount
+  useEffect(() => {
+    if (!selected) {
+      if (mapMarkerRef.current) {
+        mapMarkerRef.current.remove();
+        mapMarkerRef.current = null;
+      }
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    }
+  }, [selected]);
+
+  // Keyboard navigation for Lightbox and Drawer Escape
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === "Escape") {
+        if (lightbox) {
+          e.stopPropagation();
+          setLightbox(false);
+          return;
+        }
+        if (selected) {
+          closeDrawer();
+        }
+      }
+      if (lightbox && selectedPhotos.length > 1) {
+        if (e.key === "ArrowLeft") {
+          setActivePhotoIdx((prev) => (prev > 0 ? prev - 1 : selectedPhotos.length - 1));
+        }
+        if (e.key === "ArrowRight") {
+          setActivePhotoIdx((prev) => (prev < selectedPhotos.length - 1 ? prev + 1 : 0));
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [lightbox, selected, selectedPhotos]);
+
+  // Focus management: move focus into drawer on open
+  useEffect(() => {
+    if (selected) {
+      setTimeout(() => {
+        if (closeBtnRef.current) {
+          closeBtnRef.current.focus();
+        } else if (drawerRef.current) {
+          drawerRef.current.focus();
+        }
+      }, 50);
+    }
+  }, [selected]);
+
+  function openReport(report, event) {
+    if (event) {
+      if (typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+      if (event.currentTarget) {
+        lastActiveRowRef.current = event.currentTarget;
+      }
+    }
+    setLightbox(false);
+    setSelected(report);
+    setActivePhotoIdx(0);
+    setResponseNotes(report.response_notes || "");
   }
 
-  function backToList() {
-    setSelected(null);
+  function closeDrawer() {
     setLightbox(false);
+    setSelected(null);
+    setTimeout(() => {
+      lastActiveRowRef.current?.focus();
+    }, 50);
+  }
+
+  function handleViewOnMap() {
+    if (!selected) return;
+    if (typeof onOpenMap === "function") {
+      onOpenMap(selected);
+      return;
+    }
+    const lat = Number(selected.latitude ?? selected.lat);
+    const lng = Number(selected.longitude ?? selected.lng);
+    const isLgu = user?.role === "lgu_personnel";
+    const staffMapPath = isLgu ? "/lgu/map" : "/admin/map";
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      const params = new URLSearchParams();
+      params.set("lat", lat);
+      params.set("lng", lng);
+      params.set("hazard", selected.id);
+
+      const hType = selected.report_type || selected.hazard_type || selected.type || "";
+      const bName = barangayName || selected.barangay_name || selected.barangay || "";
+      if (hType) params.set("type", hType);
+      if (bName) params.set("barangay", bName);
+
+      navigate(`${staffMapPath}?${params.toString()}`);
+    } else {
+      navigate(staffMapPath);
+    }
+  }
+
+  function applyCannedChip(text) {
+    if (!responseNotes.trim()) {
+      setResponseNotes(text);
+    } else {
+      setResponseNotes((prev) => `${prev}. ${text}`);
+    }
   }
 
   async function handleValidate(status) {
     if (!selected) return;
     try {
       const result = await api.validateHazardReport(selected.id, status, responseNotes);
-      setSelected(null);
-      setPhotoError(false);
-      setResponseNotes("");
-      setLightbox(false);
+      setSelected(result);
+      setResponseNotes(result.response_notes || "");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["hazard-reports"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.roadSegments }),
@@ -171,25 +604,28 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     }
   }
 
+  async function handleResolve() {
+    if (!selected) return;
+    if (selected.status === "validated") {
+      await handleReopenRoad();
+    } else {
+      await handleValidate("resolved");
+    }
+  }
+
   async function handleReopenRoad() {
     if (!selected) return;
     const confirmed = window.confirm(
-      `Mark the road(s) tied to this report as fixed and reopen them for routing?`
+      "Mark the road(s) tied to this report as fixed and reopen them for routing?"
     );
     if (!confirmed) return;
 
     setReopening(true);
     try {
       const result = await api.reopenRoad(selected.id);
-
-      // Apply the actual updated report returned by the backend (status,
-      // response_notes, validated_at, etc.) instead of patching a field
-      // that doesn't exist on the model. This is what keeps the detail
-      // panel and the list in sync with what really happened server-side.
       setSelected(result);
-      setPhotoError(false);
       queryClient.setQueryData(queryKeys.hazardReports(result.status), (previous = []) =>
-        previous.map((report) => report.id === result.id ? result : report)
+        previous.map((report) => (report.id === result.id ? result : report))
       );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["hazard-reports"] }),
@@ -205,7 +641,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
         );
       }
       if (!result.reopened_roads?.length && !result.still_closed?.length) {
-        alert("No closed roads were found near this report.");
+        alert("Report marked resolved.");
       }
     } catch (err) {
       alert(`Failed to reopen road: ${err.message}`);
@@ -214,248 +650,689 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     }
   }
 
+  function exportCSV() {
+    if (!reports.length) return;
+    const headers = ["ID", "Type", "Status", "Description", "Latitude", "Longitude", "Submitted At", "Validated By", "Validated At"];
+    const rows = reports.map((r) => [
+      r.id,
+      `"${r.report_type || ""}"`,
+      r.status,
+      `"${(r.description || "").replace(/"/g, '""')}"`,
+      r.latitude,
+      r.longitude,
+      r.submitted_at || "",
+      `"${r.validated_by_name || r.validated_by || ""}"`,
+      r.validated_at || "",
+    ]);
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `hazard_reports_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  // KPI counts
+  const totalCount = reports.length;
+  const pendingCount = reports.filter((r) => r.status === "pending").length;
+  const validatedCount = reports.filter((r) => r.status === "validated").length;
+  const resolvedCount = reports.filter((r) => r.status === "resolved").length;
+
+  // Filtered reports list
+  const filteredReports = useMemo(() => {
+    return reports.filter((r) => {
+      if (statusFilter !== "all" && r.status !== statusFilter) return false;
+      if (typeFilter !== "all" && !String(r.report_type || "").toLowerCase().includes(typeFilter)) {
+        return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchesId = String(r.id).includes(q);
+        const matchesType = String(r.report_type || "").toLowerCase().includes(q);
+        const matchesDesc = String(r.description || "").toLowerCase().includes(q);
+        const matchesNotes = String(r.response_notes || "").toLowerCase().includes(q);
+        const matchesValidator = String(r.validated_by_name || "").toLowerCase().includes(q);
+        if (!matchesId && !matchesType && !matchesDesc && !matchesNotes && !matchesValidator) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [reports, statusFilter, typeFilter, searchQuery]);
+
   return (
     <div className="hr-page">
-      
-
-      <div className={`hr-shell ${selected ? "has-selection" : ""}`}>
-        {/* --- List panel --- */}
-        <div className="hr-list-panel">
-          <div className="hr-filter-row">
-            {FILTERS.map((s) => {
-              const meta = STATUS_META[s];
-              const active = statusFilter === s;
-              return (
-                <button
-                  key={s}
-                  onClick={() => setStatusFilter(s)}
-                  className={`hr-filter-btn ${active ? "is-active" : ""}`}
-                  style={active && meta ? { background: meta.color, borderColor: meta.color } : undefined}
-                >
-                  {meta && <span className="hr-filter-dot" style={{ background: active ? "#fff" : meta.color }} />}
-                  {s}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="hr-list-scroll">
-            {loading && <div className="hr-loading">Loading reports…</div>}
-            {!loading && reports.length === 0 && (
-              <div className="hr-empty">
-                <FontAwesomeIcon icon={faImage} className="hr-empty-icon" />
-                <p className="hr-empty-title">No reports</p>
-                <p className="hr-empty-text">Nothing in this filter right now.</p>
+      <div className="hr-container" style={{ "--hr-header": `${headerOffset}px` }}>
+        {/* TOP COMMAND HEADER & METRIC KPI CARDS */}
+        <div ref={topSectionRef} className="hr-top-section">
+          <header className="hr-top-header">
+            <div className="hr-header-titles">
+              <div className="hr-badge-ticker">
+                <span className="hr-ticker-beacon" />
+                <span>Incident Command Feed</span>
               </div>
-            )}
+              <h1 className="hr-main-title">Hazard Reports & Road Dispatch</h1>
+              <p className="hr-subtitle">
+                Verify citizen-submitted road hazards, monitor 100m impact zones, and control dynamic route closures.
+              </p>
+            </div>
+            <div className="hr-header-actions">
+              <button type="button" onClick={exportCSV} className="hr-export-btn" title="Export incident reports to CSV">
+                <FontAwesomeIcon icon={faFileCsv} />
+                <span>Export CSV</span>
+              </button>
+            </div>
+          </header>
 
-            {reports.map((r) => {
-              const meta = statusMeta(r.status);
-              return (
-                <button
-                  key={r.id}
-                  onClick={() => openReport(r)}
-                  className={`hr-row ${selected?.id === r.id ? "is-selected" : ""}`}
-                  style={{ borderLeftColor: meta.color }}
-                >
-                  <span className="hr-row-icon" aria-hidden="true">
-                    <FontAwesomeIcon icon={reportIcon(r.report_type)} />
-                  </span>
-                  <div className="hr-row-body">
-                    <div className="hr-row-top">
-                      <strong className="hr-row-title">{r.report_type}</strong>
-                      <span className="hr-pill" style={{ background: meta.bg, color: meta.color }}>
+          {/* 4 CLICKABLE STAT CARDS */}
+          <section className="hr-kpi-grid" aria-label="Incident Overview Statistics">
+            <button
+              type="button"
+              onClick={() => setStatusFilter("pending")}
+              className={`hr-kpi-card is-pending ${statusFilter === "pending" ? "is-selected-card" : ""} ${pendingCount > 0 ? "has-amber-accent" : ""}`}
+              aria-pressed={statusFilter === "pending"}
+            >
+              <div className="hr-kpi-info">
+                <span className="hr-kpi-label">Pending Review</span>
+                <strong className="hr-kpi-num">{pendingCount}</strong>
+                <small className="hr-kpi-hint">
+                  {pendingCount > 0 ? "⚠️ Requires staff triage" : "All reports triaged"}
+                </small>
+              </div>
+              <span className="hr-kpi-icon-pill">
+                <FontAwesomeIcon icon={faTriangleExclamation} />
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter("validated")}
+              className={`hr-kpi-card is-active ${statusFilter === "validated" ? "is-selected-card" : ""}`}
+              aria-pressed={statusFilter === "validated"}
+            >
+              <div className="hr-kpi-info">
+                <span className="hr-kpi-label">Active Hazards</span>
+                <strong className="hr-kpi-num">{validatedCount}</strong>
+                <small className="hr-kpi-hint">Confirmed & affecting routes</small>
+              </div>
+              <span className="hr-kpi-icon-pill">
+                <FontAwesomeIcon icon={faRoad} />
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter("resolved")}
+              className={`hr-kpi-card is-resolved ${statusFilter === "resolved" ? "is-selected-card" : ""}`}
+              aria-pressed={statusFilter === "resolved"}
+            >
+              <div className="hr-kpi-info">
+                <span className="hr-kpi-label">Hazards Cleared</span>
+                <strong className="hr-kpi-num">{resolvedCount}</strong>
+                <small className="hr-kpi-hint">Roads safely reopened</small>
+              </div>
+              <span className="hr-kpi-icon-pill">
+                <FontAwesomeIcon icon={faCircleCheck} />
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStatusFilter("all")}
+              className={`hr-kpi-card is-total ${statusFilter === "all" ? "is-selected-card" : ""}`}
+              aria-pressed={statusFilter === "all"}
+            >
+              <div className="hr-kpi-info">
+                <span className="hr-kpi-label">Total Submissions</span>
+                <strong className="hr-kpi-num">{totalCount}</strong>
+                <small className="hr-kpi-hint">All historical incident logs</small>
+              </div>
+              <span className="hr-kpi-icon-pill">
+                <FontAwesomeIcon icon={faLayerGroup} />
+              </span>
+            </button>
+          </section>
+        </div>
+
+        {/* WORKSPACE SHELL: LIST FULL WIDTH */}
+        <div className="hr-shell">
+          <aside className="hr-list-panel">
+            {/* SEARCH & FILTERS */}
+            <div className="hr-controls-bar">
+              <div className="hr-search-wrap">
+                <FontAwesomeIcon icon={faSearch} className="hr-search-icon" />
+                <input
+                  type="text"
+                  placeholder="Search ID, street, keywords..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="hr-search-input"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="hr-search-clear"
+                    aria-label="Clear search input"
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                )}
+              </div>
+
+              {/* FILTERS WRAP OR SCROLL HORIZONTALLY */}
+              <div className="hr-controls-filters-row">
+                <div className="hr-status-tabs" role="tablist" aria-label="Filter hazard reports by status">
+                  {dynamicStatusFilters.map((s) => {
+                    const active = statusFilter === s.key;
+                    const count =
+                      s.key === "all"
+                        ? reports.length
+                        : reports.filter((r) => r.status === s.key).length;
+                    return (
+                      <button
+                        key={s.key}
+                        type="button"
+                        onClick={() => setStatusFilter(s.key)}
+                        className={`hr-tab-btn ${active ? "is-active" : ""}`}
+                        role="tab"
+                        aria-selected={active}
+                      >
+                        <span>{s.label}</span>
+                        <span className="hr-tab-count">{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="hr-type-select-wrap">
+                  <label htmlFor="hr-type-select" className="hr-type-select-label">
+                    Type
+                  </label>
+                  <select
+                    id="hr-type-select"
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value)}
+                    className="hr-type-select"
+                  >
+                    {dynamicTypeFilters.map((t) => (
+                      <option key={t.key} value={t.key}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* SCROLLABLE LIST */}
+            <div className="hr-list-scroll">
+              {loading && <div className="hr-loading">Loading reports…</div>}
+
+              {/* EMPTY STATE 1: No reports in system at all */}
+              {!loading && reports.length === 0 && (
+                <div className="hr-empty">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="hr-empty-icon" />
+                  <p className="hr-empty-title">No hazard reports yet</p>
+                  <p className="hr-empty-text">New citizen reports will appear here for review.</p>
+                </div>
+              )}
+
+              {/* EMPTY STATE 2: Filters hide everything */}
+              {!loading && reports.length > 0 && filteredReports.length === 0 && (
+                <div className="hr-empty">
+                  <FontAwesomeIcon icon={faSearch} className="hr-empty-icon" />
+                  <p className="hr-empty-title">No matching reports</p>
+                  <button
+                    type="button"
+                    onClick={clearAllFilters}
+                    className="hr-clear-filters-btn"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              )}
+
+              {/* FULL-WIDTH REPORT ROWS */}
+              {filteredReports.map((r) => {
+                const meta = statusMeta(r.status);
+                const isSelected = selected?.id === r.id;
+                const streetOrPlace = getReportStreetOrPlace(r, roadSegmentsData);
+                const barangay = getReportBarangay(r, isSelected ? barangayName : null);
+                const reporter = getReportReporter(r);
+
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={(e) => openReport(r, e)}
+                    className={`hr-row-item ${isSelected ? "is-selected" : ""}`}
+                    style={{ borderLeftColor: meta.color }}
+                    aria-selected={isSelected}
+                  >
+                    <div className="hr-row-main-group">
+                      <span className="hr-row-type-icon" style={{ color: meta.color }}>
+                        <FontAwesomeIcon icon={reportIcon(r.report_type)} />
+                      </span>
+                      <div className="hr-row-place-wrap">
+                        <strong className="hr-row-street">{streetOrPlace}</strong>
+                        <span className="hr-row-id">#{r.id}</span>
+                      </div>
+                      <span className="hr-row-barangay">{barangay}</span>
+                    </div>
+
+                    <div className="hr-row-meta-group">
+                      <span className="hr-row-reporter" title={`Reporter: ${reporter}`}>
+                        <FontAwesomeIcon icon={faUser} />
+                        <span>{reporter}</span>
+                      </span>
+
+                      <span className="hr-row-time">
+                        <FontAwesomeIcon icon={faClock} />
+                        <span>{formatRelativeTime(r.submitted_at)}</span>
+                      </span>
+
+                      <span
+                        className="hr-pill"
+                        style={{ background: meta.bg, color: meta.color }}
+                      >
                         {meta.label}
                       </span>
                     </div>
-                    <div className="hr-row-desc">
-                      {(r.description || "No description provided").slice(0, 60)}
-                    </div>
-                    <div className="hr-row-meta">
-                      {new Date(r.submitted_at).toLocaleString()}
-                      {r.status === "validated" && (
-                        <span className="hr-row-closed-tag">
-                          <FontAwesomeIcon icon={faRoad} /> May have closed a road
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* --- Detail panel --- */}
-        <div className="hr-detail-panel">
-          {selected && (
-            <button onClick={backToList} className="hr-back-btn">
-              <FontAwesomeIcon icon={faArrowLeft} /> <span>Back to reports</span>
-            </button>
-          )}
-
-          {!selected && (
-            <div className="hr-placeholder">
-              <FontAwesomeIcon icon={faImage} className="hr-placeholder-icon" />
-              <p className="hr-placeholder-text">Select a report to review it</p>
+                  </button>
+                );
+              })}
             </div>
-          )}
-
-          {selected && (
-            <div className="hr-detail">
-              <div className="hr-detail-header">
-                <h3 className="hr-detail-title">
-                  <FontAwesomeIcon
-                    icon={reportIcon(selected.report_type)}
-                    className="hr-detail-type-icon"
-                  />
-                  {selected.report_type} <span className="hr-detail-id">#{selected.id}</span>
-                </h3>
-                <span
-                  className="hr-pill hr-pill--lg"
-                  style={{ background: statusMeta(selected.status).bg, color: statusMeta(selected.status).color }}
-                >
-                  {statusMeta(selected.status).label}
-                </span>
-              </div>
-
-              {/* Only a report still in 'validated' status can trigger a
-                  reopen — once the backend flips it to 'resolved' this
-                  banner disappears on its own because selected.status
-                  now reflects the real value from the API response. */}
-              {selected.status === "validated" && (
-                <div className="hr-road-banner">
-                  <FontAwesomeIcon icon={faTriangleExclamation} />
-                  <div className="hr-road-banner-text">
-                    <strong>This hazard may have closed a nearby road.</strong> If it's been fixed, reopen the route.
-                  </div>
-                  <button
-                    className="hr-unblock-btn"
-                    onClick={handleReopenRoad}
-                    disabled={reopening}
-                  >
-                    <FontAwesomeIcon icon={reopening ? faXmark : faLockOpen} />
-                    {reopening ? "Reopening…" : "Mark fixed & reopen"}
-                  </button>
-                </div>
-              )}
-
-              {selected.status === "resolved" && (
-                <div className="hr-resolved-banner">
-                  <FontAwesomeIcon icon={faCheck} />
-                  <div className="hr-road-banner-text">
-                    <strong>Resolved.</strong> Any road closed by this report has been reopened.
-                  </div>
-                </div>
-              )}
-
-              {selected.photo_url && !photoError ? (
-                <button className="hr-photo-btn" onClick={() => setLightbox(true)}>
-                  <img
-                    src={reportPhotoUrl(selected.photo_url)}
-                    alt={`${selected.report_type || "Hazard"} report`}
-                    className="hr-photo"
-                    onError={() => setPhotoError(true)}
-                  />
-                  <span className="hr-photo-zoom">
-                    <FontAwesomeIcon icon={faMagnifyingGlassPlus} /> View full size
-                  </span>
-                </button>
-              ) : (
-                <div className="hr-photo-missing">
-                  <FontAwesomeIcon icon={reportIcon(selected.report_type)} />
-                  <span>{photoError ? "Report photo unavailable" : "No photo attached"}</span>
-                </div>
-              )}
-
-              <p className="hr-description">
-                {selected.description || "No additional description provided."}
-              </p>
-
-              {Number.isFinite(Number(selected.latitude)) && Number.isFinite(Number(selected.longitude)) && (
-                <button type="button" className="hr-map-button" onClick={() => onOpenMap?.(selected)}>
-                  <FontAwesomeIcon icon={faLocationDot} /> Show report location on map
-                </button>
-              )}
-
-              <div className="hr-detail-facts">
-                <div className="hr-detail-fact hr-detail-fact--location">
-                  <FontAwesomeIcon icon={faLocationDot} />
-                  <span>Barangay</span>
-                  <strong>
-                    {barangayLoading
-                      ? "Finding barangay..."
-                      : barangayName || "Barangay not available"}
-                  </strong>
-                </div>
-                <div className="hr-detail-fact">
-                  <FontAwesomeIcon icon={faLocationDot} />
-                  <span>Coordinates</span>
-                  <strong>
-                    {Number.isFinite(Number(selected.latitude)) &&
-                    Number.isFinite(Number(selected.longitude))
-                      ? `${Number(selected.latitude).toFixed(5)}, ${Number(selected.longitude).toFixed(5)}`
-                      : "Location unavailable"}
-                  </strong>
-                </div>
-                <div className="hr-detail-fact">
-                  <FontAwesomeIcon icon={faClock} />
-                  <span>Submitted</span>
-                  <strong>
-                    {selected.submitted_at
-                      ? new Date(selected.submitted_at).toLocaleString()
-                      : "Time unavailable"}
-                  </strong>
-                </div>
-              </div>
-
-              {selected.response_notes && (
-                <div className="hr-response-notes">
-                  <span>Previous response notes</span>
-                  <p>{selected.response_notes}</p>
-                </div>
-              )}
-
-              <label className="hr-label">Response notes</label>
-              <textarea
-                value={responseNotes}
-                onChange={(e) => setResponseNotes(e.target.value)}
-                className="hr-textarea"
-                placeholder="Add context for this decision…"
-              />
-
-              {selected.status === "pending" && (
-                <div className="hr-actions">
-                  <button onClick={() => handleValidate("validated")} className="hr-approve-btn">
-                    <FontAwesomeIcon icon={faCheck} /> <span>Validate</span>
-                  </button>
-                  <button onClick={() => handleValidate("rejected")} className="hr-reject-btn">
-                    <FontAwesomeIcon icon={faXmark} /> <span>Reject</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+          </aside>
         </div>
       </div>
 
-      {lightbox && selected?.photo_url && !photoError && (
-        <div className="hr-overlay" onClick={() => setLightbox(false)}>
-          <button className="hr-lightbox-close" onClick={() => setLightbox(false)} aria-label="Close">
+      {/* DETAIL DRAWER OVER DIMMED BACKDROP */}
+      {selected && (
+        <div className="hr-drawer-overlay" onClick={closeDrawer} role="presentation">
+          <aside
+            ref={drawerRef}
+            className="hr-drawer-panel"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Hazard Report Detail"
+            tabIndex={-1}
+          >
+            {/* STICKY HEADER WITH STATUS BADGE & ACTIONS */}
+            <div className="hr-drawer-sticky-header">
+              <div className="hr-drawer-header-top">
+                <div className="hr-drawer-badge-group">
+                  <span
+                    className="hr-pill hr-pill--lg"
+                    style={{
+                      background: statusMeta(selected.status).bg,
+                      color: statusMeta(selected.status).color,
+                    }}
+                  >
+                    {statusMeta(selected.status).label}
+                  </span>
+                  <span className="hr-drawer-title-id">Incident #{selected.id}</span>
+                </div>
+
+                <button
+                  type="button"
+                  ref={closeBtnRef}
+                  onClick={closeDrawer}
+                  className="hr-drawer-close-btn"
+                  aria-label="Close report details"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+
+              {/* ACTION BUTTONS: VALIDATE, REJECT, RESOLVE (EACH >= 44PX) */}
+              <div className="hr-drawer-header-actions">
+                <button
+                  type="button"
+                  onClick={() => handleValidate("validated")}
+                  className="hr-drawer-btn is-validate"
+                  disabled={selected.status === "validated"}
+                  title="Validate hazard report"
+                >
+                  <FontAwesomeIcon icon={faCheck} />
+                  <span>Validate</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleValidate("rejected")}
+                  className="hr-drawer-btn is-reject"
+                  disabled={selected.status === "rejected"}
+                  title="Reject report as invalid"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                  <span>Reject</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResolve}
+                  className="hr-drawer-btn is-resolve"
+                  disabled={selected.status === "resolved" || reopening}
+                  title="Mark incident resolved"
+                >
+                  <FontAwesomeIcon icon={reopening ? faXmark : faCircleCheck} />
+                  <span>{reopening ? "Reopening…" : "Resolve"}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* MODAL BODY CONTENT */}
+            <div className="hr-drawer-body">
+              <div className="hr-drawer-grid">
+                {/* LEFT COLUMN: EVIDENCE, DESCRIPTION, DISPATCH NOTES */}
+                <div className="hr-drawer-col">
+                    {/* PHOTO SECTION */}
+                    <div className="hr-drawer-section">
+                      <span className="hr-drawer-section-title">Photographic Evidence</span>
+                      {selectedPhotos.length > 0 ? (
+                        <div className="hr-photo-view-box">
+                          <div
+                            className="hr-photo-main"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLightbox(true);
+                            }}
+                            role="button"
+                            tabIndex={0}
+                            aria-label="View photo in full size lightbox"
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setLightbox(true);
+                              }
+                            }}
+                          >
+                            <img
+                              src={reportPhotoUrl(selectedPhotos[activePhotoIdx])}
+                              alt={`${selected.report_type} evidence ${activePhotoIdx + 1}`}
+                              className="hr-photo-img"
+                            />
+                            <button
+                              type="button"
+                              className="hr-photo-zoom-tag"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setLightbox(true);
+                              }}
+                              aria-label="Open full size photo viewer"
+                            >
+                              <FontAwesomeIcon icon={faMagnifyingGlassPlus} /> Full Size ({activePhotoIdx + 1}/{selectedPhotos.length})
+                            </button>
+                          </div>
+
+                          {selectedPhotos.length > 1 && (
+                            <div className="hr-thumbnail-row">
+                              {selectedPhotos.map((url, idx) => (
+                                <button
+                                  key={url}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActivePhotoIdx(idx);
+                                  }}
+                                  className={`hr-thumb-btn ${activePhotoIdx === idx ? "is-active" : ""}`}
+                                >
+                                  <img src={reportPhotoUrl(url)} alt={`Thumbnail ${idx + 1}`} />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="hr-no-photo-box">
+                          <FontAwesomeIcon icon={faImage} />
+                          <span>No photo attached to this report</span>
+                        </div>
+                      )}
+                    </div>
+
+                  {/* CITIZEN DESCRIPTION */}
+                  <div className="hr-drawer-section">
+                    <span className="hr-drawer-section-title">Citizen Description</span>
+                    <p className="hr-drawer-description-text">
+                      {selected.description || "No specific details provided by resident."}
+                    </p>
+                  </div>
+
+                  {/* RESPONSE NOTES & LOG */}
+                  <div className="hr-drawer-section">
+                    <div className="hr-canned-row">
+                      <span className="hr-canned-label">Quick Response Notes:</span>
+                      <div className="hr-chips-wrap">
+                        {CANNED_RESPONSES.map((chip) => (
+                          <button
+                            key={chip}
+                            type="button"
+                            onClick={() => applyCannedChip(chip)}
+                            className="hr-canned-btn"
+                          >
+                            + {chip}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <label className="hr-textarea-label" htmlFor="hr-notes-input">
+                      Official Response Notes
+                    </label>
+                    <textarea
+                      id="hr-notes-input"
+                      value={responseNotes}
+                      onChange={(e) => setResponseNotes(e.target.value)}
+                      className="hr-textarea"
+                      placeholder="Enter dispatch notes, actions taken, or reason for decision…"
+                    />
+                  </div>
+                </div>
+
+                {/* RIGHT COLUMN: LOCATION, MINI-MAP, AFFECTED ROADS, AUDIT */}
+                <div className="hr-drawer-col">
+                  {/* LOCATION AS TEXT */}
+                  <div className="hr-drawer-section">
+                    <span className="hr-drawer-section-title">
+                      <FontAwesomeIcon icon={faLocationDot} /> Location Details
+                    </span>
+                    <div className="hr-drawer-location-box">
+                      <div className="hr-drawer-loc-row">
+                        <span className="hr-drawer-loc-label">Street / Place:</span>
+                        <strong className="hr-drawer-loc-val">
+                          {getReportStreetOrPlace(selected, roadSegmentsData)}
+                        </strong>
+                      </div>
+                      <div className="hr-drawer-loc-row">
+                        <span className="hr-drawer-loc-label">Barangay:</span>
+                        <strong className="hr-drawer-loc-val">
+                          {barangayLoading ? "Resolving..." : (barangayName || getReportBarangay(selected))}
+                        </strong>
+                      </div>
+                      <div className="hr-drawer-loc-row">
+                        <span className="hr-drawer-loc-label">Coordinates:</span>
+                        <span className="hr-drawer-loc-coords">
+                          {Number(selected.latitude).toFixed(5)}, {Number(selected.longitude).toFixed(5)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* VIEW ON MAP BUTTON */}
+                    <button
+                      type="button"
+                      onClick={handleViewOnMap}
+                      className="hr-view-map-btn"
+                      title="View hazard on live interactive staff map"
+                    >
+                      <FontAwesomeIcon icon={faCompass} />
+                      <span>View on map</span>
+                    </button>
+                  </div>
+
+                  {/* INTERACTIVE MINI-MAP PREVIEW & 100M IMPACT ZONE */}
+                  <div className="hr-drawer-section">
+                    <div className="hr-minimap-wrap">
+                      <div ref={mapContainerRef} className="hr-minimap-container" />
+                      <div className="hr-minimap-legend">
+                        <span className="hr-legend-dot" /> 100m Impact & Road Closure Zone
+                      </div>
+                    </div>
+
+                    {nearbyRoads.length > 0 && (
+                      <div className="hr-affected-roads-box">
+                        <span className="hr-subhead">
+                          <FontAwesomeIcon icon={faRoad} /> Affected Streets in 100m Radius
+                        </span>
+                        <div className="hr-road-tags-list">
+                          {nearbyRoads.map((name) => (
+                            <span key={name} className="hr-road-tag">
+                              {name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* REPORTER INFO & VERIFICATION AUDIT */}
+                  <div className="hr-drawer-section">
+                    <span className="hr-drawer-section-title">
+                      <FontAwesomeIcon icon={faUser} /> Reporter & Audit
+                    </span>
+                    <div className="hr-reporter-info-card">
+                      <div className="hr-reporter-row">
+                        <span className="hr-reporter-label">Reported By:</span>
+                        <strong className="hr-reporter-val">{getReportReporter(selected)}</strong>
+                      </div>
+                      <div className="hr-reporter-row">
+                        <span className="hr-reporter-label">Submission Channel:</span>
+                        <span className="hr-reporter-val">Evacway Resident Web App</span>
+                      </div>
+                      <div className="hr-reporter-row">
+                        <span className="hr-reporter-label">Submitted:</span>
+                        <span className="hr-reporter-val">
+                          {selected.submitted_at
+                            ? new Date(selected.submitted_at).toLocaleString()
+                            : "Unknown"}{" "}
+                          ({formatRelativeTime(selected.submitted_at)})
+                        </span>
+                      </div>
+                      <div className="hr-reporter-row">
+                        <span className="hr-reporter-label">Current Status:</span>
+                        <strong style={{ color: statusMeta(selected.status).color }}>
+                          {statusMeta(selected.status).label}
+                        </strong>
+                      </div>
+                      <div className="hr-reporter-row">
+                        <span className="hr-reporter-label">Verified By:</span>
+                        <span className="hr-reporter-val">
+                          {selected.validated_by_name ||
+                            (selected.validated_by
+                              ? `Staff Officer #${selected.validated_by}`
+                              : selected.status === "pending"
+                              ? "Awaiting review"
+                              : "System logged")}
+                        </span>
+                      </div>
+                      {selected.validated_at && (
+                        <div className="hr-reporter-row">
+                          <span className="hr-reporter-label">Verified At:</span>
+                          <span className="hr-reporter-val">
+                            {new Date(selected.validated_at).toLocaleString()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* LIGHTBOX FOR FULL SIZE PHOTO VIEWING */}
+      {lightbox && selectedPhotos.length > 0 && (
+        <div
+          className="hr-lightbox-overlay"
+          onClick={(e) => {
+            e.stopPropagation();
+            setLightbox(false);
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Full size photo preview"
+        >
+          <button
+            type="button"
+            className="hr-lightbox-close"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightbox(false);
+            }}
+            aria-label="Close photo preview"
+          >
             <FontAwesomeIcon icon={faXmark} />
           </button>
-          <img
-            src={reportPhotoUrl(selected.photo_url)}
-            alt="hazard report full size"
-            className="hr-lightbox-img"
+
+          <div
+            className="hr-lightbox-dialog"
             onClick={(e) => e.stopPropagation()}
-          />
+          >
+            {selectedPhotos.length > 1 && (
+              <div className="hr-lightbox-bar">
+                <span className="hr-lightbox-counter">
+                  Photo {activePhotoIdx + 1} of {selectedPhotos.length}
+                </span>
+              </div>
+            )}
+
+            <div className="hr-lightbox-body">
+              {selectedPhotos.length > 1 && (
+                <button
+                  type="button"
+                  className="hr-lightbox-arrow is-prev"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActivePhotoIdx((prev) => (prev > 0 ? prev - 1 : selectedPhotos.length - 1));
+                  }}
+                  aria-label="Previous photo"
+                >
+                  <FontAwesomeIcon icon={faChevronLeft} />
+                </button>
+              )}
+
+              <img
+                src={reportPhotoUrl(selectedPhotos[activePhotoIdx])}
+                alt={`Hazard report high resolution ${activePhotoIdx + 1}`}
+                className="hr-lightbox-img"
+              />
+
+              {selectedPhotos.length > 1 && (
+                <button
+                  type="button"
+                  className="hr-lightbox-arrow is-next"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActivePhotoIdx((prev) => (prev < selectedPhotos.length - 1 ? prev + 1 : 0));
+                  }}
+                  aria-label="Next photo"
+                >
+                  <FontAwesomeIcon icon={faChevronRight} />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
-
-
 
 export default HazardReportReview;

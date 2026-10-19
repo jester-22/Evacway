@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EvacWay - Shared Design System Preview</title>
+  <link rel="stylesheet" href="./src/index.css" />
+  <link rel="stylesheet" href="./src/components_css/design-system.css" />
+  <style>
+    /* Preview Page Specific Layout (uses design system tokens) */
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      padding: var(--space-8) var(--space-6);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .preview-header {
+      margin-bottom: var(--space-8);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: var(--space-6);
+    }
+    .preview-section {
+      margin-bottom: var(--space-12);
+    }
+    .preview-section__title {
+      font-size: var(--text-xl);
+      font-weight: var(--weight-bold);
+      color: var(--ink);
+      margin-bottom: var(--space-2);
+    }
+    .preview-section__desc {
+      font-size: var(--text-sm);
+      color: var(--muted);
+      margin-bottom: var(--space-4);
+    }
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: var(--space-4);
+    }
+    .preview-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-3);
+      margin-bottom: var(--space-4);
+    }
+    .preview-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: var(--space-4);
+    }
+    .color-swatch {
+      width: 100%;
+      height: 48px;
+      border-radius: var(--radius-control);
+      margin-bottom: var(--space-2);
+      border: 1px solid rgba(0, 0, 0, 0.05);
+    }
+    .rules-card {
+      background: #ffffff;
+      border-left: 4px solid var(--brand);
+      padding: var(--space-4) var(--space-6);
+      border-radius: var(--radius-card);
+      box-shadow: var(--shadow-sm);
+      margin-bottom: var(--space-8);
+    }
+    .rules-card ol {
+      margin: var(--space-2) 0 0;
+      padding-left: var(--space-6);
+      color: var(--text);
+      line-height: 1.8;
+      font-size: var(--text-sm);
+    }
+  </style>
+</head>
+<body>
+
+  <header class="preview-header">
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4);">
+      <div>
+        <h1 style="font-size: var(--text-2xl); margin-bottom: var(--space-1);">EvacWay Shared Design System</h1>
+        <p style="color: var(--muted); margin: 0; font-size: var(--text-sm);">
+          Token-driven, mobile-accessible, unified design system for EvacWay.
+        </p>
+      </div>
+      <span class="ds-badge ds-badge--info">v1.0.0 Active</span>
+    </div>
+  </header>
+
+  <!-- DESIGN SYSTEM RULES -->
+  <div class="rules-card">
+    <h3 style="margin-top: 0; margin-bottom: var(--space-1); font-size: var(--text-base);">Core Design System Rules</h3>
+    <ol>
+      <li><strong>One primary button per view.</strong></li>
+      <li><strong>Color carries meaning only.</strong> Red means danger ONLY; amber means caution ONLY; never use them for decoration.</li>
+      <li><strong>Nothing overlaps another control.</strong></li>
+      <li><strong>Tap targets at least 44 px.</strong></li>
+      <li><strong>Body text at least 14 px (12 px only for captions).</strong></li>
+      <li><strong>Every list has loading, empty and error states.</strong></li>
+      <li><strong>Destructive actions need a confirmation.</strong></li>
+      <li><strong>No horizontal scrolling at 320 px.</strong></li>
+    </ol>
+  </div>
+
+  <!-- TOKENS SHOWCASE -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">1. Design Tokens</h2>
+    <p class="preview-section__desc">Harmonious color palette, brand tints, and accessible neutrals.</p>
+
+    <div class="preview-grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));">
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--brand);"></div>
+        <strong>--brand</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#2563eb</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--brand-hover);"></div>
+        <strong>--brand-hover</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#1d4ed8 (10% darker)</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--brand-soft); border: 1px solid var(--border);"></div>
+        <strong>--brand-soft</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#eff6ff</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--ink);"></div>
+        <strong>--ink</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#0e1f3a</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--text);"></div>
+        <strong>--text</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#26344a</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--muted);"></div>
+        <strong>--muted</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#5b6b82 (4.5:1 on white)</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--border);"></div>
+        <strong>--border</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#e3e8f0</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--bg); border: 1px solid var(--border);"></div>
+        <strong>--bg</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#f6f8fb</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--success);"></div>
+        <strong>--success</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#15803d / #e8f6ec</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--warning);"></div>
+        <strong>--warning</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#b45309 / #fff4e0</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--danger);"></div>
+        <strong>--danger</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#b91c1c / #fdecec</div>
+      </div>
+      <div class="preview-box">
+        <div class="color-swatch" style="background: var(--neutral);"></div>
+        <strong>--neutral</strong>
+        <div style="font-size: var(--text-xs); color: var(--muted);">#475569 / #eef2f6</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BUTTONS (.ds-btn) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">2. Buttons (.ds-btn)</h2>
+    <p class="preview-section__desc">All buttons have minimum 44px tap target height (except desktop table .ds-btn--sm). Exactly one primary button per view.</p>
+
+    <div class="ds-card" style="margin-bottom: var(--space-4);">
+      <h4 style="margin-bottom: var(--space-3);">Variants</h4>
+      <div class="preview-row">
+        <button type="button" class="ds-btn ds-btn--primary">Primary Action</button>
+        <button type="button" class="ds-btn ds-btn--secondary">Secondary Action</button>
+        <button type="button" class="ds-btn ds-btn--ghost">Ghost Action</button>
+        <button type="button" class="ds-btn ds-btn--danger">Danger Action (Outline)</button>
+        <button type="button" class="ds-btn ds-btn--icon" title="Icon Button" aria-label="Search">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        </button>
+        <button type="button" class="ds-btn ds-btn--secondary ds-btn--sm">Table Small (36px)</button>
+      </div>
+
+      <h4 style="margin-top: var(--space-4); margin-bottom: var(--space-3);">Interactive States (Hover, Active, Disabled, Loading)</h4>
+      <div class="preview-row">
+        <button type="button" class="ds-btn ds-btn--primary" disabled>Primary Disabled</button>
+        <button type="button" class="ds-btn ds-btn--secondary" disabled>Secondary Disabled</button>
+        <button type="button" class="ds-btn ds-btn--primary is-loading">Loading Button</button>
+        <button type="button" class="ds-btn ds-btn--secondary is-loading">Loading Secondary</button>
+      </div>
+
+      <h4 style="margin-top: var(--space-4); margin-bottom: var(--space-3);">Destructive Rule: Danger inside Confirmation Dialog</h4>
+      <div class="ds-confirm-dialog" style="display: inline-block; padding: var(--space-4); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-control);">
+        <p style="margin: 0 0 var(--space-3); font-size: var(--text-sm); font-weight: var(--weight-medium);">Delete this evacuation zone?</p>
+        <div style="display: flex; gap: var(--space-2);">
+          <button type="button" class="ds-btn ds-btn--secondary ds-btn--sm">Cancel</button>
+          <button type="button" class="ds-btn ds-btn--danger ds-btn--sm">Delete (Filled Red)</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BADGES & CHIPS (.ds-badge, .ds-chip) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">3. Badges & Chips (.ds-badge, .ds-chip)</h2>
+    <p class="preview-section__desc">Semantic status badges and removable filter chips.</p>
+
+    <div class="ds-card">
+      <div style="margin-bottom: var(--space-4);">
+        <h4 style="margin-bottom: var(--space-3);">Status Badges</h4>
+        <div class="preview-row">
+          <span class="ds-badge ds-badge--success">Available (65%)</span>
+          <span class="ds-badge ds-badge--warning">Filling (85%)</span>
+          <span class="ds-badge ds-badge--danger">Critical (98%)</span>
+          <span class="ds-badge ds-badge--neutral">Inactive</span>
+          <span class="ds-badge ds-badge--info">Verified</span>
+        </div>
+      </div>
+
+      <div>
+        <h4 style="margin-bottom: var(--space-3);">Filter Chips</h4>
+        <div class="preview-row" id="chip-container">
+          <span class="ds-chip">All Barangays</span>
+          <span class="ds-chip ds-chip--removable">
+            Flooding Hazard
+            <button type="button" class="ds-chip__remove" aria-label="Remove Flooding Hazard chip" onclick="this.parentElement.remove()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </span>
+          <span class="ds-chip ds-chip--removable">
+            Central School
+            <button type="button" class="ds-chip__remove" aria-label="Remove Central School chip" onclick="this.parentElement.remove()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- KPI CARDS & PROGRESS (.ds-kpi, .ds-progress) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">4. KPIs & Progress Bars (.ds-kpi, .ds-progress)</h2>
+    <p class="preview-section__desc">Metric numbers (12px uppercase label, 28px bold value, 12px helper) and capacity progress bars.</p>
+
+    <div class="preview-grid" style="margin-bottom: var(--space-4);">
+      <div class="ds-card ds-kpi">
+        <span class="ds-kpi__label">Total Evacuees</span>
+        <span class="ds-kpi__value">1,420</span>
+        <span class="ds-kpi__helper">+12% from last advisory</span>
+      </div>
+
+      <div class="ds-card ds-kpi">
+        <span class="ds-kpi__label">Capacity Status</span>
+        <span class="ds-kpi__value">64%</span>
+        <div class="ds-progress ds-progress--ok" style="margin-top: var(--space-2);">
+          <div class="ds-progress__bar" style="width: 64%;"></div>
+        </div>
+        <span class="ds-kpi__helper">&lt; 70% Normal status</span>
+      </div>
+
+      <div class="ds-card ds-kpi">
+        <span class="ds-kpi__label">Near Capacity</span>
+        <span class="ds-kpi__value">86%</span>
+        <div class="ds-progress ds-progress--filling" style="margin-top: var(--space-2);">
+          <div class="ds-progress__bar" style="width: 86%;"></div>
+        </div>
+        <span class="ds-kpi__helper">70-99% Caution status</span>
+      </div>
+
+      <div class="ds-card ds-kpi">
+        <span class="ds-kpi__label">Full Center</span>
+        <span class="ds-kpi__value">100%</span>
+        <div class="ds-progress ds-progress--full" style="margin-top: var(--space-2);">
+          <div class="ds-progress__bar" style="width: 100%;"></div>
+        </div>
+        <span class="ds-kpi__helper">100% Neutral Dark</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- TOOLBAR & FORMS (.ds-toolbar, .ds-input, .ds-select) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">5. Toolbar & Form Controls (.ds-toolbar, .ds-input, .ds-select)</h2>
+    <p class="preview-section__desc">Inputs have 44px height, 16px font on mobile to prevent zoom, and growing search.</p>
+
+    <div class="ds-card">
+      <div class="ds-toolbar" style="margin-bottom: var(--space-4);">
+        <input type="search" class="ds-input ds-toolbar__search" placeholder="Search evacuation centers by name or barangay..." />
+        <div style="width: 180px;">
+          <select class="ds-select">
+            <option>All Statuses</option>
+            <option>Active</option>
+            <option>Inactive</option>
+          </select>
+        </div>
+        <button type="button" class="ds-btn ds-btn--primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          Add Center
+        </button>
+      </div>
+
+      <div class="preview-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+        <div>
+          <label style="display: block; font-size: var(--text-xs); font-weight: var(--weight-semibold); text-transform: uppercase; margin-bottom: var(--space-1); color: var(--muted);">Standard Input</label>
+          <input type="text" class="ds-input" value="Barangay Hall Evacuation Site" />
+        </div>
+        <div>
+          <label style="display: block; font-size: var(--text-xs); font-weight: var(--weight-semibold); text-transform: uppercase; margin-bottom: var(--space-1); color: var(--muted);">Disabled Input</label>
+          <input type="text" class="ds-input" value="Read-only System Coordinates" disabled />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TABLE & RESPONSIVE STACK (.ds-table, .ds-table--stack) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">6. Responsive Table (.ds-table, .ds-table--stack)</h2>
+    <p class="preview-section__desc">56px rows, sticky uppercase headers, hover rows, and turns into stacked cards on screens &le; 768px.</p>
+
+    <div class="ds-card" style="padding: 0; overflow: hidden;">
+      <div class="ds-table-wrapper">
+        <table class="ds-table ds-table--stack">
+          <thead>
+            <tr>
+              <th>Evacuation Center</th>
+              <th>Barangay</th>
+              <th>Capacity</th>
+              <th>Occupancy</th>
+              <th>Status</th>
+              <th style="text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td data-label="Evacuation Center"><strong>Mabolo Central School</strong></td>
+              <td data-label="Barangay">Mabolo</td>
+              <td data-label="Capacity">500</td>
+              <td data-label="Occupancy">
+                <div style="display: flex; align-items: center; gap: var(--space-2); width: 120px;">
+                  <div class="ds-progress ds-progress--ok"><div class="ds-progress__bar" style="width: 48%;"></div></div>
+                  <span style="font-size: var(--text-xs); font-weight: var(--weight-medium);">48%</span>
+                </div>
+              </td>
+              <td data-label="Status"><span class="ds-badge ds-badge--success">Available</span></td>
+              <td data-label="Actions" style="text-align: right;">
+                <button type="button" class="ds-btn ds-btn--secondary ds-btn--sm">View</button>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="Evacuation Center"><strong>Guadalupe Sports Complex</strong></td>
+              <td data-label="Barangay">Guadalupe</td>
+              <td data-label="Capacity">800</td>
+              <td data-label="Occupancy">
+                <div style="display: flex; align-items: center; gap: var(--space-2); width: 120px;">
+                  <div class="ds-progress ds-progress--filling"><div class="ds-progress__bar" style="width: 88%;"></div></div>
+                  <span style="font-size: var(--text-xs); font-weight: var(--weight-medium);">88%</span>
+                </div>
+              </td>
+              <td data-label="Status"><span class="ds-badge ds-badge--warning">Filling</span></td>
+              <td data-label="Actions" style="text-align: right;">
+                <button type="button" class="ds-btn ds-btn--secondary ds-btn--sm">View</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- MENU POPOVER (.ds-menu) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">7. Popover Menu (.ds-menu)</h2>
+    <p class="preview-section__desc">The "..." popover list: 44px items, divider, danger item.</p>
+
+    <div class="preview-row">
+      <ul class="ds-menu" style="width: 220px;">
+        <li><button type="button" class="ds-menu__item">Edit Details</button></li>
+        <li><button type="button" class="ds-menu__item">View on Map</button></li>
+        <li><button type="button" class="ds-menu__item">Manage Rooms</button></li>
+        <li class="ds-menu__divider"></li>
+        <li><button type="button" class="ds-menu__item ds-menu__item--danger">Deactivate Center</button></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- TABS & EMPTY STATE (.ds-tabs, .ds-empty) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">8. Tabs & Empty State (.ds-tabs, .ds-empty)</h2>
+    <p class="preview-section__desc">Navigation tabs and standardized empty state with single primary button.</p>
+
+    <div class="ds-card" style="margin-bottom: var(--space-4);">
+      <div class="ds-tabs" style="margin-bottom: var(--space-6);">
+        <button type="button" class="ds-tab is-active">Active Centers (18)</button>
+        <button type="button" class="ds-tab">Pending Review (3)</button>
+        <button type="button" class="ds-tab">Archived</button>
+      </div>
+
+      <div class="ds-empty">
+        <div class="ds-empty__icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+        </div>
+        <h3 class="ds-empty__title">No Hazard Reports Found</h3>
+        <p class="ds-empty__text">There are currently no active community hazard reports for this barangay. New verified submissions will appear here.</p>
+        <div class="ds-empty__action">
+          <button type="button" class="ds-btn ds-btn--primary">Submit New Report</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SKELETON SHIMMER (.ds-skeleton) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">9. Skeleton Shimmer (.ds-skeleton)</h2>
+    <p class="preview-section__desc">Loading placeholders with non-distracting shimmer (disabled under prefers-reduced-motion).</p>
+
+    <div class="ds-card preview-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+      <div>
+        <div class="ds-skeleton ds-skeleton--title"></div>
+        <div class="ds-skeleton ds-skeleton--text"></div>
+        <div class="ds-skeleton ds-skeleton--text" style="width: 80%;"></div>
+        <div class="ds-skeleton ds-skeleton--btn" style="margin-top: var(--space-4);"></div>
+      </div>
+      <div>
+        <div class="ds-skeleton ds-skeleton--card"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BANNERS (.ds-banner) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">10. Banners (.ds-banner)</h2>
+    <p class="preview-section__desc">Info, warning, and danger announcement banners with soft backgrounds.</p>
+
+    <div style="display: flex; flex-direction: column; gap: var(--space-3);">
+      <div class="ds-banner ds-banner--info">
+        <div class="ds-banner__icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+        </div>
+        <div class="ds-banner__content">
+          <strong>Advisory:</strong> Evacuation protocols are currently set to Level 1 Alert for low-lying coastal areas.
+        </div>
+      </div>
+
+      <div class="ds-banner ds-banner--warning">
+        <div class="ds-banner__icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        </div>
+        <div class="ds-banner__content">
+          <strong>Caution:</strong> Flooding reported along Highway 45. Routing will divert residents around this hazard.
+        </div>
+      </div>
+
+      <div class="ds-banner ds-banner--danger">
+        <div class="ds-banner__icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+        </div>
+        <div class="ds-banner__content">
+          <strong>Danger:</strong> Immediate evacuation ordered for Riverbank Sector B due to flash flood surge.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SHEET / DRAWER DEMO (.ds-sheet) -->
+  <section class="preview-section">
+    <h2 class="preview-section__title">11. Sheet / Drawer (.ds-sheet)</h2>
+    <p class="preview-section__desc">Desktop: side drawer (right). Mobile (&le; 768px): bottom sheet.</p>
+
+    <button type="button" class="ds-btn ds-btn--secondary" onclick="document.getElementById('demo-sheet-backdrop').style.display='block'; document.getElementById('demo-sheet').style.display='flex';">
+      Open Sample Drawer / Bottom Sheet
+    </button>
+
+    <div id="demo-sheet-backdrop" class="ds-sheet-backdrop" style="display: none;" onclick="document.getElementById('demo-sheet-backdrop').style.display='none'; document.getElementById('demo-sheet').style.display='none';"></div>
+
+    <aside id="demo-sheet" class="ds-sheet" style="display: none;">
+      <div class="ds-sheet__header">
+        <h3 class="ds-sheet__title">Center Details</h3>
+        <button type="button" class="ds-btn ds-btn--icon" aria-label="Close sheet" onclick="document.getElementById('demo-sheet-backdrop').style.display='none'; document.getElementById('demo-sheet').style.display='none';">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="ds-sheet__body">
+        <p style="margin-top: 0; color: var(--muted);">This panel automatically presents as a side drawer on wide screens and seamlessly converts to a bottom sheet on mobile screens (&le; 768px).</p>
+        <div class="ds-kpi" style="margin-bottom: var(--space-4);">
+          <span class="ds-kpi__label">Assigned Families</span>
+          <span class="ds-kpi__value">128</span>
+          <span class="ds-kpi__helper">Capacity: 150 families</span>
+        </div>
+        <label style="display: block; font-size: var(--text-xs); font-weight: var(--weight-semibold); text-transform: uppercase; margin-bottom: var(--space-1); color: var(--muted);">Notes</label>
+        <input type="text" class="ds-input" value="Primary power generator verified operational" />
+      </div>
+      <div class="ds-sheet__footer">
+        <button type="button" class="ds-btn ds-btn--secondary" onclick="document.getElementById('demo-sheet-backdrop').style.display='none'; document.getElementById('demo-sheet').style.display='none';">Cancel</button>
+        <button type="button" class="ds-btn ds-btn--primary" onclick="document.getElementById('demo-sheet-backdrop').style.display='none'; document.getElementById('demo-sheet').style.display='none';">Save Changes</button>
+      </div>
+    </aside>
+  </section>
+
+</body>
+</html>

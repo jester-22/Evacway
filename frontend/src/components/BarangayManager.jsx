@@ -7,12 +7,14 @@ import {
   useBarangay,
   useBarangayCenters,
   useBarangays,
+  useEvacuationCenters,
 } from "../hooks/useEvacuationQueries";
 import "../components_css/BarangayManager.css";
 import "../components_css/BarangayManager.motion.css";
 import FamilyManagement from "./FamilyManagement";
 import LoadingState from "./LoadingState";
 import BarangaysServedPicker from "./BarangaysServedPicker";
+import { formatRoomLabel } from "../utils/formatRoomLabel";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faRotate,
@@ -61,6 +63,17 @@ function BarangayManager() {
     [barangaysQuery.data]
   );
 
+  const allCentersQuery = useEvacuationCenters(true);
+  const totalUniqueCenters = useMemo(() => {
+    if (Array.isArray(allCentersQuery.data?.features)) {
+      return allCentersQuery.data.features.length;
+    }
+    if (Array.isArray(allCentersQuery.data)) {
+      return allCentersQuery.data.length;
+    }
+    return 3;
+  }, [allCentersQuery.data]);
+
   // Navigation state
   const [workspaceTab, setWorkspaceTab] = useState("barangays"); // 'barangays' | 'families'
   const [selectedBarangayId, setSelectedBarangayId] = useState(null);
@@ -90,7 +103,7 @@ function BarangayManager() {
           ...f,
           head_of_family: f.head_of_family || f.head_name || "",
           head_name: f.head_name || f.head_of_family || "",
-          assignment_status: isAssigned ? "Assigned" : "Not Assigned",
+          assignment_status: isAssigned ? "Assigned" : "Unassigned",
         };
       }),
     };
@@ -112,17 +125,19 @@ function BarangayManager() {
               ? r.families
               : [];
           const rawNum = r.room_number || r.room_name || "";
-          const displayRoomName =
-            r.room_name ||
-            (rawNum
-              ? String(rawNum).toLowerCase().startsWith("room")
-                ? String(rawNum)
-                : `Room ${rawNum}`
-              : "Room");
+          const displayRoomName = formatRoomLabel(r.room_name || rawNum);
+          const isRoomAssigned = Boolean(
+            r.is_assigned ||
+            r.assignment_status === "Assigned" ||
+            rawFams.length > 0 ||
+            Number(r.occupied || 0) > 0
+          );
           return {
             ...r,
             room_number: rawNum,
             room_name: displayRoomName,
+            is_assigned: isRoomAssigned,
+            assignment_status: isRoomAssigned ? "Assigned" : "Unassigned",
             assigned_families: rawFams.map((f) => ({
               ...f,
               family_id: f.family_id || f.id,
@@ -190,7 +205,6 @@ function BarangayManager() {
   const overallStats = useMemo(() => {
     let totalHouseholds = 0;
     let totalResidents = 0;
-    let totalCenters = 0;
     let totalAssigned = 0;
     let totalUnassigned = 0;
 
@@ -199,7 +213,6 @@ function BarangayManager() {
         b.household_count ?? b.family_count ?? b.total_families ?? 0
       );
       totalResidents += Number(b.resident_count ?? b.total_residents ?? 0);
-      totalCenters += Number(b.evacuation_center_count ?? 0);
       totalAssigned += Number(b.assigned_family_count ?? 0);
       totalUnassigned += Number(b.unassigned_family_count ?? 0);
     }
@@ -208,11 +221,11 @@ function BarangayManager() {
       totalBarangays: barangays.length,
       totalHouseholds,
       totalResidents,
-      totalCenters,
+      totalCenters: totalUniqueCenters,
       totalAssigned,
       totalUnassigned,
     };
-  }, [barangays]);
+  }, [barangays, totalUniqueCenters]);
 
   // Filtered Barangays (Page A)
   const filteredBarangays = useMemo(() => {
@@ -488,7 +501,7 @@ function BarangayManager() {
           capacity: Number(roomModal.capacity),
           notes: roomModal.notes.trim() || null,
         });
-        setSuccessMsg(`Room "${roomModal.room_name.trim()}" added to ${roomModal.centerName}.`);
+        setSuccessMsg(`${formatRoomLabel(roomModal.room_name.trim())} added to ${roomModal.centerName}.`);
       } else {
         await api.updateRoom(roomModal.id, {
           room_number: roomModal.room_name.trim(),
@@ -497,7 +510,7 @@ function BarangayManager() {
           notes: roomModal.notes.trim() || null,
           is_active: Boolean(roomModal.is_active),
         });
-        setSuccessMsg(`Room "${roomModal.room_name.trim()}" updated.`);
+        setSuccessMsg(`${formatRoomLabel(roomModal.room_name.trim())} updated.`);
       }
       setRoomModal(null);
       await invalidateEvacuationQueries(queryClient);
@@ -666,6 +679,12 @@ function BarangayManager() {
       const assignedFamilies = Array.isArray(activeRoom.assigned_families)
         ? activeRoom.assigned_families
         : [];
+      const isRoomAssigned = Boolean(
+        activeRoom.is_assigned ||
+        activeRoom.assignment_status === "Assigned" ||
+        assignedFamilies.length > 0 ||
+        occ > 0
+      );
 
       return (
         <div className="bm-subscreen">
@@ -708,16 +727,16 @@ function BarangayManager() {
                   className={`bm-status-pill ${
                     activeRoom.is_active === false
                       ? "inactive"
-                      : isFull
-                      ? "full"
-                      : "available"
+                      : isRoomAssigned
+                      ? "assigned"
+                      : "unassigned"
                   }`}
                 >
                   {activeRoom.is_active === false
                     ? "Inactive"
-                    : isFull
-                    ? "Full"
-                    : "Available"}
+                    : isRoomAssigned
+                    ? "Assigned"
+                    : "Unassigned"}
                 </span>
               </div>
               {activeRoom.notes && <p className="bm-hero-sub">{activeRoom.notes}</p>}
@@ -1113,6 +1132,12 @@ function BarangayManager() {
                         const famCount = Array.isArray(rm.assigned_families)
                           ? rm.assigned_families.length
                           : 0;
+                        const isRoomAssigned = Boolean(
+                          rm.is_assigned ||
+                          rm.assignment_status === "Assigned" ||
+                          famCount > 0 ||
+                          rOcc > 0
+                        );
 
                         return (
                           <tr key={rm.id}>
@@ -1140,16 +1165,16 @@ function BarangayManager() {
                                 className={`bm-status-pill ${
                                   rm.is_active === false
                                     ? "inactive"
-                                    : rFull
-                                    ? "full"
-                                    : "available"
+                                    : isRoomAssigned
+                                    ? "assigned"
+                                    : "unassigned"
                                 }`}
                               >
                                 {rm.is_active === false
                                   ? "Inactive"
-                                  : rFull
-                                  ? "Full"
-                                  : "Available"}
+                                  : isRoomAssigned
+                                  ? "Assigned"
+                                  : "Unassigned"}
                               </span>
                             </td>
                             <td className="bm-td-right">
@@ -1196,6 +1221,12 @@ function BarangayManager() {
                     const famCount = Array.isArray(rm.assigned_families)
                       ? rm.assigned_families.length
                       : 0;
+                    const isRoomAssigned = Boolean(
+                      rm.is_assigned ||
+                      rm.assignment_status === "Assigned" ||
+                      famCount > 0 ||
+                      rOcc > 0
+                    );
 
                     return (
                       <div key={rm.id} className="bm-mobile-card">
@@ -1210,16 +1241,16 @@ function BarangayManager() {
                             className={`bm-status-pill ${
                               rm.is_active === false
                                 ? "inactive"
-                                : rFull
-                                ? "full"
-                                : "available"
+                                : isRoomAssigned
+                                ? "assigned"
+                                : "unassigned"
                             }`}
                           >
                             {rm.is_active === false
                               ? "Inactive"
-                              : rFull
-                              ? "Full"
-                              : "Available"}
+                              : isRoomAssigned
+                              ? "Assigned"
+                              : "Unassigned"}
                           </span>
                         </div>
                         <div className="bm-mobile-card-grid">
@@ -1627,27 +1658,27 @@ function BarangayManager() {
            PAGE A: BARANGAY MANAGEMENT LANDING PAGE
            ========================================================= */
         <div className="bm-landing">
-          {/* Summary Strip (Concise, Clean Metrics) */}
-          <div className="bm-summary-strip">
-            <div className="bm-summary-item">
-              <span className="bm-summary-label">Barangays</span>
-              <strong className="bm-summary-val">{overallStats.totalBarangays}</strong>
+          {/* Summary Metric Cards (Modern 4-KPI Grid) */}
+          <div className="bm-stats-grid-4" style={{ marginBottom: "16px" }}>
+            <div className="bm-stat-card">
+              <span className="bm-stat-label">Barangays</span>
+              <strong className="bm-stat-value">{overallStats.totalBarangays}</strong>
+              <span className="bm-stat-sub">Registered in Sogod</span>
             </div>
-            <div className="bm-summary-divider" />
-            <div className="bm-summary-item">
-              <span className="bm-summary-label">Households</span>
-              <strong className="bm-summary-val">{overallStats.totalHouseholds}</strong>
-              <small className="bm-summary-sub">{overallStats.totalAssigned} assigned</small>
+            <div className="bm-stat-card accent-green">
+              <span className="bm-stat-label">Total Households</span>
+              <strong className="bm-stat-value">{overallStats.totalHouseholds}</strong>
+              <span className="bm-stat-sub">{overallStats.totalAssigned} assigned to shelters</span>
             </div>
-            <div className="bm-summary-divider" />
-            <div className="bm-summary-item">
-              <span className="bm-summary-label">Residents</span>
-              <strong className="bm-summary-val">{overallStats.totalResidents}</strong>
+            <div className="bm-stat-card">
+              <span className="bm-stat-label">Total Residents</span>
+              <strong className="bm-stat-value">{overallStats.totalResidents}</strong>
+              <span className="bm-stat-sub">Across all barangays</span>
             </div>
-            <div className="bm-summary-divider" />
-            <div className="bm-summary-item">
-              <span className="bm-summary-label">Evacuation Centers</span>
-              <strong className="bm-summary-val">{overallStats.totalCenters}</strong>
+            <div className="bm-stat-card">
+              <span className="bm-stat-label">Evacuation Centers</span>
+              <strong className="bm-stat-value">{overallStats.totalCenters}</strong>
+              <span className="bm-stat-sub">Designated municipal facilities</span>
             </div>
           </div>
 
@@ -1900,55 +1931,488 @@ function BarangayManager() {
 
           {barangaySection === "overview" && (
             <div className="bm-overview-content">
-              {/* Summary Strip (Concise, Clean Metrics) */}
-              <div className="bm-summary-strip">
-                <div className="bm-summary-item">
-                  <span className="bm-summary-label">Households</span>
-                  <strong className="bm-summary-val">{selectedBarangayStats.totalHouseholds}</strong>
-                  <small className="bm-summary-sub">
+              {/* Executive 4-Stat Metric Grid */}
+              <div className="bm-stats-grid-4">
+                <div className="bm-stat-card">
+                  <span className="bm-stat-label">Total Households</span>
+                  <strong className="bm-stat-value">{selectedBarangayStats.totalHouseholds}</strong>
+                  <span className="bm-stat-sub">
                     {selectedBarangayStats.assignedHouseholds} assigned to rooms
-                  </small>
+                  </span>
                 </div>
-                <div className="bm-summary-divider" />
-                <div className="bm-summary-item">
-                  <span className="bm-summary-label">Residents</span>
-                  <strong className="bm-summary-val">{selectedBarangayStats.totalResidents}</strong>
-                  <small className="bm-summary-sub">Individual persons</small>
+                <div className="bm-stat-card">
+                  <span className="bm-stat-label">Registered Residents</span>
+                  <strong className="bm-stat-value">{selectedBarangayStats.totalResidents}</strong>
+                  <span className="bm-stat-sub">Individual persons</span>
                 </div>
-                <div className="bm-summary-divider" />
-                <div className="bm-summary-item">
-                  <span className="bm-summary-label">Evacuation Centers</span>
-                  <strong className="bm-summary-val">{selectedBarangayStats.totalCenters}</strong>
-                  <small className="bm-summary-sub">
-                    {selectedBarangayStats.totalRooms} rooms • {selectedBarangayStats.totalAvailable} spaces open
-                  </small>
+                <div className="bm-stat-card">
+                  <span className="bm-stat-label">Evacuation Centers</span>
+                  <strong className="bm-stat-value">{selectedBarangayStats.totalCenters}</strong>
+                  <span className="bm-stat-sub">
+                    {selectedBarangayStats.totalRooms} rooms &bull; {selectedBarangayStats.totalAvailable} spaces open
+                  </span>
                 </div>
-                <div className="bm-summary-divider" />
-                <div className="bm-summary-item">
-                  <span className="bm-summary-label">Unassigned</span>
-                  <strong className={`bm-summary-val ${selectedBarangayStats.unassignedHouseholds > 0 ? "text-amber" : ""}`}>
+                <div className={`bm-stat-card ${selectedBarangayStats.unassignedHouseholds > 0 ? "accent-amber" : "accent-green"}`}>
+                  <span className="bm-stat-label">Unassigned Status</span>
+                  <strong className="bm-stat-value">
                     {selectedBarangayStats.unassignedHouseholds}
                   </strong>
-                  <small className="bm-summary-sub">Households</small>
+                  <span className="bm-stat-sub">
+                    {selectedBarangayStats.unassignedHouseholds > 0
+                      ? "Households awaiting room"
+                      : "All households sheltered"}
+                  </span>
                 </div>
               </div>
 
-              {/* Direct Actions to Main Sections */}
-              <div className="bm-overview-actions-bar">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => openHouseholdsSection()}
-                >
-                  <FontAwesomeIcon icon={faPeopleGroup} /> View Households ({selectedBarangayStats.totalHouseholds})
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => openCentersSection(null, null)}
-                >
-                  <FontAwesomeIcon icon={faBuilding} /> View Evacuation Centers ({selectedBarangayStats.totalCenters})
-                </button>
+              {/* Core Operations Quick Access Cards */}
+              <div className="bm-main-sections-grid">
+                {/* Households Section Card */}
+                <div className="bm-feature-card">
+                  <div className="bm-feature-card-head">
+                    <div className="bm-feature-icon">
+                      <FontAwesomeIcon icon={faPeopleGroup} />
+                    </div>
+                    <div>
+                      <h4>Households &amp; Population</h4>
+                      <span className="bm-muted">{selectedBarangay.name} Registry</span>
+                    </div>
+                  </div>
+                  <p className="bm-feature-desc">
+                    Manage family profiles, demographic records, vulnerable sector tracking, and shelter room allocations for this barangay.
+                  </p>
+                  <div className="bm-feature-metrics">
+                    <div>
+                      <span>Households</span>
+                      <strong>{selectedBarangayStats.totalHouseholds}</strong>
+                    </div>
+                    <div>
+                      <span>Assigned</span>
+                      <strong className="text-green">{selectedBarangayStats.assignedHouseholds}</strong>
+                    </div>
+                    <div>
+                      <span>Unassigned</span>
+                      <strong className={selectedBarangayStats.unassignedHouseholds > 0 ? "text-amber" : ""}>
+                        {selectedBarangayStats.unassignedHouseholds}
+                      </strong>
+                    </div>
+                  </div>
+                  <div className="bm-feature-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => openHouseholdsSection()}
+                    >
+                      <FontAwesomeIcon icon={faPeopleGroup} /> View Households ({selectedBarangayStats.totalHouseholds})
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => openHouseholdsSection({ startAdd: true })}
+                    >
+                      <FontAwesomeIcon icon={faPlus} /> Add Household
+                    </button>
+                  </div>
+                </div>
+
+                {/* Evacuation Centers Section Card */}
+                <div className="bm-feature-card">
+                  <div className="bm-feature-card-head">
+                    <div className="bm-feature-icon">
+                      <FontAwesomeIcon icon={faBuilding} />
+                    </div>
+                    <div>
+                      <h4>Evacuation Facilities</h4>
+                      <span className="bm-muted">Designated Shelters</span>
+                    </div>
+                  </div>
+                  <p className="bm-feature-desc">
+                    Designated centers assigned to shelter residents of {selectedBarangay.name}, room capacities, live occupancy, and shelter allocations.
+                  </p>
+                  <div className="bm-feature-metrics">
+                    <div>
+                      <span>Centers</span>
+                      <strong>{selectedBarangayStats.totalCenters}</strong>
+                    </div>
+                    <div>
+                      <span>Rooms</span>
+                      <strong>{selectedBarangayStats.totalRooms}</strong>
+                    </div>
+                    <div>
+                      <span>Available</span>
+                      <strong className="text-green">{selectedBarangayStats.totalAvailable}</strong>
+                    </div>
+                  </div>
+                  <div className="bm-feature-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => openCentersSection(null, null)}
+                    >
+                      <FontAwesomeIcon icon={faBuilding} /> View Facilities ({selectedBarangayStats.totalCenters})
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={openAddCenterModal}
+                    >
+                      <FontAwesomeIcon icon={faPlus} /> Add Center
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Designated Evacuation Centers Section */}
+              <div className="bm-section-card">
+                <div className="bm-section-card-header">
+                  <div>
+                    <h4>
+                      <FontAwesomeIcon icon={faBuilding} /> Designated Evacuation Centers ({centers.length})
+                    </h4>
+                    <p>Centers assigned to shelter residents of {selectedBarangay.name}.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => openCentersSection(null, null)}
+                  >
+                    Manage All Centers <FontAwesomeIcon icon={faArrowRight} />
+                  </button>
+                </div>
+
+                {centers.length === 0 ? (
+                  <div className="bm-empty-box">
+                    <FontAwesomeIcon icon={faBuilding} className="bm-empty-icon" />
+                    <h4>No Designated Evacuation Centers</h4>
+                    <p>There are no evacuation centers currently assigned to serve {selectedBarangay.name}.</p>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={openAddCenterModal}
+                    >
+                      <FontAwesomeIcon icon={faPlus} /> Add Evacuation Center
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="bm-table-wrap bm-desktop-only">
+                      <table className="bm-table">
+                        <thead>
+                          <tr>
+                            <th>Center Name</th>
+                            <th>Address / Location</th>
+                            <th>Rooms</th>
+                            <th>Occupancy &amp; Capacity</th>
+                            <th>Status</th>
+                            <th className="bm-td-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {centers.map((c) => {
+                            const rooms = Array.isArray(c.rooms) ? c.rooms : [];
+                            const cCap = Number(
+                              c.capacity || rooms.reduce((sum, r) => sum + Number(r.capacity || 0), 0)
+                            );
+                            const cOcc = Number(
+                              c.occupied ?? rooms.reduce((sum, r) => sum + Number(r.occupied || 0), 0)
+                            );
+                            const cAvail = Math.max(0, cCap - cOcc);
+                            const pct = cCap > 0 ? Math.min(100, Math.round((cOcc / cCap) * 100)) : 0;
+                            const isFull = cAvail <= 0 && cCap > 0;
+
+                            return (
+                              <tr key={c.id}>
+                                <td>
+                                  <strong className="bm-cell-strong">{c.name}</strong>
+                                </td>
+                                <td>
+                                  <span className="bm-muted">
+                                    <FontAwesomeIcon icon={faLocationDot} style={{ marginRight: 5 }} />
+                                    {c.address || selectedBarangay.name}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span className="bm-count-badge">
+                                    {rooms.length} room{rooms.length === 1 ? "" : "s"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <div style={{ minWidth: 160 }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                                      <span className="bm-cell-strong">{cOcc} / {cCap}</span>
+                                      <span className="bm-muted">{pct}%</span>
+                                    </div>
+                                    <div className="bm-progress-bar">
+                                      <div
+                                        className={`bm-progress-fill ${pct >= 100 ? "full" : pct >= 80 ? "warning" : "normal"}`}
+                                        style={{ width: `${pct}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`bm-status-pill ${
+                                      c.is_active === false
+                                        ? "inactive"
+                                        : isFull
+                                        ? "full"
+                                        : "available"
+                                    }`}
+                                  >
+                                    {c.is_active === false
+                                      ? "Inactive"
+                                      : isFull
+                                      ? "Full"
+                                      : `${cAvail} spaces open`}
+                                  </span>
+                                </td>
+                                <td className="bm-td-right">
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => openCentersSection(c.id, null)}
+                                  >
+                                    <FontAwesomeIcon icon={faEye} /> View Rooms
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="bm-mobile-stack bm-mobile-only">
+                      {centers.map((c) => {
+                        const rooms = Array.isArray(c.rooms) ? c.rooms : [];
+                        const cCap = Number(
+                          c.capacity || rooms.reduce((sum, r) => sum + Number(r.capacity || 0), 0)
+                        );
+                        const cOcc = Number(
+                          c.occupied ?? rooms.reduce((sum, r) => sum + Number(r.occupied || 0), 0)
+                        );
+                        const cAvail = Math.max(0, cCap - cOcc);
+                        const pct = cCap > 0 ? Math.min(100, Math.round((cOcc / cCap) * 100)) : 0;
+                        const isFull = cAvail <= 0 && cCap > 0;
+
+                        return (
+                          <div key={c.id} className="bm-mobile-card">
+                            <div className="bm-mobile-card-top">
+                              <div>
+                                <h5 className="bm-mobile-card-title">{c.name}</h5>
+                                <span className="bm-muted" style={{ fontSize: 12 }}>
+                                  <FontAwesomeIcon icon={faLocationDot} style={{ marginRight: 4 }} />
+                                  {c.address || selectedBarangay.name}
+                                </span>
+                              </div>
+                              <span
+                                className={`bm-status-pill ${
+                                  c.is_active === false ? "inactive" : isFull ? "full" : "available"
+                                }"}`}
+                              >
+                                {isFull ? "Full" : `${cAvail} open`}
+                              </span>
+                            </div>
+                            <div className="bm-mobile-card-grid">
+                              <div>
+                                <span>Rooms</span>
+                                <strong>{rooms.length}</strong>
+                              </div>
+                              <div>
+                                <span>Occupancy</span>
+                                <strong>{cOcc} / {cCap}</strong>
+                              </div>
+                              <div>
+                                <span>Available</span>
+                                <strong className="text-green">{cAvail}</strong>
+                              </div>
+                            </div>
+                            <div className="bm-mobile-card-actions">
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => openCentersSection(c.id, null)}
+                              >
+                                <FontAwesomeIcon icon={faEye} /> View Rooms
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Registered Households Preview Section */}
+              <div className="bm-section-card">
+                <div className="bm-section-card-header">
+                  <div>
+                    <h4>
+                      <FontAwesomeIcon icon={faPeopleGroup} /> Registered Households ({selectedBarangayStats.totalHouseholds})
+                    </h4>
+                    <p>Household records registered in {selectedBarangay.name}.</p>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => openHouseholdsSection({ startAdd: true })}
+                    >
+                      <FontAwesomeIcon icon={faPlus} /> Add Household
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => openHouseholdsSection()}
+                    >
+                      View All ({selectedBarangayStats.totalHouseholds}) <FontAwesomeIcon icon={faArrowRight} />
+                    </button>
+                  </div>
+                </div>
+
+                {selectedBarangay.families.length === 0 ? (
+                  <div className="bm-empty-box">
+                    <FontAwesomeIcon icon={faHouse} className="bm-empty-icon" />
+                    <h4>No Households Registered Yet</h4>
+                    <p>There are no households registered in {selectedBarangay.name} yet.</p>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => openHouseholdsSection({ startAdd: true })}
+                    >
+                      <FontAwesomeIcon icon={faPlus} /> Add First Household
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="bm-table-wrap bm-desktop-only">
+                      <table className="bm-table">
+                        <thead>
+                          <tr>
+                            <th>Household Code</th>
+                            <th>Head of Family</th>
+                            <th>Members</th>
+                            <th>Status</th>
+                            <th>Shelter / Room</th>
+                            <th className="bm-td-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedBarangay.families.slice(0, 5).map((fam) => {
+                            const fId = fam.id || fam.family_id;
+                            const isAssigned = fam.assignment_status === "Assigned";
+                            const memCount = Number(fam.resident_count ?? fam.member_count ?? 1);
+                            const roomDisplay = fam.current_room_name
+                              ? `${fam.current_center_name ? fam.current_center_name + " — " : ""}${formatRoomLabel(fam.current_room_name)}`
+                              : fam.current_center_name || null;
+
+                            return (
+                              <tr key={fId || fam.family_code}>
+                                <td>
+                                  <span className="bm-code-badge">{formatHouseholdCode(fam)}</span>
+                                </td>
+                                <td>
+                                  <strong className="bm-cell-strong">
+                                    {fam.head_name || fam.head_of_family || "Unnamed Household"}
+                                  </strong>
+                                </td>
+                                <td>
+                                  <span className="bm-count-badge">
+                                    {memCount} person{memCount === 1 ? "" : "s"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span className={`bm-mini-badge ${isAssigned ? "assigned" : "unassigned"}`}>
+                                    {isAssigned ? "Assigned" : "Unassigned"}
+                                  </span>
+                                </td>
+                                <td>
+                                  {roomDisplay ? (
+                                    <span className="bm-type-pill">{roomDisplay}</span>
+                                  ) : (
+                                    <span className="bm-muted">Unassigned</span>
+                                  )}
+                                </td>
+                                <td className="bm-td-right">
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => openHouseholdsSection({ familyId: fId })}
+                                  >
+                                    <FontAwesomeIcon icon={faEye} /> Details
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="bm-mobile-stack bm-mobile-only">
+                      {selectedBarangay.families.slice(0, 5).map((fam) => {
+                        const fId = fam.id || fam.family_id;
+                        const isAssigned = fam.assignment_status === "Assigned";
+                        const memCount = Number(fam.resident_count ?? fam.member_count ?? 1);
+                        const roomDisplay = fam.current_room_name
+                          ? `${fam.current_center_name ? fam.current_center_name + " — " : ""}${formatRoomLabel(fam.current_room_name)}`
+                          : fam.current_center_name || null;
+
+                        return (
+                          <div key={fId || fam.family_code} className="bm-mobile-card">
+                            <div className="bm-mobile-card-top">
+                              <div>
+                                <span className="bm-code-badge">{formatHouseholdCode(fam)}</span>
+                                <h5 className="bm-mobile-card-title">
+                                  {fam.head_name || fam.head_of_family || "Unnamed Household"}
+                                </h5>
+                              </div>
+                              <span className={`bm-mini-badge ${isAssigned ? "assigned" : "unassigned"}`}>
+                                {isAssigned ? "Assigned" : "Unassigned"}
+                              </span>
+                            </div>
+                            <div className="bm-mobile-card-grid">
+                              <div>
+                                <span>Members</span>
+                                <strong>{memCount}</strong>
+                              </div>
+                              <div style={{ gridColumn: "span 2" }}>
+                                <span>Assigned Shelter</span>
+                                <strong>{roomDisplay || "None"}</strong>
+                              </div>
+                            </div>
+                            <div className="bm-mobile-card-actions">
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => openHouseholdsSection({ familyId: fId })}
+                              >
+                                <FontAwesomeIcon icon={faEye} /> View Details
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {selectedBarangay.families.length > 5 && (
+                      <div className="bm-table-footer">
+                        <span>
+                          Showing 5 of {selectedBarangay.families.length} registered households
+                        </span>
+                        <button
+                          type="button"
+                          className="bm-link-btn"
+                          onClick={() => openHouseholdsSection()}
+                        >
+                          View all {selectedBarangay.families.length} households &rarr;
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -2015,7 +2479,7 @@ function BarangayManager() {
                       }
                     />
                   </label>
-                  <div className="bm-form-field bm-span-2">
+                  <div className="bm-span-2">
                     <BarangaysServedPicker
                       barangays={barangays}
                       selectedIds={centerModal.barangay_ids}
@@ -2323,7 +2787,7 @@ function BarangayManager() {
                         const avail = Math.max(0, cap - occ);
                         return (
                           <option key={r.id} value={r.id} disabled={avail <= 0}>
-                            {r.room_name} ({r.room_type || "Room"}) — {avail} of {cap}{" "}
+                            {formatRoomLabel(r.room_name || r.room_number)} ({r.room_type || "Room"}) — {avail} of {cap}{" "}
                             available
                           </option>
                         );

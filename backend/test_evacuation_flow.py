@@ -285,8 +285,8 @@ def run_tests():
             # Verify Family status is Not Evacuated
             fam_res = client.get(f'/api/families/{created_family1_id}', headers=headers)
             fam_data = fam_res.get_json()
-            assert fam_data.get('evacuation_status') == "Not Evacuated" or fam_data.get('assigned_members') == 0
-            results[10] = ("PASS", "Unassigned family. Room occupancy decremented to 0, status updated to 'Not Evacuated'")
+            assert fam_data.get('evacuation_status') in ["Unassigned", "Not Evacuated"] or fam_data.get('assigned_members') == 0
+            results[10] = ("PASS", "Unassigned family. Room occupancy decremented to 0, status updated to 'Unassigned'")
         except Exception as e:
             results[10] = ("FAIL", str(e))
         print(f"Test 10: {results[10][0]} - {results[10][1]}", flush=True)

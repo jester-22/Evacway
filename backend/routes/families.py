@@ -2,6 +2,7 @@ import csv
 import io
 import re
 import uuid
+import time
 from datetime import date
 from collections import defaultdict
 
@@ -25,6 +26,37 @@ from models import (
 )
 
 from utils import role_required
+
+
+# ---------------------------------------------------------
+# STAGING STORE FOR VALIDATED-BUT-UNCOMMITTED IMPORTS
+# ---------------------------------------------------------
+# token -> {preview, filename, expires_at, created_by}
+STAGED_IMPORTS = {}
+STAGING_TTL_SECONDS = 900          # 15 minutes
+MAX_FILE_SIZE = 10 * 1024 * 1024   # 10 MB
+
+# Excel files (OOXML) are ZIP archives and start with 'PK' magic bytes.
+# We check content by magic bytes, not just the file extension.
+EXCEL_MAGIC = b'PK\x03\x04'
+
+
+def _cleanup_staged_imports():
+    """Remove expired entries from the in-memory staging store."""
+    now = time.time()
+    for token in list(STAGED_IMPORTS.keys()):
+        if STAGED_IMPORTS[token]['expires_at'] < now:
+            del STAGED_IMPORTS[token]
+
+
+class _BytesFileWrapper:
+    """Minimal file-like wrapper so _preview_family_workbook can read from raw bytes."""
+    def __init__(self, data, name):
+        self._data = data
+        self.filename = name
+
+    def read(self):
+        return self._data
 
 
 families_bp = Blueprint('families', __name__)
@@ -677,6 +709,160 @@ def import_families():
     except Exception:
         db.session.rollback()
         return jsonify({'error': 'Import failed. No family records were committed.'}), 500
+
+    return jsonify({
+        'message': f'Imported {created_count} families ({preview["rows"]} member rows).',
+        'successful_families': created_count,
+        'successful_rows': preview['rows'],
+        'families_created': created_count,
+        'residents_created': preview['rows'],
+        'failed_rows': 0,
+    }), 201
+
+
+# ---------------------------------------------------------
+# STAGE: Upload + validate, save nothing to live data
+# ---------------------------------------------------------
+@families_bp.route('/api/families/import/stage', methods=['POST'])
+@role_required('admin')
+def stage_family_import():
+    file_storage = request.files.get('file')
+    if not file_storage:
+        return jsonify({'error': 'Choose an .xlsx file to import.'}), 400
+
+    file_bytes = file_storage.read()
+
+    # File: not empty
+    if len(file_bytes) == 0:
+        return jsonify({'error': 'The uploaded file is empty.'}), 400
+
+    # File: size limit
+    if len(file_bytes) > MAX_FILE_SIZE:
+        return jsonify({
+            'error': f'File too large. Maximum size is {MAX_FILE_SIZE // (1024 * 1024)} MB.'
+        }), 400
+
+    # File: content type by magic bytes (not just extension)
+    if not file_bytes.startswith(EXCEL_MAGIC):
+        return jsonify({
+            'error': 'The file does not appear to be a valid Excel (.xlsx) file.'
+        }), 400
+
+    # File: readable encoding / parseable as a workbook
+    try:
+        wrapper = _BytesFileWrapper(file_bytes, file_storage.filename or 'import.xlsx')
+        preview = _preview_family_workbook(wrapper)
+    except Exception:
+        return jsonify({
+            'error': 'The workbook could not be read. It may be corrupted or use an unsupported format.'
+        }), 400
+
+    # Stage the validated data (nothing written to live database yet)
+    token = str(uuid.uuid4())
+    STAGED_IMPORTS[token] = {
+        'preview': preview,
+        'filename': file_storage.filename or 'import.xlsx',
+        'expires_at': time.time() + STAGING_TTL_SECONDS,
+        'created_by': get_jwt_identity(),
+    }
+    _cleanup_staged_imports()
+
+    return jsonify({
+        'staging_token': token,
+        'expires_in': STAGING_TTL_SECONDS,
+        'filename': file_storage.filename,
+        'families': preview['families'],
+        'errors': preview['errors'],
+        'rows': preview['rows'],
+        'can_import': bool(preview['families']) and not preview['errors'],
+    }), 200
+
+
+# ---------------------------------------------------------
+# COMMIT: Require a valid staging token, re-validate, save in one transaction
+# ---------------------------------------------------------
+@families_bp.route('/api/families/import/commit', methods=['POST'])
+@role_required('admin')
+def commit_family_import():
+    data = request.get_json(silent=True) or {}
+    token = data.get('staging_token')
+
+    if not token:
+        return jsonify({
+            'error': 'A staging token is required. Please validate the file first.'
+        }), 400
+
+    staged = STAGED_IMPORTS.get(token)
+    if not staged:
+        return jsonify({
+            'error': 'Import session not found or has expired. Please re-upload the file.'
+        }), 400
+
+    # Check expiry
+    if time.time() > staged['expires_at']:
+        del STAGED_IMPORTS[token]
+        return jsonify({
+            'error': 'Import session has expired. Please re-upload the file.'
+        }), 400
+
+    preview = staged['preview']
+
+    # Re-validate: any error blocks the commit
+    if preview['errors']:
+        return jsonify({'error': 'Validation errors found. Cannot commit.'}), 400
+
+    if not preview['families']:
+        return jsonify({'error': 'No valid families to import.'}), 400
+
+    # Save in a single database transaction: all or nothing
+    created_count = 0
+    affected_barangay_ids = set()
+    try:
+        for item in preview['families']:
+            family = Family(
+                barangay_id=item['barangay_id'],
+                family_code=item['family_code'],
+                head_name=item['head_name'],
+                member_count=item['member_count'],
+                contact_number=item['contact_number'],
+                evacuation_status='Unassigned',
+            )
+            db.session.add(family)
+            db.session.flush()
+            affected_barangay_ids.add(item['barangay_id'])
+            for member in item['members']:
+                is_head = _normalize_text(member['full_name']) == _normalize_text(item['head_name'])
+                db.session.add(Resident(
+                    family_id=family.id,
+                    first_name=member['first_name'],
+                    middle_name=member['middle_name'],
+                    last_name=member['last_name'],
+                    household_head_name=item['head_name'],
+                    barangay=item['barangay'],
+                    address=item['address'],
+                    contact_number=member['contact_number'],
+                    family_members=item['member_count'],
+                    is_head_of_family=is_head,
+                    relationship_to_head='Household Head' if is_head else None,
+                    uploaded_by=get_jwt_identity(),
+                ))
+            db.session.flush()
+            _sync_household_and_barangay(family)
+            created_count += 1
+        for bid in affected_barangay_ids:
+            _sync_barangay_population(bid)
+        db.session.add(SystemLog(
+            user_id=get_jwt_identity(),
+            action=f'Imported {created_count} families from Excel',
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({'error': 'Import failed. No family records were committed.'}), 500
+
+    # Remove the staged import after successful commit
+    del STAGED_IMPORTS[token]
+    _cleanup_staged_imports()
 
     return jsonify({
         'message': f'Imported {created_count} families ({preview["rows"]} member rows).',

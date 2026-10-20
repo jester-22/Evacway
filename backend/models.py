@@ -478,6 +478,9 @@ class RescueRequest(db.Model):
     longitude = db.Column(db.Float)
     status = db.Column(db.String(20), nullable=False, default='pending', index=True)
     status_updated_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    requester_name = db.Column(db.String(100), nullable=False, default='')
+    requester_contact = db.Column(db.String(20), nullable=False, default='')
+    proof_images = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=philippines_now, index=True)
     updated_at = db.Column(db.DateTime, nullable=False, default=philippines_now, onupdate=philippines_now)
 

@@ -88,7 +88,7 @@ export const api = {
   submitRescueRequest: (payload) =>
     request("/api/rescue-requests", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: payload,
     }),
 
   getRescueRequests: () => request("/api/rescue-requests"),
@@ -488,6 +488,26 @@ export const api = {
     return request("/api/families/import", {
       method: "POST",
       body: formData,
+    });
+  },
+
+  // Stage an import: validates the file but saves nothing to live data.
+  // Returns a staging token that must be presented at commit time.
+  stageFamilyImport: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request("/api/families/import/stage", {
+      method: "POST",
+      body: formData,
+    });
+  },
+
+  // Commit a staged import: requires a valid, unexpired staging token.
+  // All records are saved in a single transaction or none are.
+  commitFamilyImport: (stagingToken) => {
+    return request("/api/families/import/commit", {
+      method: "POST",
+      body: JSON.stringify({ staging_token: stagingToken }),
     });
   },
 

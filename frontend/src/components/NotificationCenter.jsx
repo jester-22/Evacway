@@ -40,17 +40,63 @@ export default function NotificationCenter({ onSelect }) {
     return () => document.removeEventListener("visibilitychange", refreshWhenVisible);
   }, [refetchNotifications]);
 
+  // Auto-enable push notifications on page load / login
   useEffect(() => {
-    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
-    navigator.serviceWorker.ready
-      .then((registration) => registration.pushManager.getSubscription())
-      .then(async (currentSubscription) => {
-        if (currentSubscription) {
-          await api.savePushSubscription(currentSubscription.toJSON());
-          setSubscription(currentSubscription);
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      setPushMessage("Push notifications are not supported by this browser.");
+      return;
+    }
+
+    let cancelled = false;
+
+    async function autoEnablePush() {
+      setPushBusy(true);
+      setPushMessage("");
+
+      try {
+        // Reuse existing subscription if one is already registered
+        const registration = await navigator.serviceWorker.ready;
+        const existing = await registration.pushManager.getSubscription();
+        if (existing) {
+          await api.savePushSubscription(existing.toJSON());
+          setSubscription(existing);
+          setPushMessage("Push notifications are already enabled on this device.");
+          return;
         }
-      })
-      .catch(() => {});
+
+        // Fetch VAPID public key
+        const config = await api.getVapidPublicKey();
+        if (!config.enabled || !config.public_key) {
+          setPushMessage("Web Push is not configured on the server yet.");
+          return;
+        }
+
+        // Request notification permission
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          setPushMessage("Notification permission was not granted. You can enable it in your browser settings.");
+          return;
+        }
+
+        // Subscribe to push
+        const created = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: decodeVapidKey(config.public_key),
+        });
+        await api.savePushSubscription(created.toJSON());
+        setSubscription(created);
+        setPushMessage("Push notifications are now enabled on this device.");
+      } catch (error) {
+        if (!cancelled) {
+          setPushMessage(error.message || "Could not enable push notifications.");
+        }
+      } finally {
+        if (!cancelled) setPushBusy(false);
+      }
+    }
+
+    autoEnablePush();
+    return () => { cancelled = true; };
   }, []);
 
   // Close notification panel on click outside or Escape
@@ -134,44 +180,24 @@ export default function NotificationCenter({ onSelect }) {
     onSelect(notification);
   }
 
-  async function handlePushToggle() {
+  async function handlePushDisable() {
     setPushBusy(true);
     setPushMessage("");
     try {
-      if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-        throw new Error("Push notifications are not supported by this browser.");
+      if (!subscription) {
+        setPushMessage("No push subscription to disable.");
+        return;
       }
-
-      const registration = await navigator.serviceWorker.ready;
-      if (subscription) {
-        await api.removePushSubscription(subscription.endpoint);
-        await subscription.unsubscribe();
-        setSubscription(null);
-        setPushMessage("Push notifications disabled on this device.");
-      } else {
-        const config = await api.getVapidPublicKey();
-        if (!config.enabled || !config.public_key) {
-          throw new Error("Web Push is not configured on the server yet.");
-        }
-        const permission = await Notification.requestPermission();
-        if (permission !== "granted") {
-          throw new Error("Allow notifications in your browser settings to enable push.");
-        }
-        const created = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: decodeVapidKey(config.public_key),
-        });
-        await api.savePushSubscription(created.toJSON());
-        setSubscription(created);
-        setPushMessage("Push notifications enabled on this device.");
-      }
+      await api.removePushSubscription(subscription.endpoint);
+      await subscription.unsubscribe();
+      setSubscription(null);
+      setPushMessage("Push notifications disabled on this device.");
     } catch (error) {
-      setPushMessage(error.message || "Could not update push notification settings.");
+      setPushMessage(error.message || "Could not disable push notifications.");
     } finally {
       setPushBusy(false);
     }
   }
-
   return (
     <>
       <div className="notification-center">
@@ -218,11 +244,13 @@ export default function NotificationCenter({ onSelect }) {
             ))}
           </div>
 
-          <footer className="notification-panel-footer">
-            <button type="button" onClick={handlePushToggle} disabled={pushBusy}>
-              <FontAwesomeIcon icon={subscription ? faBellSlash : faBell} />
-              {pushBusy ? "Updating…" : subscription ? "Disable push" : "Enable push"}
-            </button>
+                    <footer className="notification-panel-footer">
+            {subscription && (
+              <button type="button" onClick={handlePushDisable} disabled={pushBusy}>
+                <FontAwesomeIcon icon={faBellSlash} />
+                {pushBusy ? "Updating..." : "Disable push notifications"}
+              </button>
+            )}
             {pushMessage && <span role="status">{pushMessage}</span>}
           </footer>
         </section>,

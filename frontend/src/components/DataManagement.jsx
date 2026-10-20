@@ -51,24 +51,30 @@ function DataManagement() {
   const [dragActive, setDragActive] = useState(false);
   const [validating, setValidating] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [dryRunResult, setDryRunResult] = useState(null);
+  const [importStep, setImportStep] = useState("upload"); // "upload" | "review" | "result"
+  const [stagingToken, setStagingToken] = useState(null);
+  const [stagedResult, setStagedResult] = useState(null);
+  const [importResult, setImportResult] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Trigger dry-run preview when file is selected
-  async function runDryRunValidation(file) {
+  // Stage an upload: validates the file but saves nothing to live data.
+  async function runStageValidation(file) {
     if (!file) return;
     setValidating(true);
     setErrorMsg("");
     setSuccessMsg("");
-    setDryRunResult(null);
+    setStagedResult(null);
+    setImportStep("upload");
 
     try {
-      const preview = await api.previewFamilyImport(file, false);
-      setDryRunResult(preview);
+      const staged = await api.stageFamilyImport(file);
+      setStagingToken(staged.staging_token);
+      setStagedResult(staged);
+      setImportStep("review");
     } catch (err) {
-      console.error("Dry run validation failed:", err);
+      console.error("Stage validation failed:", err);
       setErrorMsg(err.message || "Failed to validate the Excel file.");
     } finally {
       setValidating(false);
@@ -82,7 +88,7 @@ function DataManagement() {
       return;
     }
     setImportFile(selected);
-    runDryRunValidation(selected);
+    runStageValidation(selected);
   }
 
   // Drag and drop handlers
@@ -109,26 +115,32 @@ function DataManagement() {
 
   function clearSelectedFile() {
     setImportFile(null);
-    setDryRunResult(null);
+    setStagedResult(null);
+    setStagingToken(null);
+    setImportResult(null);
+    setImportStep("upload");
     setErrorMsg("");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   }
 
-  // Commit Import
+  // Commit Import: requires a valid staging token. Server re-validates before saving.
   async function handleCommitImport() {
-    if (!importFile || !dryRunResult?.can_import) return;
+    if (!stagingToken || !stagedResult?.can_import) return;
     setImporting(true);
     setErrorMsg("");
     try {
-      const result = await api.previewFamilyImport(importFile, true);
+      const result = await api.commitFamilyImport(stagingToken);
       await invalidateEvacuationQueries(queryClient);
 
-      setSuccessMsg(
-        result.message ||
-          `Import successful! Created ${result.families_created ?? dryRunResult.families.length} households.`
-      );
+      setImportResult({
+        status: "success",
+        message: result.message || `Import successful! Created ${result.families_created ?? 0} households.`,
+        familiesCreated: result.families_created ?? 0,
+        rowsCreated: result.successful_rows ?? 0,
+      });
+      setImportStep("result");
       setShowConfirmModal(false);
       clearSelectedFile();
     } catch (err) {
@@ -445,42 +457,42 @@ function DataManagement() {
               </div>
             )}
 
-            {/* Dry-run Summary */}
-            {dryRunResult && !validating && (
+            {/* Validation Summary */}
+            {importStep === "review" && stagedResult && !validating && (
               <>
                 <div className="dm-summary-grid">
                   <div className="dm-summary-card">
                     <span className="dm-summary-label">Rows Scanned</span>
-                    <span className="dm-summary-val">{dryRunResult.rows ?? 0}</span>
+                    <span className="dm-summary-val">{stagedResult.rows ?? 0}</span>
                   </div>
                   <div className="dm-summary-card">
                     <span className="dm-summary-label">Valid Households</span>
-                    <span className="dm-summary-val">{dryRunResult.families?.length ?? 0}</span>
+                    <span className="dm-summary-val">{stagedResult.families?.length ?? 0}</span>
                   </div>
                   <div className="dm-summary-card">
                     <span className="dm-summary-label">Total Residents</span>
                     <span className="dm-summary-val">
-                      {dryRunResult.families?.reduce((acc, f) => acc + (f.member_count || 1), 0) ?? 0}
+                      {stagedResult.families?.reduce((acc, f) => acc + (f.member_count || 1), 0) ?? 0}
                     </span>
                   </div>
-                  <div className={`dm-summary-card ${dryRunResult.can_import ? "is-status" : "is-status-error"}`}>
-                    <span className="dm-summary-label">Dry-Run Status</span>
-                    <span className={`dm-summary-status-text ${dryRunResult.can_import ? "ok" : "fail"}`}>
-                      <FontAwesomeIcon icon={dryRunResult.can_import ? faCircleCheck : faTriangleExclamation} />
-                      {dryRunResult.can_import ? "Ready to Import" : "Validation Failed"}
+                  <div className={`dm-summary-card ${stagedResult.can_import ? "is-status" : "is-status-error"}`}>
+                    <span className="dm-summary-label">Validation Status</span>
+                    <span className={`dm-summary-status-text ${stagedResult.can_import ? "ok" : "fail"}`}>
+                      <FontAwesomeIcon icon={stagedResult.can_import ? faCircleCheck : faTriangleExclamation} />
+                      {stagedResult.can_import ? "Ready to Import" : "Validation Failed"}
                     </span>
                   </div>
                 </div>
 
                 {/* Errors List */}
-                {dryRunResult.errors?.length > 0 && (
+                {stagedResult.errors?.length > 0 && (
                   <div className="dm-issues-box is-error">
                     <h5 className="dm-issues-title">
                       <FontAwesomeIcon icon={faTriangleExclamation} />
-                      {dryRunResult.errors.length} Error{dryRunResult.errors.length === 1 ? "" : "s"} Found in Workbook
+                      {stagedResult.errors.length} Error{stagedResult.errors.length === 1 ? "" : "s"} Found in Workbook
                     </h5>
                     <ul className="dm-issues-list">
-                      {dryRunResult.errors.map((err, idx) => (
+                      {stagedResult.errors.map((err, idx) => (
                         <li key={idx}>
                           {err.row > 0 ? <strong>Row {err.row}: </strong> : null}
                           {err.message}
@@ -491,14 +503,14 @@ function DataManagement() {
                 )}
 
                 {/* Warnings List */}
-                {dryRunResult.warnings?.length > 0 && (
+                {stagedResult.warnings?.length > 0 && (
                   <div className="dm-issues-box is-warning">
                     <h5 className="dm-issues-title">
                       <FontAwesomeIcon icon={faTriangleExclamation} />
                       Warnings
                     </h5>
                     <ul className="dm-issues-list">
-                      {dryRunResult.warnings.map((w, idx) => (
+                      {stagedResult.warnings.map((w, idx) => (
                         <li key={idx}>{w}</li>
                       ))}
                     </ul>
@@ -518,7 +530,7 @@ function DataManagement() {
                   <button
                     type="button"
                     className="dm-btn dm-btn-primary"
-                    disabled={!dryRunResult.can_import || importing}
+                    disabled={!stagedResult.can_import || importing}
                     onClick={() => setShowConfirmModal(true)}
                   >
                     <FontAwesomeIcon icon={faFileCircleCheck} />
@@ -738,8 +750,8 @@ function DataManagement() {
               </div>
               <div className="dm-modal-body">
                 <p>
-                  You are about to commit <strong>{dryRunResult?.families?.length ?? 0} household records</strong> (
-                  {dryRunResult?.families?.reduce((acc, f) => acc + (f.member_count || 1), 0) ?? 0} total residents) into the system database.
+                  You are about to commit <strong>{stagedResult?.families?.length ?? 0} household records</strong> (
+                  {stagedResult?.families?.reduce((acc, f) => acc + (f.member_count || 1), 0) ?? 0} total residents) into the system database.
                 </p>
                 <div className="dm-alert dm-alert-warning" style={{ margin: 0 }}>
                   <div className="dm-alert-content">

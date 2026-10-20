@@ -12,13 +12,25 @@ import {
   faUsers,
   faUser,
   faCompass,
+  faImages,
+  faCheck,
+  faExpand,
 } from "@fortawesome/free-solid-svg-icons";
-import { api } from "../services/api";
+import { api, BASE_URL } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { queryKeys, useRescueRequests } from "../hooks/useEvacuationQueries";
 import "../components_css/RescueRequestManager.css";
 
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+
 const STATUS_OPTIONS = ["pending", "acknowledged", "responding", "resolved"];
+
+const STATUS_LABELS = {
+  pending: "Pending",
+  acknowledged: "Acknowledged",
+  responding: "Responding",
+  resolved: "Resolved",
+};
 
 function isOpenStatus(status) {
   return status === "pending" || status === "open";
@@ -34,6 +46,14 @@ function isInProgressStatus(status) {
 
 function isResolvedStatus(status) {
   return status === "resolved";
+}
+
+function resolveProofImageUrl(img) {
+  if (!img || typeof img !== "string") return "";
+  if (img.startsWith("http://") || img.startsWith("https://") || img.startsWith("data:")) {
+    return img;
+  }
+  return `${BASE_URL}${img.startsWith("/") ? "" : "/"}${img}`;
 }
 
 function getWaitingTimer(createdAt, now = Date.now()) {
@@ -68,6 +88,8 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
   const [error, setError] = useState("");
   const [updatingId, setUpdatingId] = useState(null);
   const [selectedId, setSelectedId] = useState(initialRequestId || null);
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const [mapImgFailed, setMapImgFailed] = useState(false);
   const [filterStatus, setFilterStatus] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [now, setNow] = useState(Date.now());
@@ -85,6 +107,12 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     }
   }, [initialRequestId]);
 
+  // Reset map image fallback state when selected request changes
+  useEffect(() => {
+    setMapImgFailed(false);
+    setLightboxImage(null);
+  }, [selectedId]);
+
   // Refresh data when window becomes visible
   useEffect(() => {
     function refreshWhenVisible() {
@@ -95,17 +123,21 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     return () => document.removeEventListener("visibilitychange", refreshWhenVisible);
   }, [refetchRequests]);
 
-  // Close drawer on Escape key press
+  // Close lightbox or drawer on Escape key press
   useEffect(() => {
-    if (!selectedId) return undefined;
+    if (!selectedId && !lightboxImage) return undefined;
     function handleKeyDown(event) {
       if (event.key === "Escape") {
-        setSelectedId(null);
+        if (lightboxImage) {
+          setLightboxImage(null);
+        } else {
+          setSelectedId(null);
+        }
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId]);
+  }, [selectedId, lightboxImage]);
 
   async function updateStatus(requestId, status) {
     setUpdatingId(requestId);
@@ -139,10 +171,10 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
   const totalCount = requests.length;
 
   const statCards = [
-    { id: "open", label: "Open", count: openCount },
-    { id: "in_progress", label: "In progress", count: inProgressCount },
+    { id: "open", label: "Open Alerts", count: openCount },
+    { id: "in_progress", label: "In Progress", count: inProgressCount },
     { id: "resolved", label: "Resolved", count: resolvedCount },
-    { id: "all", label: "Total", count: totalCount },
+    { id: "all", label: "Total Requests", count: totalCount },
   ];
 
   const statusTabs = [
@@ -158,12 +190,10 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     const cleanQ = q.replace(/^#/, "").replace(/^rescue alert\s*#?/i, "").trim();
 
     return requests.filter((item) => {
-      // Status filter
       if (filterStatus === "open" && !isOpenStatus(item.status)) return false;
       if (filterStatus === "in_progress" && !isInProgressStatus(item.status)) return false;
       if (filterStatus === "resolved" && !isResolvedStatus(item.status)) return false;
 
-      // Search matching (name, id, barangay, and description)
       if (q) {
         const idStr = String(item.id || "");
         const matchId = cleanQ ? idStr.includes(cleanQ) : false;
@@ -175,6 +205,13 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
           ""
         ).toLowerCase();
         const matchName = name.includes(q);
+        const contact = (
+          item.requester_contact ||
+          item.contact_number ||
+          item.phone ||
+          ""
+        ).toLowerCase();
+        const matchContact = contact.includes(q);
         const barangay = (item.barangay || item.barangay_name || "").toLowerCase();
         const matchBarangay = barangay.includes(q);
         const locDesc = (item.location_description || "").toLowerCase();
@@ -182,7 +219,14 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
         const desc = (item.description || "").toLowerCase();
         const matchDesc = desc.includes(q);
 
-        if (!matchId && !matchName && !matchBarangay && !matchLoc && !matchDesc) {
+        if (
+          !matchId &&
+          !matchName &&
+          !matchContact &&
+          !matchBarangay &&
+          !matchLoc &&
+          !matchDesc
+        ) {
           return false;
         }
       }
@@ -190,25 +234,22 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     });
   }, [requests, filterStatus, searchQuery]);
 
-  // Open requests sort oldest first
+  // Open requests sort oldest first; non-open sort newest first
   const sortedRequests = useMemo(() => {
     return [...filteredRequests].sort((a, b) => {
       const aOpen = isOpenStatus(a.status);
       const bOpen = isOpenStatus(b.status);
 
-      // Open requests come first
       if (aOpen && !bOpen) return -1;
       if (!aOpen && bOpen) return 1;
 
       const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
       const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
 
-      // Both open: sort oldest first
       if (aOpen && bOpen) {
         return timeA - timeB;
       }
 
-      // Non-open requests: sort newest first
       return timeB - timeA;
     });
   }, [filteredRequests]);
@@ -247,6 +288,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
   }
 
   const selectedContactNumber =
+    selected?.requester_contact ||
     selected?.contact_number ||
     selected?.phone_number ||
     selected?.phone ||
@@ -269,6 +311,16 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     null;
 
   const selectedWaiting = selected ? getWaitingTimer(selected.created_at, now) : null;
+  const currentStatusIndex = selected
+    ? STATUS_OPTIONS.indexOf(selected.status)
+    : -1;
+
+  const hasSelectedCoords =
+    selected &&
+    selected.latitude != null &&
+    selected.longitude != null &&
+    Number.isFinite(Number(selected.latitude)) &&
+    Number.isFinite(Number(selected.longitude));
 
   return (
     <main className="rescue-queue-page">
@@ -284,6 +336,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
           className={`rescue-open-count ${openCount > 0 ? "is-active" : "is-zero"}`}
           aria-live="polite"
         >
+          <span className="rescue-open-dot" />
           {openCount} {openCount === 1 ? "open alert" : "open alerts"}
         </span>
       </header>
@@ -329,7 +382,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
             <input
               type="search"
               className="rescue-search-input"
-              placeholder="Search by name, ID, or barangay…"
+              placeholder="Search by requester name, contact, ID, or location…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               aria-label="Search rescue requests"
@@ -375,16 +428,14 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
           {loading ? (
             <p className="rescue-queue-empty">Loading rescue requests…</p>
           ) : requests.length === 0 ? (
-            /* 5. EMPTY STATE: NO REQUESTS AT ALL */
             <div className="rescue-empty-state">
               <div className="rescue-empty-icon-wrap">
                 <FontAwesomeIcon icon={faTriangleExclamation} />
               </div>
               <h3>No rescue requests yet</h3>
-              <p>New requests will appear here immediately.</p>
+              <p>New requests from residents will appear here immediately.</p>
             </div>
           ) : sortedRequests.length === 0 ? (
-            /* 5. EMPTY STATE: FILTERS HIDE EVERYTHING */
             <div className="rescue-empty-state">
               <div className="rescue-empty-icon-wrap">
                 <FontAwesomeIcon icon={faSearch} />
@@ -408,11 +459,13 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                   item.user_name ||
                   item.full_name ||
                   `Rescue Alert #${item.id}`;
+                const requesterContact =
+                  item.requester_contact || item.contact_number || null;
                 const barangayText =
                   item.barangay ||
                   item.barangay_name ||
                   item.location_description ||
-                  "Sogod";
+                  "Sogod, Southern Leyte";
                 const peopleCount =
                   item.number_of_people ??
                   item.people_count ??
@@ -420,6 +473,9 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                   item.people ??
                   item.family_members ??
                   null;
+                const photoCount = Array.isArray(item.proof_images)
+                  ? item.proof_images.length
+                  : 0;
                 const waiting = getWaitingTimer(item.created_at, now);
                 const isStillOpen = isOpenStatus(item.status);
                 const isTimerRed = isStillOpen && waiting.minutes >= 30;
@@ -435,48 +491,65 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                   >
                     <div className="rescue-row-top">
                       <div className="rescue-row-header-info">
-                        <span className="rescue-row-icon">
+                        <span className={`rescue-row-icon ${isStillOpen ? "is-open" : ""}`}>
                           <FontAwesomeIcon icon={faTriangleExclamation} />
                         </span>
                         <div className="rescue-row-ident">
-                          <strong className="rescue-row-name">{requesterName}</strong>
-                          <span className="rescue-row-id">#{item.id}</span>
+                          <div className="rescue-row-name-line">
+                            <strong className="rescue-row-name">{requesterName}</strong>
+                            <span className="rescue-row-id">#{item.id}</span>
+                          </div>
+                          {requesterContact && (
+                            <span className="rescue-row-contact">
+                              <FontAwesomeIcon icon={faPhone} /> {requesterContact}
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <span className={`rescue-status-badge status-${item.status}`}>
-                        {item.status.replace("_", " ")}
-                      </span>
                     </div>
 
                     <div className="rescue-row-mid">
-                      <span className="rescue-row-barangay">
-                        <FontAwesomeIcon icon={faLocationDot} /> {barangayText}
-                      </span>
-                      {peopleCount != null && peopleCount !== "" && (
-                        <span className="rescue-row-people">
-                          <FontAwesomeIcon icon={faUsers} /> {peopleCount}{" "}
-                          {Number(peopleCount) === 1 ? "person" : "people"}
+                      <div className="rescue-row-pills">
+                        <span className="rescue-row-barangay">
+                          <FontAwesomeIcon icon={faLocationDot} /> {barangayText}
                         </span>
-                      )}
+                        {peopleCount != null && peopleCount !== "" && (
+                          <span className="rescue-row-people">
+                            <FontAwesomeIcon icon={faUsers} /> {peopleCount}{" "}
+                            {Number(peopleCount) === 1 ? "person" : "people"}
+                          </span>
+                        )}
+                        {photoCount > 0 && (
+                          <span className="rescue-row-photos">
+                            <FontAwesomeIcon icon={faImages} /> {photoCount}{" "}
+                            {photoCount === 1 ? "photo" : "photos"}
+                          </span>
+                        )}
+                      </div>
                       {item.description && (
                         <span className="rescue-row-desc">{item.description}</span>
                       )}
                     </div>
 
                     <div className="rescue-row-bottom">
-                      <span
-                        className={`rescue-row-timer ${isTimerRed ? "is-urgent" : ""}`}
-                      >
-                        <FontAwesomeIcon icon={faClock} /> {waiting.text}
+                      <span className={`rescue-status-badge status-${item.status}`}>
+                        {STATUS_LABELS[item.status] || item.status.replace("_", " ")}
                       </span>
-                      <small className="rescue-row-date">
-                        {item.created_at
-                          ? new Date(item.created_at).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })
-                          : ""}
-                      </small>
+                      <div className="rescue-row-time-meta">
+                        <span
+                          className={`rescue-row-timer ${isTimerRed ? "is-urgent" : ""}`}
+                        >
+                          <FontAwesomeIcon icon={faClock} /> {waiting.text}
+                        </span>
+                        <small className="rescue-row-date">
+                          {item.created_at
+                            ? new Date(item.created_at).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            : ""}
+                        </small>
+                      </div>
                     </div>
                   </button>
                 );
@@ -486,14 +559,13 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
         </div>
       </section>
 
-      {/* 4. DETAIL MODAL & BACKDROP (CENTERED & WIDER) */}
+      {/* 4. DETAIL MODAL & BACKDROP */}
       {selected && (
         <div
           className="rescue-drawer-overlay"
           onClick={(e) => {
             if (e.target === e.currentTarget) setSelectedId(null);
           }}
-          aria-hidden="true"
         >
           <aside
             className="rescue-drawer"
@@ -504,11 +576,25 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
             {/* STICKY HEADER */}
             <div className="rescue-drawer-header">
               <div className="rescue-drawer-header-row">
-                <div className="rescue-drawer-title-group">
-                  <h2 id="rescue-drawer-title">Rescue Alert #{selected.id}</h2>
-                  <span className={`rescue-status-badge status-${selected.status}`}>
-                    {selected.status.replace("_", " ")}
-                  </span>
+                <div className="rescue-drawer-title-stack">
+                  <div className="rescue-drawer-eyebrow-row">
+                    <span className="rescue-drawer-alert-id">
+                      Rescue Alert #{selected.id}
+                    </span>
+                    <span className={`rescue-status-badge status-${selected.status}`}>
+                      {STATUS_LABELS[selected.status] || selected.status.replace("_", " ")}
+                    </span>
+                    {selectedWaiting && (
+                      <span
+                        className={`rescue-drawer-wait-pill ${isOpenStatus(selected.status) && selectedWaiting.minutes >= 30 ? "is-urgent" : ""}`}
+                      >
+                        <FontAwesomeIcon icon={faClock} /> {selectedWaiting.text}
+                      </span>
+                    )}
+                  </div>
+                  <h2 id="rescue-drawer-title">
+                    {selectedRequesterName || `Emergency Request #${selected.id}`}
+                  </h2>
                 </div>
                 <button
                   type="button"
@@ -520,23 +606,46 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                 </button>
               </div>
 
-              {/* EXISTING STATUS-CHANGE BUTTONS (each at least 44px tall) */}
+              {/* ONE-WAY STATUS PROGRESSION BAR */}
               <div
                 className="rescue-status-actions"
                 role="group"
-                aria-label="Change request status"
+                aria-label="Update request status"
               >
-                {STATUS_OPTIONS.map((status) => {
+                {STATUS_OPTIONS.map((status, idx) => {
                   const isCurrent = selected.status === status;
+                  const isCompleted = currentStatusIndex > idx;
+                  const isNextStep = currentStatusIndex !== -1 && idx === currentStatusIndex + 1;
+                  const isDisabled =
+                    updatingId === selected.id || isCurrent || isCompleted;
+
                   return (
                     <button
                       type="button"
                       key={status}
-                      disabled={updatingId === selected.id}
-                      className={`rescue-status-action-btn status-${status} ${isCurrent ? "is-current" : ""}`}
+                      disabled={isDisabled}
+                      className={[
+                        "rescue-status-action-btn",
+                        `status-${status}`,
+                        isCurrent ? "is-current" : "",
+                        isCompleted ? "is-completed" : "",
+                        isNextStep ? "is-next-step" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
                       onClick={() => updateStatus(selected.id, status)}
+                      title={
+                        isCompleted
+                          ? "Status cannot move backward"
+                          : isCurrent
+                            ? `Currently ${STATUS_LABELS[status]}`
+                            : `Advance status to ${STATUS_LABELS[status]}`
+                      }
                     >
-                      {status[0].toUpperCase() + status.slice(1).replace("_", " ")}
+                      <span className="rescue-step-indicator">
+                        {isCompleted ? <FontAwesomeIcon icon={faCheck} /> : idx + 1}
+                      </span>
+                      <span>{STATUS_LABELS[status]}</span>
                     </button>
                   );
                 })}
@@ -546,11 +655,73 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
             {/* DRAWER BODY (2-COLUMN GRID ON DESKTOP) */}
             <div className="rescue-drawer-body">
               <div className="rescue-drawer-grid">
-                {/* LEFT COLUMN: CALL & DESCRIPTION */}
+                {/* LEFT COLUMN: DESCRIPTION & PHOTO PROOF */}
                 <div className="rescue-drawer-col">
-                  {/* CALL BUTTON (if contact number exists, at least 44px tall) */}
-                  {selectedContactNumber && (
-                    <div className="rescue-drawer-section">
+                  <div className="rescue-drawer-card">
+                    <h3 className="rescue-drawer-section-title">
+                      Emergency Situation
+                    </h3>
+                    <p className="rescue-detail-description">
+                      {selected.description || "No description provided."}
+                    </p>
+                  </div>
+
+                  <div className="rescue-drawer-card">
+                    <div className="rescue-drawer-card-head">
+                      <h3 className="rescue-drawer-section-title">
+                        Photo Proof
+                      </h3>
+                      {Array.isArray(selected.proof_images) &&
+                        selected.proof_images.length > 0 && (
+                          <span className="rescue-drawer-photo-count">
+                            {selected.proof_images.length}{" "}
+                            {selected.proof_images.length === 1 ? "photo" : "photos"}
+                          </span>
+                        )}
+                    </div>
+
+                    {Array.isArray(selected.proof_images) &&
+                    selected.proof_images.length > 0 ? (
+                      <div className="rescue-proof-gallery">
+                        {selected.proof_images.map((img, idx) => {
+                          const fullUrl = resolveProofImageUrl(img);
+                          return (
+                            <button
+                              type="button"
+                              key={idx}
+                              className="rescue-proof-thumb-btn"
+                              onClick={() => setLightboxImage(fullUrl)}
+                              aria-label={`View photo proof ${idx + 1} full size`}
+                            >
+                              <img
+                                src={fullUrl}
+                                alt={`Proof ${idx + 1}`}
+                                className="rescue-proof-img"
+                              />
+                              <span className="rescue-proof-zoom-badge">
+                                <FontAwesomeIcon icon={faExpand} />
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="rescue-proof-empty">
+                        <FontAwesomeIcon icon={faImages} />
+                        <span>No situation photos were attached to this alert.</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* RIGHT COLUMN: REQUESTER INFO & LOCATION DETAILS */}
+                <div className="rescue-drawer-col">
+                  <div className="rescue-drawer-card">
+                    <h3 className="rescue-drawer-section-title">
+                      Requester & Contact
+                    </h3>
+
+                    {selectedContactNumber && (
                       <a
                         href={`tel:${selectedContactNumber}`}
                         className="rescue-call-btn"
@@ -559,35 +730,34 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                         <FontAwesomeIcon icon={faPhone} />
                         <span>Call {selectedContactNumber}</span>
                       </a>
-                    </div>
-                  )}
+                    )}
 
-                  {/* EMERGENCY DESCRIPTION */}
-                  <div className="rescue-drawer-card">
-                    <h3 className="rescue-drawer-section-title">Emergency Description</h3>
-                    <p className="rescue-detail-description">{selected.description}</p>
-                  </div>
-                </div>
-
-                {/* RIGHT COLUMN: REQUEST INFO & LOCATION DETAILS */}
-                <div className="rescue-drawer-col">
-                  {/* REQUEST INFORMATION */}
-                  <div className="rescue-drawer-card">
-                    <h3 className="rescue-drawer-section-title">Request Information</h3>
                     <div className="rescue-drawer-meta-list">
-                      {selectedRequesterName && (
-                        <div className="rescue-drawer-meta-item">
+                      <div className="rescue-drawer-meta-item">
+                        <span className="rescue-meta-icon">
                           <FontAwesomeIcon icon={faUser} />
-                          <div>
-                            <strong>Requester</strong>
-                            <span>{selectedRequesterName}</span>
-                          </div>
+                        </span>
+                        <div>
+                          <strong>Requester Name</strong>
+                          <span>{selectedRequesterName || "Not provided"}</span>
                         </div>
-                      )}
+                      </div>
+
+                      <div className="rescue-drawer-meta-item">
+                        <span className="rescue-meta-icon">
+                          <FontAwesomeIcon icon={faPhone} />
+                        </span>
+                        <div>
+                          <strong>Contact Number</strong>
+                          <span>{selectedContactNumber || "Not provided"}</span>
+                        </div>
+                      </div>
 
                       {selectedPeopleCount != null && selectedPeopleCount !== "" && (
                         <div className="rescue-drawer-meta-item">
-                          <FontAwesomeIcon icon={faUsers} />
+                          <span className="rescue-meta-icon">
+                            <FontAwesomeIcon icon={faUsers} />
+                          </span>
                           <div>
                             <strong>People Needing Rescue</strong>
                             <span>
@@ -599,76 +769,90 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                       )}
 
                       <div className="rescue-drawer-meta-item">
-                        <FontAwesomeIcon icon={faClock} />
+                        <span className="rescue-meta-icon">
+                          <FontAwesomeIcon icon={faClock} />
+                        </span>
                         <div>
                           <strong>Reported Time</strong>
                           <span>
                             {selected.created_at
                               ? new Date(selected.created_at).toLocaleString()
                               : "Unknown"}
-                            {" · "}
-                            <span
-                              className={`rescue-drawer-timer ${isOpenStatus(selected.status) && selectedWaiting?.minutes >= 30 ? "is-urgent" : ""}`}
-                            >
-                              {selectedWaiting?.text}
-                            </span>
                           </span>
                         </div>
                       </div>
 
-                      {selected.updated_at && selected.updated_at !== selected.created_at && (
-                        <div className="rescue-drawer-meta-item">
-                          <FontAwesomeIcon icon={faClock} />
-                          <div>
-                            <strong>Last Updated</strong>
-                            <span>{new Date(selected.updated_at).toLocaleString()}</span>
+                      {selected.updated_at &&
+                        selected.updated_at !== selected.created_at && (
+                          <div className="rescue-drawer-meta-item">
+                            <span className="rescue-meta-icon">
+                              <FontAwesomeIcon icon={faClock} />
+                            </span>
+                            <div>
+                              <strong>Last Updated</strong>
+                              <span>
+                                {new Date(selected.updated_at).toLocaleString()}
+                              </span>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
                     </div>
                   </div>
 
                   {/* LOCATION DETAILS & VIEW ON MAP */}
                   <div className="rescue-drawer-card">
                     <div className="rescue-drawer-loc-head">
-                      <FontAwesomeIcon icon={faLocationDot} className="rescue-loc-icon" />
+                      <span className="rescue-meta-icon is-blue">
+                        <FontAwesomeIcon icon={faLocationDot} />
+                      </span>
                       <div>
-                        <h3 className="rescue-drawer-section-title">Location</h3>
-                        {selected.latitude != null && selected.longitude != null ? (
+                        <h3 className="rescue-drawer-section-title">Location Details</h3>
+                        {hasSelectedCoords ? (
                           <p className="rescue-drawer-coords">
                             {Number(selected.latitude).toFixed(5)}° N,{" "}
                             {Number(selected.longitude).toFixed(5)}° E
                           </p>
                         ) : (
                           <p className="rescue-drawer-coords is-muted">
-                            Coordinates were not provided.
+                            GPS coordinates were not provided.
                           </p>
                         )}
                       </div>
                     </div>
 
+                    {hasSelectedCoords && MAPBOX_TOKEN && !mapImgFailed && (
+                      <div className="rescue-minimap">
+                        <img
+                          src={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/pin-s+dc2626(${Number(selected.longitude)},${Number(selected.latitude)})/${Number(selected.longitude)},${Number(selected.latitude)},15,0/420x180@2x?access_token=${encodeURIComponent(MAPBOX_TOKEN)}`}
+                          alt="Rescue location preview map"
+                          className="rescue-minimap-img"
+                          onError={() => setMapImgFailed(true)}
+                        />
+                      </div>
+                    )}
+
                     {selected.location_description && (
                       <div className="rescue-drawer-loc-text">
-                        <strong>Directions / Landmark:</strong>
+                        <strong>Landmark / Directions</strong>
                         <p>{selected.location_description}</p>
                       </div>
                     )}
 
                     {selected.barangay && (
                       <div className="rescue-drawer-loc-text">
-                        <strong>Barangay:</strong>
+                        <strong>Barangay</strong>
                         <p>{selected.barangay}</p>
                       </div>
                     )}
 
-                    {selected.latitude != null && selected.longitude != null && (
+                    {hasSelectedCoords && (
                       <button
                         type="button"
                         className="rescue-map-btn"
                         onClick={handleViewOnMap}
                       >
                         <FontAwesomeIcon icon={faCompass} />
-                        <span>View on map</span>
+                        <span>Locate on Dispatch Map</span>
                       </button>
                     )}
                   </div>
@@ -676,6 +860,32 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
               </div>
             </div>
           </aside>
+        </div>
+      )}
+
+      {/* 5. FULLSCREEN PHOTO LIGHTBOX */}
+      {lightboxImage && (
+        <div
+          className="rescue-lightbox-overlay"
+          onClick={() => setLightboxImage(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Full size photo preview"
+        >
+          <button
+            type="button"
+            className="rescue-lightbox-close"
+            onClick={() => setLightboxImage(null)}
+            aria-label="Close photo preview"
+          >
+            <FontAwesomeIcon icon={faXmark} />
+          </button>
+          <img
+            src={lightboxImage}
+            alt="Full size rescue proof"
+            className="rescue-lightbox-img"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
     </main>

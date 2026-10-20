@@ -10,6 +10,7 @@
   cursor: pointer;
   font: inherit;
   animation: map-report-enter 220ms ease both;
+  z-index: 10;
 }
 
 .map-report-symbol {
@@ -63,6 +64,69 @@
 }
 
 .map-report-marker:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+/* ==========================================
+   RESCUE REQUEST MARKERS
+   ========================================== */
+.map-rescue-marker {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  animation: map-report-enter 220ms ease both;
+  z-index: 20;
+}
+
+.map-rescue-symbol {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  background: #2563eb;
+  box-shadow: 0 3px 9px rgba(16, 39, 67, 0.32);
+  font-size: 15px;
+}
+
+.map-rescue-symbol::after {
+  position: absolute;
+  inset: -5px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: 0;
+  content: "";
+  animation: map-report-pulse 2.2s ease-out infinite;
+}
+
+.map-rescue-label {
+  max-width: 160px;
+  padding: 3px 7px;
+  overflow: hidden;
+  border: 1px solid #d1ddeb;
+  border-radius: 4px;
+  color: #214568;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(16, 39, 67, 0.2);
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-rescue-marker:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 3px;
 }

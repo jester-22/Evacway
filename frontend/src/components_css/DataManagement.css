@@ -856,6 +856,64 @@
 }
 
 /* Responsive under 720px */
+/* ==========================================================================
+   IMPORT STEP RESULT CARD
+   ========================================================================== */
+.dm-result-card {
+  border: 1px solid var(--line, #e2e8f0);
+  border-left: 4px solid var(--brand, #2563eb);
+}
+
+.dm-result-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.dm-result-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-0, #0f172a);
+}
+
+.dm-result-summary {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid var(--line, #e2e8f0);
+}
+
+.dm-result-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dm-result-label {
+  font-size: 12px;
+  color: var(--muted, #64748b);
+}
+
+.dm-result-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-0, #0f172a);
+}
+
+.dm-result-message {
+  font-size: 13.5px;
+  color: var(--text-1, #334155);
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   RESPONSIVE BREAKPOINTS
+   ========================================================================== */
 @media (max-width: 720px) {
   .dm-page {
     padding: 14px 16px;

@@ -1,6 +1,9 @@
+import json
 import math
+import os
+import uuid
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity
 
 from models import RescueRequest, SystemLog, db
@@ -13,9 +16,34 @@ from utils import role_required
 
 rescue_bp = Blueprint('rescue', __name__)
 RESCUE_STATUSES = {'pending', 'acknowledged', 'responding', 'resolved'}
+MAX_PROOF_IMAGES = 5
+ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+
+
+def _allowed_image(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
+
+
+def _save_proof_images(photo_files):
+    """Save uploads under static/rescue with unique names; return their URLs."""
+    upload_folder = os.path.join(current_app.root_path, 'static', 'rescue')
+    os.makedirs(upload_folder, exist_ok=True)
+    urls = []
+    for photo in photo_files:
+        ext = photo.filename.rsplit('.', 1)[1].lower()
+        unique_name = f"{uuid.uuid4().hex}.{ext}"
+        photo.save(os.path.join(upload_folder, unique_name))
+        urls.append(f"/static/uploads/rescue/{unique_name}")
+    return urls
 
 
 def _rescue_to_dict(rescue):
+    proof_images = []
+    if rescue.proof_images:
+        try:
+            proof_images = json.loads(rescue.proof_images)
+        except (ValueError, TypeError):
+            proof_images = []
     return {
         'id': rescue.id,
         'description': rescue.description,
@@ -23,6 +51,9 @@ def _rescue_to_dict(rescue):
         'latitude': rescue.latitude,
         'longitude': rescue.longitude,
         'status': rescue.status,
+        'requester_name': rescue.requester_name,
+        'requester_contact': rescue.requester_contact,
+        'proof_images': proof_images,
         'created_at': rescue.created_at.isoformat() if rescue.created_at else None,
         'updated_at': rescue.updated_at.isoformat() if rescue.updated_at else None,
     }
@@ -30,17 +61,41 @@ def _rescue_to_dict(rescue):
 
 @rescue_bp.route('/api/rescue-requests', methods=['POST'])
 def submit_rescue_request():
-    data = request.get_json(silent=True) or {}
+    # The resident modal sends multipart FormData (so photos can be attached).
+    # JSON bodies are still accepted for backwards compatibility.
+    is_multipart = bool(request.files) or bool(request.form)
+    data = request.form if is_multipart else (request.get_json(silent=True) or {})
+
     description = str(data.get('description') or '').strip()
     location_description = str(data.get('location_description') or '').strip() or None
+    requester_name = str(data.get('requester_name') or '').strip()
+    requester_contact = str(data.get('requester_contact') or '').strip()
+
+    photo_files = [
+        f for f in request.files.getlist('proof_images') if f and f.filename
+    ] if is_multipart else []
 
     if not description or len(description) > 2000:
         return jsonify({'error': 'Describe the emergency (up to 2000 characters).'}), 400
     if location_description and len(location_description) > 255:
         return jsonify({'error': 'Location details must be 255 characters or fewer.'}), 400
+    if not requester_name or len(requester_name) > 100:
+        return jsonify({'error': 'Please provide your name (up to 100 characters).'}), 400
+    if not requester_contact or len(requester_contact) > 20:
+        return jsonify({'error': 'Please provide a contact number (up to 20 characters).'}), 400
+    if len(photo_files) > MAX_PROOF_IMAGES:
+        return jsonify({'error': f'You may attach up to {MAX_PROOF_IMAGES} photos.'}), 400
+    for photo in photo_files:
+        if not _allowed_image(photo.filename):
+            return jsonify({'error': 'Photos must be png, jpg, jpeg, or webp images.'}), 400
 
+    # FormData sends missing GPS as empty strings; treat those as "no GPS".
     raw_latitude = data.get('latitude')
     raw_longitude = data.get('longitude')
+    if raw_latitude in ('', None):
+        raw_latitude = None
+    if raw_longitude in ('', None):
+        raw_longitude = None
     latitude = longitude = None
     if raw_latitude is not None or raw_longitude is not None:
         try:
@@ -59,11 +114,17 @@ def submit_rescue_request():
     if latitude is None and not location_description:
         return jsonify({'error': 'Provide a GPS location or describe where help is needed.'}), 400
 
+    # All validation passed — only now write photo files to disk.
+    proof_image_urls = _save_proof_images(photo_files) if photo_files else []
+
     rescue = RescueRequest(
         description=description,
         location_description=location_description,
         latitude=latitude,
         longitude=longitude,
+        requester_name=requester_name,
+        requester_contact=requester_contact,
+        proof_images=json.dumps(proof_image_urls) if proof_image_urls else None,
     )
     db.session.add(rescue)
     db.session.flush()
@@ -100,6 +161,17 @@ def update_rescue_status(rescue_id):
         return jsonify({
             'error': 'status must be pending, acknowledged, responding, or resolved'
         }), 400
+
+    # One-way status flow: pending → acknowledged → responding → resolved
+    status_order = ['pending', 'acknowledged', 'responding', 'resolved']
+    current_index = status_order.index(rescue.status)
+    new_index = status_order.index(new_status)
+    if new_index < current_index:
+        return jsonify({
+            'error': f'Cannot change status from {rescue.status} back to {new_status}. Status only moves forward.'
+        }), 400
+    if new_index == current_index:
+        return jsonify({'error': f'Status is already {new_status}.'}), 400
 
     rescue.status = new_status
     rescue.status_updated_by = int(get_jwt_identity())

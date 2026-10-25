@@ -18,12 +18,24 @@ import {
   faCircleNotch,
   faUsers,
   faFileCircleCheck,
+  faChevronDown,
+  faChevronUp,
+  faUserPlus,
 } from "@fortawesome/free-solid-svg-icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../services/api";
 import { useBarangays, invalidateEvacuationQueries } from "../hooks/useEvacuationQueries";
 import "../components_css/DataManagement.css";
+
+// Case-insensitive, trimmed, whitespace-collapsed name used for duplicate checks.
+function normalizeBarangayName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function cleanBarangayName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
+}
 
 function DataManagement() {
   const { user } = useAuth();
@@ -56,35 +68,60 @@ function DataManagement() {
   const [stagedResult, setStagedResult] = useState(null);
   const [importResult, setImportResult] = useState(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showSkippedList, setShowSkippedList] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const fileInputRef = useRef(null);
+  // Incremented on every new stage / reset so late responses from an older
+  // stage request are ignored and can never overwrite the current token.
+  const stageRequestRef = useRef(0);
+
+  // Refresh everything that depends on barangays / households.
+  async function refreshDependentData() {
+    await Promise.all([
+      invalidateEvacuationQueries(queryClient),
+      queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] }),
+    ]);
+  }
 
   // Stage an upload: validates the file but saves nothing to live data.
   async function runStageValidation(file) {
     if (!file) return;
+    const requestId = ++stageRequestRef.current;
     setValidating(true);
     setErrorMsg("");
     setSuccessMsg("");
     setStagedResult(null);
+    setStagingToken(null);
+    setImportResult(null);
+    setShowSkippedList(false);
     setImportStep("upload");
 
     try {
       const staged = await api.stageFamilyImport(file);
+      if (requestId !== stageRequestRef.current) return;
       setStagingToken(staged.staging_token);
       setStagedResult(staged);
       setImportStep("review");
     } catch (err) {
+      if (requestId !== stageRequestRef.current) return;
       console.error("Stage validation failed:", err);
       setErrorMsg(err.message || "Failed to validate the Excel file.");
     } finally {
-      setValidating(false);
+      if (requestId === stageRequestRef.current) {
+        setValidating(false);
+      }
     }
   }
 
   function handleFileSelect(selected) {
     if (!selected) return;
-    if (!selected.name.match(/\.(xlsx|xls)$/i)) {
-      setErrorMsg("Please select a valid Excel file (.xlsx or .xls).");
+    const name = selected.name || "";
+    if (name.match(/\.xls$/i)) {
+      setErrorMsg("Please save the file as .xlsx and upload again.");
+      return;
+    }
+    if (!name.match(/\.xlsx$/i)) {
+      setErrorMsg("Please select a valid Excel file (.xlsx).");
       return;
     }
     setImportFile(selected);
@@ -114,10 +151,13 @@ function DataManagement() {
   }
 
   function clearSelectedFile() {
+    stageRequestRef.current += 1; // ignore any stage request still in flight
+    setValidating(false);
     setImportFile(null);
     setStagedResult(null);
     setStagingToken(null);
     setImportResult(null);
+    setShowSkippedList(false);
     setImportStep("upload");
     setErrorMsg("");
     if (fileInputRef.current) {
@@ -127,22 +167,47 @@ function DataManagement() {
 
   // Commit Import: requires a valid staging token. Server re-validates before saving.
   async function handleCommitImport() {
-    if (!stagingToken || !stagedResult?.can_import) return;
+    const tokenToCommit = stagingToken;
+    // Only commit the token that belongs to the currently reviewed file.
+    if (
+      !tokenToCommit ||
+      !stagedResult?.can_import ||
+      stagedResult.staging_token !== tokenToCommit
+    ) {
+      return;
+    }
     setImporting(true);
     setErrorMsg("");
     try {
-      const result = await api.commitFamilyImport(stagingToken);
-      await invalidateEvacuationQueries(queryClient);
+      const result = await api.commitFamilyImport(tokenToCommit);
+      await refreshDependentData();
 
+      const created = result.families_created ?? 0;
+      const updated = result.families_updated ?? 0;
+      const skipped = result.families_skipped ?? 0;
+      const membersFilled = result.members_filled ?? 0;
       setImportResult({
         status: "success",
-        message: result.message || `Import successful! Created ${result.families_created ?? 0} households.`,
-        familiesCreated: result.families_created ?? 0,
-        rowsCreated: result.successful_rows ?? 0,
+        message: `Import completed successfully. ${created} created, ${updated} updated, ${skipped} skipped.`,
+        filename: importFile?.name || stagedResult?.filename || "",
+        created,
+        updated,
+        skipped,
+        residentsAdded: result.residents_created ?? 0,
+        membersFilled,
       });
-      setImportStep("result");
+
+      // Reset the upload state, but keep the result visible until the
+      // user starts a new upload. The used token is discarded.
+      stageRequestRef.current += 1;
+      setImportFile(null);
+      setStagedResult(null);
+      setStagingToken(null);
       setShowConfirmModal(false);
-      clearSelectedFile();
+      setImportStep("result");
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     } catch (err) {
       console.error("Commit import failed:", err);
       setErrorMsg(err.message || "Failed to commit Excel import.");
@@ -205,6 +270,14 @@ function DataManagement() {
     return barangays.filter((b) => (b.name || "").toLowerCase().includes(q));
   }, [barangays, searchQuery]);
 
+  // Returns an existing barangay with the same normalized name, if any.
+  function findDuplicateBarangay(name, excludeId = null) {
+    const key = normalizeBarangayName(name);
+    return barangays.find(
+      (b) => b.id !== excludeId && normalizeBarangayName(b.name) === key
+    );
+  }
+
   // Open Add Modal
   function openAddModal() {
     setAddName("");
@@ -216,9 +289,14 @@ function DataManagement() {
   // Handle Add Barangay Submit
   async function handleAddBarangay(e) {
     e.preventDefault();
-    const trimmed = addName.trim();
+    const trimmed = cleanBarangayName(addName);
     if (!trimmed) {
       setAddError("Barangay name is required.");
+      return;
+    }
+    const duplicate = findDuplicateBarangay(trimmed);
+    if (duplicate) {
+      setAddError(`Barangay "${duplicate.name}" already exists.`);
       return;
     }
     const pop = parseInt(addPopulation, 10);
@@ -231,7 +309,7 @@ function DataManagement() {
       setAddingBarangay(true);
       setAddError("");
       await api.addBarangay({ name: trimmed, population: pop });
-      await invalidateEvacuationQueries(queryClient);
+      await refreshDependentData();
       setSuccessMsg(`Barangay "${trimmed}" created successfully.`);
       setShowAddModal(false);
     } catch (err) {
@@ -253,9 +331,14 @@ function DataManagement() {
   async function handleEditBarangay(e) {
     e.preventDefault();
     if (!editModalTarget) return;
-    const trimmed = editName.trim();
+    const trimmed = cleanBarangayName(editName);
     if (!trimmed) {
       setEditError("Barangay name is required.");
+      return;
+    }
+    const duplicate = findDuplicateBarangay(trimmed, editModalTarget.id);
+    if (duplicate) {
+      setEditError(`Barangay "${duplicate.name}" already exists.`);
       return;
     }
     const pop = parseInt(editPopulation, 10);
@@ -268,7 +351,7 @@ function DataManagement() {
       setSavingEdit(true);
       setEditError("");
       await api.updateBarangay(editModalTarget.id, { name: trimmed, population: pop });
-      await invalidateEvacuationQueries(queryClient);
+      await refreshDependentData();
       setSuccessMsg(`Barangay "${trimmed}" updated successfully.`);
       setEditModalTarget(null);
     } catch (err) {
@@ -285,7 +368,7 @@ function DataManagement() {
       setDeletingBarangay(true);
       setDeleteError("");
       await api.deleteBarangay(deleteTarget.id);
-      await invalidateEvacuationQueries(queryClient);
+      await refreshDependentData();
       setSuccessMsg(`Barangay "${deleteTarget.name}" deleted successfully.`);
       setDeleteTarget(null);
     } catch (err) {
@@ -293,6 +376,11 @@ function DataManagement() {
     } finally {
       setDeletingBarangay(false);
     }
+  }
+
+  // Do not render any page content until the admin role is confirmed.
+  if (!user || user.role !== "admin") {
+    return null;
   }
 
   return (
@@ -381,7 +469,7 @@ function DataManagement() {
               <div className="dm-import-heading">
                 <h3>Excel Resident Roster Import</h3>
                 <p>
-                  Upload an Excel workbook (.xlsx or .xls) containing household heads and family members.
+                  Upload an Excel workbook (.xlsx) containing household heads and family members.
                   The system will perform a dry-run validation to verify rows, identify duplicates, and report errors before you commit.
                 </p>
               </div>
@@ -409,13 +497,13 @@ function DataManagement() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx"
                   className="dm-file-input"
                   onChange={(e) => handleFileSelect(e.target.files?.[0])}
                 />
                 <FontAwesomeIcon icon={faUpload} className="dm-dropzone-icon" />
                 <h4 className="dm-dropzone-title">Click to upload or drag & drop Excel workbook</h4>
-                <p className="dm-dropzone-sub">Supports .xlsx and .xls workbooks</p>
+                <p className="dm-dropzone-sub">Supports .xlsx workbooks only</p>
               </div>
             ) : (
               <div className="dm-file-info">
@@ -430,7 +518,7 @@ function DataManagement() {
                   <button
                     type="button"
                     className="dm-btn dm-btn-secondary dm-btn-sm"
-                    onClick={() => runDryRunValidation(importFile)}
+                    onClick={() => runStageValidation(importFile)}
                     disabled={validating || importing}
                   >
                     <FontAwesomeIcon icon={faRotate} spin={validating} />
@@ -457,85 +545,288 @@ function DataManagement() {
               </div>
             )}
 
-            {/* Validation Summary */}
-            {importStep === "review" && stagedResult && !validating && (
+            {/* Validation Summary & Review */}
+            {importStep === "review" && stagedResult && !validating && (() => {
+              const hasErrors = stagedResult.errors?.length > 0;
+              const newHouseholds = stagedResult.families?.filter((f) => f.status === "new") || [];
+              const updatedHouseholds = stagedResult.families?.filter((f) => f.status === "updated") || [];
+              const skippedHouseholds = stagedResult.families?.filter((f) => f.status === "skipped") || [];
+              const canImport = Boolean(stagedResult.can_import && !hasErrors);
+
+              return (
+                <>
+                  <div className="dm-summary-grid">
+                    <div className="dm-summary-card">
+                      <span className="dm-summary-label">Rows Scanned</span>
+                      <span className="dm-summary-val">{stagedResult.rows ?? 0}</span>
+                    </div>
+                    <div className="dm-summary-card">
+                      <span className="dm-summary-label">New Households</span>
+                      <span className="dm-summary-val">{stagedResult.new_households ?? 0}</span>
+                    </div>
+                    <div className="dm-summary-card">
+                      <span className="dm-summary-label">Updated Households</span>
+                      <span className="dm-summary-val">
+                        {stagedResult.updated_households ?? 0}
+                        <span className="dm-summary-sub">
+                          ({stagedResult.new_members_to_add ?? 0} new member{stagedResult.new_members_to_add === 1 ? "" : "s"}
+                          {stagedResult.members_to_fill > 0 ? `, ${stagedResult.members_to_fill} with fields to fill` : ""})
+                        </span>
+                      </span>
+                    </div>
+                    <div className="dm-summary-card">
+                      <span className="dm-summary-label">Skipped</span>
+                      <span className="dm-summary-val">
+                        {stagedResult.skipped_households ?? 0}
+                        <span className="dm-summary-sub">Already in database</span>
+                      </span>
+                    </div>
+                    <div
+                      className={`dm-summary-card ${
+                        hasErrors
+                          ? "is-status-error"
+                          : canImport
+                          ? "is-status"
+                          : "is-status-muted"
+                      }`}
+                    >
+                      <span className="dm-summary-label">Validation Status</span>
+                      <span
+                        className={`dm-summary-status-text ${
+                          hasErrors ? "fail" : canImport ? "ok" : "muted"
+                        }`}
+                      >
+                        <FontAwesomeIcon
+                          icon={
+                            hasErrors
+                              ? faTriangleExclamation
+                              : faCircleCheck
+                          }
+                        />
+                        {hasErrors
+                          ? "Validation Failed"
+                          : canImport
+                          ? "Ready to Import"
+                          : "Nothing New to Import"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Errors List */}
+                  {stagedResult.errors?.length > 0 && (
+                    <div className="dm-issues-box is-error">
+                      <h5 className="dm-issues-title">
+                        <FontAwesomeIcon icon={faTriangleExclamation} />
+                        {stagedResult.errors.length} Error{stagedResult.errors.length === 1 ? "" : "s"} Found in Workbook
+                      </h5>
+                      <ul className="dm-issues-list">
+                        {stagedResult.errors.map((err, idx) => (
+                          <li key={idx}>
+                            {err.row > 0 ? <strong>Row {err.row}: </strong> : null}
+                            {err.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Warnings List */}
+                  {stagedResult.warnings?.length > 0 && (
+                    <div className="dm-issues-box is-warning">
+                      <h5 className="dm-issues-title">
+                        <FontAwesomeIcon icon={faTriangleExclamation} />
+                        Warnings ({stagedResult.warnings.length})
+                      </h5>
+                      <ul className="dm-issues-list">
+                        {stagedResult.warnings.map((w, idx) => (
+                          <li key={idx}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* List of Households Review */}
+                  <div className="dm-household-sections">
+                    {/* Updated Households */}
+                    {updatedHouseholds.length > 0 && (
+                      <div className="dm-household-group">
+                        <h5 className="dm-household-group-title">
+                          <FontAwesomeIcon icon={faUserPlus} style={{ color: "#16a34a" }} />
+                          Updated Households ({updatedHouseholds.length}) — {stagedResult.new_members_to_add ?? 0} new member(s) to add
+                          {stagedResult.members_to_fill > 0 && `, ${stagedResult.members_to_fill} member(s) with blank fields to fill`}
+                        </h5>
+                        <div className="dm-household-scroll">
+                          {updatedHouseholds.map((f, idx) => (
+                            <div key={idx} className="dm-household-item">
+                              <div className="dm-household-item-header">
+                                <span className="dm-household-head-name">{f.head_name}</span>
+                                <div className="dm-household-meta">
+                                  <span>{f.barangay}</span>
+                                  <span>•</span>
+                                  <code>{f.family_code}</code>
+                                </div>
+                              </div>
+                              <div className="dm-member-pills">
+                                {f.new_members?.map((m, mIdx) => (
+                                  <span key={`new-${mIdx}`} className="dm-member-pill is-new">
+                                    + New: {m.full_name || `${m.first_name} ${m.last_name}`}
+                                  </span>
+                                ))}
+                                {f.members_to_fill?.map((m, fillIdx) => (
+                                  <span key={`fill-${fillIdx}`} className="dm-member-pill is-filled">
+                                    ✎ {m.name} ({Object.keys(m.updates || {}).length} blank field{Object.keys(m.updates || {}).length === 1 ? "" : "s"} filled)
+                                  </span>
+                                ))}
+                                {f.existing_members
+                                  ?.filter((name) => !f.members_to_fill?.some((m) => m.name === name))
+                                  .map((name, eIdx) => (
+                                    <span key={`ex-${eIdx}`} className="dm-member-pill">
+                                      {name}
+                                    </span>
+                                  ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* New Households */}
+                    {newHouseholds.length > 0 && (
+                      <div className="dm-household-group">
+                        <h5 className="dm-household-group-title">
+                          <FontAwesomeIcon icon={faUsers} style={{ color: "var(--brand, #2563eb)" }} />
+                          New Households ({newHouseholds.length})
+                        </h5>
+                        <div className="dm-household-scroll">
+                          {newHouseholds.map((f, idx) => (
+                            <div key={idx} className="dm-household-item">
+                              <div className="dm-household-item-header">
+                                <span className="dm-household-head-name">{f.head_name}</span>
+                                <div className="dm-household-meta">
+                                  <span>{f.barangay}</span>
+                                  <span>•</span>
+                                  <code>{f.family_code}</code>
+                                  <span>•</span>
+                                  <span>{f.member_count || f.members?.length || 1} member(s)</span>
+                                </div>
+                              </div>
+                              {f.members?.length > 0 && (
+                                <div className="dm-member-pills">
+                                  {f.members.map((m, mIdx) => (
+                                    <span key={mIdx} className="dm-member-pill">
+                                      {m.full_name || `${m.first_name} ${m.last_name}`}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Skipped Households Collapsed Toggle */}
+                    {skippedHouseholds.length > 0 && (
+                      <div className="dm-household-group">
+                        <button
+                          type="button"
+                          className="dm-accordion-toggle"
+                          onClick={() => setShowSkippedList((prev) => !prev)}
+                        >
+                          <span>
+                            <FontAwesomeIcon icon={faCircleCheck} style={{ color: "#64748b", marginRight: "8px" }} />
+                            {stagedResult.skipped_households ?? skippedHouseholds.length} households already up to date — click to {showSkippedList ? "hide" : "show"}
+                          </span>
+                          <FontAwesomeIcon icon={showSkippedList ? faChevronUp : faChevronDown} />
+                        </button>
+                        {showSkippedList && (
+                          <div className="dm-household-scroll">
+                            {skippedHouseholds.map((f, idx) => (
+                              <div key={idx} className="dm-household-item" style={{ opacity: 0.85 }}>
+                                <div className="dm-household-item-header">
+                                  <span className="dm-household-head-name">{f.head_name}</span>
+                                  <div className="dm-household-meta">
+                                    <span>{f.barangay}</span>
+                                    <span>•</span>
+                                    <code>{f.family_code}</code>
+                                    <span>•</span>
+                                    <span>{f.existing_members?.length || f.member_count || 1} member(s) (identical)</span>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="dm-import-actions">
+                    {!canImport && !hasErrors && (
+                      <span style={{ fontSize: "13px", color: "var(--muted, #64748b)", marginRight: "auto" }}>
+                        Nothing new to import — all records already exist.
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="dm-btn dm-btn-secondary"
+                      onClick={clearSelectedFile}
+                      disabled={importing}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="dm-btn dm-btn-primary"
+                      disabled={!canImport || importing}
+                      onClick={() => setShowConfirmModal(true)}
+                    >
+                      <FontAwesomeIcon icon={faFileCircleCheck} />
+                      Confirm & Commit Import
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* Import Result Summary (stays visible until a new upload starts) */}
+            {importStep === "result" && importResult && !validating && (
               <>
-                <div className="dm-summary-grid">
-                  <div className="dm-summary-card">
-                    <span className="dm-summary-label">Rows Scanned</span>
-                    <span className="dm-summary-val">{stagedResult.rows ?? 0}</span>
-                  </div>
-                  <div className="dm-summary-card">
-                    <span className="dm-summary-label">Valid Households</span>
-                    <span className="dm-summary-val">{stagedResult.families?.length ?? 0}</span>
-                  </div>
-                  <div className="dm-summary-card">
-                    <span className="dm-summary-label">Total Residents</span>
-                    <span className="dm-summary-val">
-                      {stagedResult.families?.reduce((acc, f) => acc + (f.member_count || 1), 0) ?? 0}
-                    </span>
-                  </div>
-                  <div className={`dm-summary-card ${stagedResult.can_import ? "is-status" : "is-status-error"}`}>
-                    <span className="dm-summary-label">Validation Status</span>
-                    <span className={`dm-summary-status-text ${stagedResult.can_import ? "ok" : "fail"}`}>
-                      <FontAwesomeIcon icon={stagedResult.can_import ? faCircleCheck : faTriangleExclamation} />
-                      {stagedResult.can_import ? "Ready to Import" : "Validation Failed"}
+                <div className="dm-alert dm-alert-success">
+                  <div className="dm-alert-content">
+                    <FontAwesomeIcon icon={faCircleCheck} />
+                    <span>
+                      {importResult.message}
+                      {importResult.filename ? ` (${importResult.filename})` : ""}
                     </span>
                   </div>
                 </div>
-
-                {/* Errors List */}
-                {stagedResult.errors?.length > 0 && (
-                  <div className="dm-issues-box is-error">
-                    <h5 className="dm-issues-title">
-                      <FontAwesomeIcon icon={faTriangleExclamation} />
-                      {stagedResult.errors.length} Error{stagedResult.errors.length === 1 ? "" : "s"} Found in Workbook
-                    </h5>
-                    <ul className="dm-issues-list">
-                      {stagedResult.errors.map((err, idx) => (
-                        <li key={idx}>
-                          {err.row > 0 ? <strong>Row {err.row}: </strong> : null}
-                          {err.message}
-                        </li>
-                      ))}
-                    </ul>
+                <div className="dm-summary-grid">
+                  <div className="dm-summary-card">
+                    <span className="dm-summary-label">Households Created</span>
+                    <span className="dm-summary-val">{importResult.created}</span>
                   </div>
-                )}
-
-                {/* Warnings List */}
-                {stagedResult.warnings?.length > 0 && (
-                  <div className="dm-issues-box is-warning">
-                    <h5 className="dm-issues-title">
-                      <FontAwesomeIcon icon={faTriangleExclamation} />
-                      Warnings
-                    </h5>
-                    <ul className="dm-issues-list">
-                      {stagedResult.warnings.map((w, idx) => (
-                        <li key={idx}>{w}</li>
-                      ))}
-                    </ul>
+                  <div className="dm-summary-card">
+                    <span className="dm-summary-label">Households Updated</span>
+                    <span className="dm-summary-val">{importResult.updated}</span>
                   </div>
-                )}
-
-                {/* Actions */}
-                <div className="dm-import-actions">
-                  <button
-                    type="button"
-                    className="dm-btn dm-btn-secondary"
-                    onClick={clearSelectedFile}
-                    disabled={importing}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="dm-btn dm-btn-primary"
-                    disabled={!stagedResult.can_import || importing}
-                    onClick={() => setShowConfirmModal(true)}
-                  >
-                    <FontAwesomeIcon icon={faFileCircleCheck} />
-                    Confirm & Commit Import
-                  </button>
+                  <div className="dm-summary-card">
+                    <span className="dm-summary-label">Skipped</span>
+                    <span className="dm-summary-val">{importResult.skipped}</span>
+                  </div>
+                  <div className="dm-summary-card is-status">
+                    <span className="dm-summary-label">Residents Added</span>
+                    <span className="dm-summary-val">
+                      {importResult.residentsAdded}
+                      {importResult.membersFilled > 0 && (
+                        <span className="dm-summary-sub">
+                          (+{importResult.membersFilled} blank fields filled)
+                        </span>
+                      )}
+                    </span>
+                  </div>
                 </div>
               </>
             )}
@@ -734,54 +1025,79 @@ function DataManagement() {
         {/* =========================================================================
             MODAL 1: CONFIRM COMMIT IMPORT
             ========================================================================= */}
-        {showConfirmModal && (
-          <div className="dm-modal-overlay" onClick={() => !importing && setShowConfirmModal(false)}>
-            <div className="dm-modal-card" onClick={(e) => e.stopPropagation()}>
-              <div className="dm-modal-header">
-                <h4 className="dm-modal-title">Confirm Roster Import</h4>
-                <button
-                  type="button"
-                  className="dm-modal-close"
-                  onClick={() => setShowConfirmModal(false)}
-                  disabled={importing}
-                >
-                  <FontAwesomeIcon icon={faXmark} />
-                </button>
-              </div>
-              <div className="dm-modal-body">
-                <p>
-                  You are about to commit <strong>{stagedResult?.families?.length ?? 0} household records</strong> (
-                  {stagedResult?.families?.reduce((acc, f) => acc + (f.member_count || 1), 0) ?? 0} total residents) into the system database.
-                </p>
-                <div className="dm-alert dm-alert-warning" style={{ margin: 0 }}>
-                  <div className="dm-alert-content">
-                    <FontAwesomeIcon icon={faTriangleExclamation} />
-                    <span>This action will insert household and member records. Live dashboards and center statistics will automatically synchronize.</span>
+        {showConfirmModal && (() => {
+          const newCount = stagedResult?.new_households ?? 0;
+          const newResCount =
+            stagedResult?.families
+              ?.filter((f) => f.status === "new")
+              .reduce((acc, f) => acc + (f.member_count || f.members?.length || 0), 0) ?? 0;
+          const updatedCount = stagedResult?.updated_households ?? 0;
+          const updatedMembersCount = stagedResult?.new_members_to_add ?? 0;
+          const skippedCount = stagedResult?.skipped_households ?? 0;
+
+          return (
+            <div className="dm-modal-overlay" onClick={() => !importing && setShowConfirmModal(false)}>
+              <div className="dm-modal-card" onClick={(e) => e.stopPropagation()}>
+                <div className="dm-modal-header">
+                  <h4 className="dm-modal-title">Confirm Roster Import</h4>
+                  <button
+                    type="button"
+                    className="dm-modal-close"
+                    onClick={() => setShowConfirmModal(false)}
+                    disabled={importing}
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
+                <div className="dm-modal-body">
+                  <p style={{ margin: "0 0 10px", fontWeight: "600", color: "var(--text-0, #0f172a)" }}>
+                    You are about to commit:
+                  </p>
+                  <ul style={{ margin: "0 0 14px 20px", padding: 0, fontSize: "13.5px", lineHeight: "1.6", color: "var(--text-0, #0f172a)" }}>
+                    <li>
+                      <strong>{newCount} new household{newCount === 1 ? "" : "s"}</strong> ({newResCount} resident{newResCount === 1 ? "" : "s"})
+                    </li>
+                    <li>
+                      <strong>{updatedCount} updated household{updatedCount === 1 ? "" : "s"}</strong> ({updatedMembersCount} new member{updatedMembersCount === 1 ? "" : "s"} added
+                      {stagedResult?.members_to_fill > 0 && `, ${stagedResult.members_to_fill} existing member${stagedResult.members_to_fill === 1 ? "" : "s"} with blank fields filled`})
+                    </li>
+                    <li>
+                      <strong>{skippedCount} household{skippedCount === 1 ? "" : "s"} skipped</strong> (already up to date)
+                    </li>
+                  </ul>
+                  <div className="dm-alert dm-alert-warning" style={{ margin: "0 0 12px" }}>
+                    <div className="dm-alert-content">
+                      <FontAwesomeIcon icon={faTriangleExclamation} />
+                      <span>Existing room assignments will not be changed. Live dashboards and center statistics will automatically synchronize.</span>
+                    </div>
                   </div>
+                  <p style={{ margin: 0, fontWeight: "600", color: "var(--text-0, #0f172a)" }}>
+                    Continue?
+                  </p>
+                </div>
+                <div className="dm-modal-footer">
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-secondary"
+                    disabled={importing}
+                    onClick={() => setShowConfirmModal(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-primary"
+                    disabled={importing}
+                    onClick={handleCommitImport}
+                  >
+                    <FontAwesomeIcon icon={importing ? faCircleNotch : faFileCircleCheck} spin={importing} />
+                    {importing ? "Committing Import..." : "Yes, Commit Import"}
+                  </button>
                 </div>
               </div>
-              <div className="dm-modal-footer">
-                <button
-                  type="button"
-                  className="dm-btn dm-btn-secondary"
-                  disabled={importing}
-                  onClick={() => setShowConfirmModal(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="dm-btn dm-btn-primary"
-                  disabled={importing}
-                  onClick={handleCommitImport}
-                >
-                  <FontAwesomeIcon icon={importing ? faCircleNotch : faFileCircleCheck} spin={importing} />
-                  {importing ? "Committing Import..." : "Yes, Commit Import"}
-                </button>
-              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* =========================================================================
             MODAL 2: ADD BARANGAY

@@ -1926,32 +1926,6 @@ def upload_residents():
         db.session.flush()
 
         # =====================================================
-        # UPDATE BARANGAY POPULATION
-        # =====================================================
-
-        barangays = Barangay.query.all()
-
-        for barangay in barangays:
-
-            population = (
-                db.session.query(
-                    Resident
-                )
-                .join(
-                    Family,
-                    Resident.family_id
-                    == Family.id
-                )
-                .filter(
-                    Family.barangay_id
-                    == barangay.id
-                )
-                .count()
-            )
-
-            barangay.population = population
-
-        # =====================================================
         # UPDATE FAMILY EVACUATION STATUS
         # =====================================================
 

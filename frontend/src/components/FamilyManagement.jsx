@@ -324,10 +324,6 @@ export default function FamilyManagement({
   const [targetRoomId, setTargetRoomId] = useState("");
   const [moving, setMoving] = useState(false);
 
-  // Import Excel State
-  const [importFile, setImportFile] = useState(null);
-  const [importPreview, setImportPreview] = useState(null);
-  const [importBusy, setImportBusy] = useState(false);
 
   // Evacuation Centers & Rooms Queries
   const centersQuery = useEvacuationCenters(false, {
@@ -400,11 +396,9 @@ export default function FamilyManagement({
     "";
 
   function closeModal() {
-    if (saving || importBusy || assigning || moving) return;
+    if (saving || assigning || moving) return;
     setModal("");
     setError("");
-    setImportPreview(null);
-    setImportFile(null);
     setAssignCenterId("");
     setAssignRoomId("");
     setTargetCenterId("");
@@ -1296,39 +1290,6 @@ export default function FamilyManagement({
     }
   }
 
-  async function previewImport() {
-    if (!importFile) return;
-    setImportBusy(true);
-    setError("");
-    setImportPreview(null);
-    try {
-      setImportPreview(await api.previewFamilyImport(importFile));
-    } catch (requestError) {
-      setError(requestError.message || "The workbook could not be previewed.");
-    } finally {
-      setImportBusy(false);
-    }
-  }
-
-  async function commitImport() {
-    if (!importFile || !importPreview?.can_import) return;
-    setImportBusy(true);
-    setError("");
-    try {
-      const result = await api.previewFamilyImport(importFile, true);
-      await refreshAllData();
-      setNotice(
-        result.message || `Imported ${result.successful_families} households.`
-      );
-      closeModal();
-    } catch (requestError) {
-      setError(
-        requestError.message || "The import failed. No records were committed."
-      );
-    } finally {
-      setImportBusy(false);
-    }
-  }
 
   // Room capacity helpers for modals
   const selectedAssignRoom = assignRooms.find(
@@ -3630,7 +3591,7 @@ export default function FamilyManagement({
           }}
         >
           <div
-            className={`fm-modal-dialog ${modal === "member-form" || modal === "import" ? "fm-modal-wide" : ""}`}
+            className={`fm-modal-dialog ${modal === "member-form" ? "fm-modal-wide" : ""}`}
           >
             <div className="fm-modal-header">
               <div>
@@ -3642,7 +3603,6 @@ export default function FamilyManagement({
                       : "Edit Household Member")}
                   {modal === "assign" && "Assign Household to Evacuation Room"}
                   {modal === "move" && "Change Assigned Evacuation Room"}
-                  {modal === "import" && "Import Households from Excel"}
                 </h3>
                 <p>
                   {modal === "edit-household" &&
@@ -3653,8 +3613,6 @@ export default function FamilyManagement({
                     `Select an active center and room for ${activeFamily?.head_name || ""}.`}
                   {modal === "move" &&
                     `Transfer ${activeFamily?.head_name || ""} to another room.`}
-                  {modal === "import" &&
-                    "Preview and validate an .xlsx workbook before committing records."}
                 </p>
               </div>
               <button
@@ -4129,86 +4087,6 @@ export default function FamilyManagement({
               </form>
             )}
 
-            {/* MODAL: IMPORT EXCEL */}
-            {modal === "import" && (
-              <div className="fm-modal-body">
-                <div className="fm-import-top">
-                  <input
-                    type="file"
-                    accept=".xlsx"
-                    onChange={(e) => {
-                      setImportFile(e.target.files?.[0] || null);
-                      setImportPreview(null);
-                    }}
-                  />
-                  <div className="fm-inline-actions">
-                    <button
-                      type="button"
-                      className="fm-btn fm-btn-secondary"
-                      onClick={downloadTemplate}
-                    >
-                      <FontAwesomeIcon icon={faDownload} /> Template
-                    </button>
-                    <button
-                      type="button"
-                      className="fm-btn fm-btn-primary"
-                      disabled={!importFile || importBusy}
-                      onClick={previewImport}
-                    >
-                      {importBusy ? "Checking..." : "Validate File"}
-                    </button>
-                  </div>
-                </div>
-
-                {importPreview && (
-                  <div className="fm-import-results">
-                    <div className="fm-capacity-summary">
-                      <div>
-                        <span>Rows Read</span>
-                        <strong>{importPreview.rows}</strong>
-                      </div>
-                      <div>
-                        <span>Valid Households</span>
-                        <strong>{importPreview.families.length}</strong>
-                      </div>
-                      <div>
-                        <span>Errors</span>
-                        <strong>{importPreview.errors.length}</strong>
-                      </div>
-                    </div>
-
-                    {importPreview.errors.length > 0 && (
-                      <div className="fm-import-errors">
-                        {importPreview.errors.map((err, idx) => (
-                          <p key={idx}>
-                            <strong>Row {err.row}:</strong> {err.message}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="fm-modal-footer">
-                  <button
-                    type="button"
-                    className="fm-btn fm-btn-secondary"
-                    onClick={closeModal}
-                    disabled={importBusy}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="fm-btn fm-btn-primary"
-                    disabled={!importPreview?.can_import || importBusy}
-                    onClick={commitImport}
-                  >
-                    {importBusy ? "Importing..." : "Commit Import"}
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}

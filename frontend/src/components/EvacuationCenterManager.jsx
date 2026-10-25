@@ -539,7 +539,7 @@ function EvacuationCenterManager({
           setNotice(`${formatRoomLabel(room.room_number)} deleted/deactivated.`);
           if (selectedRoom?.id === room.id) {
             setSelectedRoom(null);
-            setDrawerTab("rooms");
+            setCenterSection("rooms");
           }
           await loadCenterRooms(selectedCenter.id);
         } catch (err) {

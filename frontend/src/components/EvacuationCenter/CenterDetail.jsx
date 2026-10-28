@@ -22,7 +22,8 @@ import {
   vulnerableBreakdown,
   statusVariant,
 } from './utils'
-import { StatusBadge, ActionMenu, EmptyState } from './CenterList'
+import { StatusBadge, EmptyState } from './CenterList'
+import { FloatingMenuTrigger } from './FloatingMenu'
 import './CenterDetail.css'
 
 function ConfirmDialog({
@@ -384,7 +385,11 @@ export function CenterHeader({
                 </button>
               )}
             </div>
-            <ActionMenu items={kebabItems} label="More actions" align="right" />
+            <FloatingMenuTrigger
+              items={kebabItems}
+              label="More actions"
+              align="right"
+            />
           </div>
         </div>
       </header>
@@ -552,6 +557,7 @@ export function SectionTabs({ activeKey, counts = {}, onSelect, className = '' }
   )
 }
 
+
 const ICONS_MAP = {
   overview: faChartPie,
   structure: faBuilding,
@@ -559,48 +565,6 @@ const ICONS_MAP = {
   activity: faClockRotateLeft,
 }
 
-export function KebabMenu({ items, label = 'More actions' }) {
-  const [open, setOpen] = useState(false)
-  const close = () => setOpen(false)
-
-  // Escape closes the overlay (§8).
-  useEscapeKey(open, close)
-
-  return (
-    <div className="ec-kebab-wrap" onClick={(e) => e.stopPropagation()}>
-      <button
-        type="button"
-        className="ds-btn ds-btn--icon ds-btn--ghost"
-        aria-label={label}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((p) => !p)}
-      >
-        <FontAwesomeIcon icon={faEllipsisVertical} />
-      </button>
-      {open && (
-        <ul className="ds-menu ec-kebab-menu" role="menu">
-          {items.map((item, i) => (
-            <li key={i} role="none">
-              <button
-                type="button"
-                role="menuitem"
-                className={item.danger ? 'ds-menu__item ds-menu__item--danger' : 'ds-menu__item'}
-                onClick={() => {
-                  setOpen(false)
-                  item.onClick && item.onClick()
-                }}
-              >
-                {item.icon && <FontAwesomeIcon icon={item.icon} size="xs" style={{ marginRight: 'var(--space-2)' }} />}
-                {item.label}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
 const TYPE_LABELS = {
   campus: 'Campus / Multi-building',
   single_venue: 'Single venue',

@@ -1,16 +1,16 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useMemo, useCallback } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faPlus, faRotate, faHouseFlag, faBan, faMapPin, faPen, faBuilding,
   faCircleCheck, faTriangleExclamation, faCircleStop, faLocationDot,
   faFilter, faXmark, faThLarge, faTable,
-  faSearch, faEllipsisVertical, faCircleXmark,
+  faSearch, faCircleXmark,
 } from '@fortawesome/free-solid-svg-icons'
 
 import { useAuth } from '../../context/AuthContext'
-import { centerStatus, centerNeedsMapping, useEscapeKey } from './utils'
+import { centerStatus, centerNeedsMapping } from './utils'
 import { statusVariant } from './evacuationStatus'
+import { FloatingMenuTrigger } from './FloatingMenu'
 import './CenterList.css'
 
 
@@ -46,7 +46,6 @@ export default function CenterList({
 }) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
-  const navigate = useNavigate()
 
   const [searchQuery, setSearchQuery] = useState('')
   const [barangayFilter, setBarangayFilter] = useState('')
@@ -463,8 +462,12 @@ export default function CenterList({
                       </span>
                     </td>
                     <td className="ec-cell-status" data-label="Status"><StatusBadge status={status} /></td>
-                    <td className="ec-cell-actions" data-label="Actions">
-                      <ActionMenu items={kebabItems(feature)} label="More actions" align="right" />
+                    <td className="ec-cell-actions" data-label="Actions" onClick={(e) => e.stopPropagation()}>
+                      <FloatingMenuTrigger
+                        items={kebabItems(feature)}
+                        label={`Actions for ${name}`}
+                        align="right"
+                      />
                     </td>
                   </tr>
                 )
@@ -511,57 +514,6 @@ export function FilterChip({ options = [], value, onChange, ariaLabel }) {
   )
 }
 
-export function ActionMenu({ items = [], label = 'More actions' }) {
-  const [open, setOpen] = useState(false)
-  const [flipped, setFlipped] = useState(false)
-  const wrapRef = useRef(null)
-  const menuRef = useRef(null)
-  const close = useCallback(() => setOpen(false), [])
-  useEscapeKey(open, close)
-  useEffect(() => {
-    if (!open) return undefined
-    function onMouseDown(e) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) { close() }
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [open, close])
-  useEffect(() => {
-    if (!open || !wrapRef.current || !menuRef.current) return
-    const check = () => {
-      const wrapRect = wrapRef.current.getBoundingClientRect()
-      const menuRect = menuRef.current.getBoundingClientRect()
-      const spaceBelow = window.innerHeight - wrapRect.bottom
-      const spaceAbove = wrapRect.top
-      setFlipped(spaceBelow < menuRect.height && spaceAbove > spaceBelow)
-    }
-    check()
-    window.addEventListener('scroll', check)
-    window.addEventListener('resize', check)
-    return () => { window.removeEventListener('scroll', check); window.removeEventListener('resize', check) }
-  }, [open])
-  const toggle = () => setOpen((p) => !p)
-  return (
-    <div className="am-wrap" ref={wrapRef} onClick={(e) => e.stopPropagation()}>
-      <button type="button" className="ds-btn ds-btn--icon ds-btn--ghost am-trigger" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
-        <FontAwesomeIcon icon={faEllipsisVertical} />
-      </button>
-      {open && (
-        <ul className="ds-menu ec-kebab-menu" role="menu">
-          {items.map((item, i) => (
-            <li key={i} role="none">
-              <button type="button" role="menuitem" className={item.danger ? 'ds-menu__item ds-menu__item--danger' : 'ds-menu__item'} onClick={() => { setOpen(false); item.onClick && item.onClick() }}>
-                {item.icon && <FontAwesomeIcon icon={item.icon} size="xs" style={{ marginRight: 'var(--space-2)' }} />}
-                {item.label}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
 export function EmptyState({ icon, title = 'No data available', text, action, actionLabel, className = '' }) {
   return (
     <div className={`es-empty ${className}`.trim()}>
@@ -579,7 +531,6 @@ export function EmptyState({ icon, title = 'No data available', text, action, ac
 
 export function OccupancyBar({ checkedIn = 0, assigned = 0, capacity = 0, showLabel = true, className = '' }) {
   const cap = Math.max(0, capacity || 0)
-  const ci = Math.max(0, Math.min(checkedIn || 0, cap))
   const as = Math.max(0, Math.min(assigned || 0, cap))
   const occupancy = cap > 0 ? as / cap : 0
   const pctAssigned = cap > 0 ? Math.round(occupancy * 100) : 0

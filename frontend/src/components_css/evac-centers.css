@@ -714,7 +714,7 @@
 .ec-skeleton-row td { border-bottom: none; background: transparent; }
 .ds-chip--active {
   background-color: var(--brand);
-  color: #ffffff;
+  color: var(--surface);
   border-color: var(--brand);
 }
 @media (max-width: 768px) {

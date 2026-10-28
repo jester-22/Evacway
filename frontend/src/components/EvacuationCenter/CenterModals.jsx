@@ -45,12 +45,12 @@ export function ConfirmCenterDialog({ open = false, title = 'Confirm', message =
   if (!open) return null;
   return (
     <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) { if (onCancel) onCancel(); } }}>
-      <div className="modal-dialog" style={{ maxWidth: 440 }}>
+      <div className="modal-dialog">
         <div className="modal-header">
           <h3>{title}</h3>
           <button type="button" className="modal-close-btn" onClick={() => { if (onCancel) onCancel(); }}><FontAwesomeIcon icon={faXmark} /></button>
         </div>
-        <div className="modal-body"><p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5, color: '#374151' }}>{message}</p></div>
+        <div className="modal-body"><p style={{ margin: 0, fontSize: 'var(--text-sm)', lineHeight: 1.5, color: 'var(--text)' }}>{message}</p></div>
         <div className="modal-footer">
           <button type="button" className="btn btn-secondary" onClick={() => { if (onCancel) onCancel(); }}>Cancel</button>
           <button type="button" className={danger ? 'btn btn-danger' : 'btn btn-primary'} onClick={async () => { if (onConfirm) await onConfirm(); }}>{confirmText || 'Confirm'}</button>

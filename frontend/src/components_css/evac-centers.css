@@ -173,6 +173,16 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.ec-structure-header h2,
+.ec-households-header h2,
+.ec-activity-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
 }
 .ec-structure-actions {
   display: flex;
@@ -519,6 +529,17 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  padding: var(--space-6);
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  .ec-detail {
+    padding: var(--space-4);
+  }
 }
 
 .ec-detail-header {
@@ -533,6 +554,7 @@
   gap: var(--space-1);
   font-size: var(--text-xs);
   color: var(--muted);
+  margin-bottom: var(--space-2);
 }
 
 .ec-breadcrumb-link {
@@ -646,6 +668,20 @@
 }
 
 .ec-tab-panel[aria-hidden="true"] { display: none; }
+
+.ec-tab-panel {
+  background: var(--surface);
+  border: 1px solid var(--ew-border-subtle);
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+  box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  .ec-tab-panel {
+    padding: var(--space-3);
+  }
+}
 
 .ec-tab-panel-title {
   font-family: var(--font-display);

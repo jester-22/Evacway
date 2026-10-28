@@ -191,14 +191,16 @@ export default function CenterList({
   return (
     <section className={`ec-list-page ${className}`.trim()}>
       <header className="ec-list-header">
-        <div className="ec-list-title-group">
-          <div className="ec-list-title-row">
-            <FontAwesomeIcon icon={faHouseFlag} size="xs" />
+        <div className="ec-list-title-row">
+          <span className="ec-list-title-icon" aria-hidden="true">
+            <FontAwesomeIcon icon={faHouseFlag} size="sm" />
+          </span>
+          <div className="ec-list-title-group">
             <h2 className="ec-list-title">Evacuation Centers</h2>
+            <p className="ec-list-subtitle">
+              Check shelter capacity, building readiness, and live check-ins across the municipality.
+            </p>
           </div>
-          <p className="ec-list-subtitle">
-            Check shelter capacity, building readiness, and live check-ins across the municipality.
-          </p>
         </div>
         <div className="ec-list-controls">
           <button

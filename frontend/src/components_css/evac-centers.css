@@ -394,7 +394,26 @@
   margin: 0;
   font-size: var(--text-sm);
   color: var(--muted);
-  max-width: 520px;
+  max-width: 640px;
+}
+.ec-list-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.ec-list-title-icon {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.ec-list-title-icon svg {
+  width: 20px;
+  height: 20px;
 }
 .ec-list-controls {
   display: flex;

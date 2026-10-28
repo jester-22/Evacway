@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleNotch, faXmark } from '@fortawesome/free-solid-svg-icons';
 import { stripDigits } from './utils';
@@ -81,7 +81,7 @@ export function CenterFormModal({ mode = 'add', centerForm, onChange, barangays 
   );
 }
 
-export function CenterRoomModal({ mode = 'add', selectedCenter, selectedRoom, roomForm, onChange, saving = false, onSubmit, onClose }) {
+export function CenterRoomModal({ mode = 'add', selectedCenter, selectedRoom, roomForm, onChange, saving = false, onSubmit, onClose, buildings = [], defaultBuildingId = '' }) {
   const title = mode === 'add' ? 'Add Room to ' + (selectedCenter?.name || 'the center') : 'Edit ' + formatRoomLabel(selectedRoom?.room_number);
   const subtitle = mode === 'add' ? 'Add a new room to this evacuation center' : 'Edit room details';
   const [fieldErrors, setFieldErrors] = useState({});
@@ -89,12 +89,23 @@ export function CenterRoomModal({ mode = 'add', selectedCenter, selectedRoom, ro
   function setFieldError(field, message) { setFieldErrors((prev) => ({ ...prev, [field]: message })); }
   function handleSubmit(e) { e.preventDefault(); let valid = true; if (!roomForm.room_number || !roomForm.room_number.trim()) { setFieldError('room_number', 'Room number is required.'); valid = false; } else { clearFieldError('room_number'); } if (!roomForm.capacity || Number(roomForm.capacity) <= 0) { setFieldError('capacity', 'Valid room capacity greater than 0 is required.'); valid = false; } else { clearFieldError('capacity'); } if (!valid) return; onSubmit(e); }
   const centerNotMapped = selectedCenter && centerNeedsMapping(selectedCenter);
+
+  // Normalize buildings to {id, name} options (same logic as backup RoomModal)
+  const buildingOptions = useMemo(() => {
+    return buildings.map((item) => {
+      const props = item?.properties || item || {};
+      const id = props.id ?? item?.id;
+      const name = props.name || props.display_label || `Building #${id}`;
+      return { id, name };
+    });
+  }, [buildings]);
   return (
     <ModalShell open title={title} subtitle={subtitle} onClose={onClose} formId="room-form" loading={saving} primaryLabel={saving ? 'Saving...' : mode === 'add' ? 'Add Room' : 'Save Changes'}>
       <form id="room-form" onSubmit={handleSubmit} noValidate>
         {centerNotMapped && (<p className="info-note"><span role="img" aria-label="info">\\u2139</span>{' '}This center isn\\u2019t on the map yet. You can still add a room; place the center on the map so staff can route families here.</p>)}
         <div className="form-group"><label htmlFor="room-number">Room Number / Name <span>*</span></label><input id="room-number" type="text" className={fieldErrors.room_number ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. Room 101, Ground Floor" value={roomForm.room_number} onChange={(e) => { clearFieldError('room_number'); onChange({ ...roomForm, room_number: e.target.value }); }} />{fieldErrors.room_number && <p className="field-error">{fieldErrors.room_number}</p>}</div>
         <div className="form-group"><label htmlFor="room-capacity">Room Capacity <span>*</span> <span className="hint">(Max people)</span></label><input id="room-capacity" type="number" min="1" className={fieldErrors.capacity ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 30" value={roomForm.capacity} onChange={(e) => { clearFieldError('capacity'); onChange({ ...roomForm, capacity: e.target.value }); }} />{mode === 'edit' && selectedRoom?.occupied > 0 && (<p className="field-error">Currently assigned: {selectedRoom.occupied}. Capacity cannot be less than this.</p>)} {fieldErrors.capacity && <p className="field-error">{fieldErrors.capacity}</p>}</div>
+        <div className="form-group"><label htmlFor="room-building">Building <span className="hint">(Optional)</span></label><select id="room-building" className={fieldErrors.building_id ? 'form-input is-invalid' : 'form-input'} value={roomForm.building_id} onChange={(e) => { clearFieldError('building_id'); onChange({ ...roomForm, building_id: e.target.value }); }}><option value="">No building / Unassigned</option>{buildingOptions.map((b) => (<option key={b.id} value={String(b.id)}>{b.name}</option>))}</select>{fieldErrors.building_id && <p className="field-error">{fieldErrors.building_id}</p>}</div>
         <div className="form-group"><label htmlFor="room-latitude">Latitude</label><input id="room-latitude" type="number" step="any" className={fieldErrors.latitude ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 10.3860" value={roomForm.latitude} onChange={(e) => { clearFieldError('latitude'); onChange({ ...roomForm, latitude: e.target.value }); }} />{fieldErrors.latitude && <p className="field-error">{fieldErrors.latitude}</p>}</div>
         <div className="form-group"><label htmlFor="room-longitude">Longitude</label><input id="room-longitude" type="number" step="any" className={fieldErrors.longitude ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 124.9818" value={roomForm.longitude} onChange={(e) => { clearFieldError('longitude'); onChange({ ...roomForm, longitude: e.target.value }); }} />{fieldErrors.longitude && <p className="field-error">{fieldErrors.longitude}</p>}</div>
       </form>

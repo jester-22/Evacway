@@ -28,15 +28,15 @@
   gap: var(--space-1);
   padding: var(--space-1) var(--space-2);
   font-size: var(--text-sm);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-muted);
+  background: var(--ew-bg-muted);
   cursor: pointer;
 }
 .fc-button--active {
-  background: var(--ew-primary);
-  color: var(--text-inverse);
-  border-color: var(--ew-primary);
+  background: var(--ew-brand-primary);
+  color: var(--ew-text-inverse);
+  border-color: var(--ew-brand-primary);
 }
 .fc-icon {
   font-size: var(--text-xs);
@@ -104,7 +104,7 @@
 }
 .es-text {
   margin: var(--space-1) 0;
-  color: var(--text-2);
+  color: var(--ew-text-muted);
 }
 .es-action {
   margin-top: var(--space-2);
@@ -117,25 +117,25 @@
 }
 .ob-label {
   font-size: var(--text-xs);
-  color: var(--text-2);
+  color: var(--ew-text-muted);
 }
 .ob-bar {
   height: 6px;
-  background: var(--bg-muted);
+  background: var(--ew-bg-muted);
   border-radius: var(--radius-full);
   overflow: hidden;
   width: 100px;
 }
 .ob-fill {
   height: 100%;
-  background: var(--ew-primary);
+  background: var(--ew-brand-primary);
 }
 .ob-empty {
   font-size: var(--text-xs);
-  color: var(--text-2);
+  color: var(--ew-text-muted);
 }
 .sk-card {
-  background: var(--bg-muted);
+  background: var(--ew-bg-muted);
   border-radius: var(--radius-md);
   padding: var(--space-4);
 }
@@ -154,7 +154,7 @@
 }
 .sk-line {
   height: var(--text-xs);
-  background: var(--bg-muted);
+  background: var(--ew-bg-muted);
   border-radius: var(--radius-sm);
 }
 /* Avatar - §4.6 initials circle. Tokens only. */
@@ -258,7 +258,7 @@
 }
 .tag--neutral {
   background: var(--neutral-soft);
-  color: var(--text-2);
+  color: var(--ew-text-muted);
 }
 .tag--safe {
   background: var(--ew-safe-bg);

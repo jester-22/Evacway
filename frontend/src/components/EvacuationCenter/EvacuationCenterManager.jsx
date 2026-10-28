@@ -7,6 +7,7 @@ import {
   useBarangays,
   useRoomFamilies,
   useRooms,
+  useCenterBuildings,
 } from "../../hooks/useEvacuationQueries";
 import { displayEntityName } from "../../utils/displayEntityName";
 import { formatRoomLabel } from "../../utils/formatRoomLabel";
@@ -76,6 +77,20 @@ export default function EvacuationCenterManager({
   const centerRoomsQuery = useRooms(selectedCenter?.id);
   const centerRooms = centerRoomsQuery.data || [];
 
+  // Buildings for this center (GeoJSON FeatureCollection -> normalized array)
+  const centerBuildingsQuery = useCenterBuildings(selectedCenter?.id);
+  const buildings = useMemo(() => {
+    const data = centerBuildingsQuery.data;
+    if (!data) return [];
+    const features = Array.isArray(data?.features) ? data.features : (Array.isArray(data) ? data : []);
+    return features.map((feature) => {
+      const props = feature?.properties || feature;
+      const id = props?.id ?? feature?.id;
+      const name = props?.name || props?.display_label || `Building #${id}`;
+      return { id, name, notes: props?.notes || null, geometry: feature?.geometry || null };
+    });
+  }, [centerBuildingsQuery.data]);
+
   const [selectedRoom, setSelectedRoom] = useState(null);
   const roomFamiliesQuery = useRoomFamilies(
     selectedRoom?.id && selectedRoom?.id !== "all" ? selectedRoom.id : null
@@ -119,6 +134,7 @@ export default function EvacuationCenterManager({
     capacity: "",
     latitude: "",
     longitude: "",
+    building_id: "",
   });
   const [savingRoom, setSavingRoom] = useState(false);
 
@@ -326,6 +342,7 @@ export default function EvacuationCenterManager({
       capacity: String(room.capacity || ""),
       latitude: room.latitude !== null && room.latitude !== undefined ? String(room.latitude) : "",
       longitude: room.longitude !== null && room.longitude !== undefined ? String(room.longitude) : "",
+      building_id: room.building_id != null ? String(room.building_id) : "",
     });
     setSelectedRoom(room);
     setRoomModalMode("edit");
@@ -347,24 +364,42 @@ export default function EvacuationCenterManager({
     setError("");
 
     try {
+      const parsedBuildingId = roomForm.building_id !== "" ? Number(roomForm.building_id) : null;
       const payload = {
         room_number: roomForm.room_number.trim(),
         capacity: Number(roomForm.capacity),
+        building_id: parsedBuildingId,
         latitude: roomForm.latitude ? Number(roomForm.latitude) : null,
         longitude: roomForm.longitude ? Number(roomForm.longitude) : null,
       };
 
       if (roomModalMode === "add") {
-        await api.addRoom(selectedCenter.id, payload);
+        const result = await api.addRoom(selectedCenter.id, payload);
+        const createdRoomId = result?.room?.id ?? result?.id;
+        if (parsedBuildingId && createdRoomId) {
+          await api.updateBuilding(parsedBuildingId, { add_room_ids: [createdRoomId] });
+        }
         setNotice(`${formatRoomLabel(payload.room_number)} added successfully.`);
       } else {
+        const originalBuildingId = selectedRoom?.building_id != null ? String(selectedRoom.building_id) : "";
+        const newBuildingId = parsedBuildingId != null ? String(parsedBuildingId) : "";
         await api.updateRoom(selectedRoom.id, payload);
+        if (newBuildingId !== originalBuildingId) {
+          if (newBuildingId !== "") {
+            await api.updateBuilding(Number(newBuildingId), { add_room_ids: [selectedRoom.id] });
+          } else if (originalBuildingId !== "") {
+            await api.updateBuilding(Number(originalBuildingId), { remove_room_ids: [selectedRoom.id] });
+          }
+        }
         setNotice(`${formatRoomLabel(payload.room_number)} updated successfully.`);
         setSelectedRoom((prev) => (prev ? { ...prev, ...payload } : prev));
       }
 
       setRoomModalMode(null);
-      await loadCenterRooms(selectedCenter.id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms(selectedCenter.id) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.buildings(selectedCenter.id) }),
+      ]);
     } catch (err) {
       setError(err.message || "Failed to save room.");
     } finally {
@@ -726,7 +761,7 @@ export default function EvacuationCenterManager({
             households: allCenterFamilies.length,
           }}
           rooms={centerRooms}
-          buildings={[]}
+          buildings={buildings}
           centerCapacity={centerCapacity}
           centerOccupied={centerOccupied}
           centerAssigned={centerAssigned}
@@ -763,9 +798,7 @@ export default function EvacuationCenterManager({
               navigate(`${mapBasePath}?lat=${lat}&lng=${lng}&room=${room.id}`);
             }
           }}
-          onLinkRoom={() => {
-            setNotice("Link room to building: open the room and choose a building.");
-          }}
+          onLinkRoom={(room) => openEditRoomModal(room)}
           onDeleteRoom={(room) => confirmDeleteRoom(room)}
           onMove={(family) => openMoveModal(family)}
           onUnassign={(family) => confirmUnassignFamily(family)}
@@ -823,6 +856,8 @@ export default function EvacuationCenterManager({
           saving={savingRoom}
           onSubmit={handleSaveRoom}
           onClose={() => setRoomModalMode(null)}
+          buildings={buildings}
+          defaultBuildingId={roomModalMode === 'add' ? '' : (selectedRoom?.building_id != null ? String(selectedRoom.building_id) : '')}
         />
       )}
       <AssignFamilyModal

@@ -1,11 +1,11 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faBuilding, faMap, faPen, faPlus, faPhone, faTrash,
   faPersonPregnant, faPersonBooth, faPersonWalking, faCircleExclamation,
   faCheck, faTriangleExclamation, faEdit,
   faChartPie, faPeopleGroup, faClockRotateLeft, faEllipsisVertical,
-  faMapPin, faXmark,
+  faMapPin, faXmark, faLink,
 } from '@fortawesome/free-solid-svg-icons'
 
 import { useAuth } from '../../context/AuthContext'
@@ -697,43 +697,132 @@ export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, o
   )
 }
 export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding, onAddRoom, onEditRoom, onViewRoomMap, onLinkRoom, onDeleteRoom }) {
+  // Group rooms by building_id (compare as strings), rooms without building_id go to "Unassigned"
+  const groups = useMemo(() => {
+    const buildingMap = new Map();
+    buildings.forEach((b) => buildingMap.set(String(b.id), { building: b, rooms: [] }));
+    buildingMap.set('unassigned', { building: null, rooms: [] });
+
+    rooms.forEach((room) => {
+      const bid = room.building_id != null ? String(room.building_id) : 'unassigned';
+      const group = buildingMap.get(bid) || buildingMap.get('unassigned');
+      group.rooms.push(room);
+    });
+
+    // Convert to array, sort: named buildings first (by name), then Unassigned last
+    return Array.from(buildingMap.entries())
+      .filter(([, v]) => v.building || v.rooms.length > 0) // show building even if empty, but skip unassigned if empty
+      .sort((a, b) => {
+        if (a[0] === 'unassigned') return 1;
+        if (b[0] === 'unassigned') return -1;
+        const nameA = a[1].building?.name || '';
+        const nameB = b[1].building?.name || '';
+        return nameA.localeCompare(nameB);
+      });
+  }, [buildings, rooms]);
+
   return (
     <div className="ec-structure">
       <div className="ec-structure-header">
         <h2>Center Structure</h2>
-        <button type="button" className="ds-btn ds-btn--primary" onClick={onAddRoom}>
-          <FontAwesomeIcon icon={faEdit} size="xs" style={{ marginRight: 'var(--space-1)' }} />
-          Add room
-        </button>
+        <div className="ec-structure-actions">
+          {onAddBuilding && (
+            <button type="button" className="ds-btn ds-btn--secondary" onClick={onAddBuilding}>
+              <FontAwesomeIcon icon={faBuilding} size="xs" style={{ marginRight: 'var(--space-1)' }} />
+              Add building
+            </button>
+          )}
+          <button type="button" className="ds-btn ds-btn--primary" onClick={onAddRoom}>
+            <FontAwesomeIcon icon={faPlus} size="xs" style={{ marginRight: 'var(--space-1)' }} />
+            Add room
+          </button>
+        </div>
       </div>
-      {rooms.length === 0 ? (
-        <EmptyState icon={faEdit} title="No rooms yet" text="Add the first room to start assigning households." />
+      {rooms.length === 0 && buildings.length === 0 ? (
+        <EmptyState icon={faBuilding} title="No rooms yet" text="Add a building, then add rooms to it." />
       ) : (
-        <table className="ds-table ec-structure-table ds-table--stack">
-          <thead>
-            <tr>
-              <th scope="col" style={{ width: '34%', textAlign: 'left' }}>Room</th>
-              <th scope="col" style={{ width: '14%', textAlign: 'right' }}>Capacity</th>
-              <th scope="col" style={{ width: '14%', textAlign: 'right' }}>Assigned</th>
-              <th scope="col" style={{ width: '16%', textAlign: 'right' }}>Checked in</th>
-              <th scope="col" style={{ width: '22%', textAlign: 'right' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rooms.map((room) => (
-              <tr key={room.id} className="ec-room-row">
-                <td data-label="Room">{room.room_number || 'Room #' + (room.id || '')}</td>
-                <td className="ec-num" data-label="Capacity">{room.capacity}</td>
-                <td className="ec-num" data-label="Assigned">{room.assigned}</td>
-                <td className="ec-num" data-label="Checked in">{room.occupied}</td>
-                <td data-label="Actions"></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="ec-structure-groups">
+          {groups.map(({ building, rooms: groupRooms }) => (
+            <div key={building?.id || 'unassigned'} className="ec-structure-group">
+              <div className="ec-structure-building">
+                <h3>{building?.name || 'Unassigned rooms'}</h3>
+                {building?.notes && <p className="ec-building-notes">{building.notes}</p>}
+              </div>
+              {groupRooms.length === 0 ? (
+                <p className="ec-empty-note">No rooms in this building yet.</p>
+              ) : (
+                <table className="ds-table ec-structure-table ds-table--stack">
+                  <thead>
+                    <tr>
+                      <th scope="col" style={{ width: '34%', textAlign: 'left' }}>Room</th>
+                      <th scope="col" style={{ width: '14%', textAlign: 'right' }}>Capacity</th>
+                      <th scope="col" style={{ width: '14%', textAlign: 'right' }}>Assigned</th>
+                      <th scope="col" style={{ width: '16%', textAlign: 'right' }}>Checked in</th>
+                      <th scope="col" style={{ width: '22%', textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupRooms.map((room) => (
+                      <tr key={room.id} className="ec-room-row">
+                        <td data-label="Room">{room.room_number || 'Room #' + (room.id || '')}</td>
+                        <td className="ec-num" data-label="Capacity">{room.capacity}</td>
+                        <td className="ec-num" data-label="Assigned">{room.assigned}</td>
+                        <td className="ec-num" data-label="Checked in">{room.occupied}</td>
+                        <td data-label="Actions">
+                          <div className="ec-room-actions">
+                            {onEditRoom && (
+                              <button
+                                type="button"
+                                className="ds-btn ds-btn--ghost ds-btn--icon"
+                                onClick={() => onEditRoom(room)}
+                                title="Edit room"
+                              >
+                                <FontAwesomeIcon icon={faPen} size="xs" />
+                              </button>
+                            )}
+                            {onViewRoomMap && room.latitude != null && room.longitude != null && (
+                              <button
+                                type="button"
+                                className="ds-btn ds-btn--ghost ds-btn--icon"
+                                onClick={() => onViewRoomMap(room)}
+                                title="View on map"
+                              >
+                                <FontAwesomeIcon icon={faMapPin} size="xs" />
+                              </button>
+                            )}
+                            {onLinkRoom && (
+                              <button
+                                type="button"
+                                className="ds-btn ds-btn--ghost ds-btn--icon"
+                                onClick={() => onLinkRoom(room)}
+                                title="Link to building"
+                              >
+                                <FontAwesomeIcon icon={faLink} size="xs" />
+                              </button>
+                            )}
+                            {onDeleteRoom && (
+                              <button
+                                type="button"
+                                className="ds-btn ds-btn--ghost ds-btn--icon ds-btn--danger"
+                                onClick={() => onDeleteRoom(room)}
+                                title="Delete room"
+                              >
+                                <FontAwesomeIcon icon={faTrash} size="xs" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ))}
+        </div>
       )}
     </div>
-  )
+  );
 }
 
 export function HouseholdsTab({ center, centerFamilies = [], rooms = [], onAssignHousehold, onMove, loading = false }) {

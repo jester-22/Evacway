@@ -693,7 +693,7 @@ export function SegmentedControl({ options = [], value, onChange, ariaLabel }) {
 }
 
 const TONE_BG = { neutral: 'var(--neutral-soft)', safe: 'var(--ew-safe-bg)', warning: 'var(--ew-warning-bg)', danger: 'var(--ew-danger-bg)' }
-const TONE_TEXT = { neutral: 'var(--text-2)', safe: 'var(--ew-safe-text)', warning: 'var(--ew-warning-text)', danger: 'var(--ew-danger-text)' }
+const TONE_TEXT = { neutral: 'var(--ew-text-muted)', safe: 'var(--ew-safe-text)', warning: 'var(--ew-warning-text)', danger: 'var(--ew-danger-text)' }
 export function Tag({ label, tone = 'neutral', className = '' }) {
   return (
     <span className={`ds-chip tag tag--${tone} ${className}`.trim()} style={{ backgroundColor: TONE_BG[tone] ?? TONE_BG.neutral, color: TONE_TEXT[tone] ?? TONE_TEXT.neutral }}>

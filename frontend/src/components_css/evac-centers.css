@@ -143,6 +143,56 @@
   margin-bottom: var(--space-4);
 }
 
+/* StructureTab - building groups */
+.ec-structure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.ec-structure-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.ec-structure-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+.ec-structure-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.ec-structure-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ec-structure-building {
+  padding: var(--space-3) var(--space-4);
+  background: var(--ew-bg-subtle);
+  border-radius: var(--radius-card);
+  border: 1px solid var(--ew-border-subtle);
+}
+.ec-structure-building h3 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--ew-text-primary);
+}
+.ec-building-notes {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--ew-text-muted);
+}
+.ec-room-actions {
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
 .ec-household-row {
   display: flex;
   align-items: center;
@@ -365,6 +415,20 @@
 }
 .ec-cell-structure { padding: var(--space-3) var(--space-4); }
 .ec-cell-occupancy { padding: var(--space-3) var(--space-4); }
+
+.ec-occ-number {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ew-text-primary);
+}
+
+.ec-occ-muted {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--ew-text-muted);
+}
+
 .ec-occupancy-text {
   display: flex;
   align-items: baseline;

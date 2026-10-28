@@ -237,6 +237,14 @@
 .ec-table-container {
   width: 100%;
   overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--ew-border-subtle);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.ec-table-container .ds-table {
+  border-collapse: collapse;
 }
 
 .ec-quick-chips {

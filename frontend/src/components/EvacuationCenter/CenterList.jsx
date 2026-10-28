@@ -377,11 +377,10 @@ export default function CenterList({
           <table className="ds-table ec-center-table ds-table--stack">
             <thead>
               <tr>
-                <th style={{ width: '26%' }} scope="col">Center</th>
-                <th style={{ width: '20%' }} scope="col">Structure</th>
-                <th style={{ width: '22%' }} scope="col">Occupancy</th>
-                <th style={{ width: '14%' }} scope="col">Households</th>
-                <th style={{ width: '10%' }} scope="col">Status</th>
+                <th style={{ width: '32%' }} scope="col">Center</th>
+                <th style={{ width: '22%' }} scope="col">Structure</th>
+                <th style={{ width: '26%' }} scope="col">Occupancy</th>
+                <th style={{ width: '12%' }} scope="col">Status</th>
                 <th style={{ width: '8%' }} scope="col" />
               </tr>
             </thead>
@@ -402,8 +401,6 @@ export default function CenterList({
                 const assigned = Number(props.assigned || 0)
                 const checkedIn = Number(props.occupied || 0)
                 const status = centerStatus(props, checkedIn, assigned, cap)
-                const hhRaw = props.household_count
-                const hh = Number.isFinite(Number(hhRaw)) ? Number(hhRaw) : null
 
                 return (
                   <tr
@@ -428,8 +425,6 @@ export default function CenterList({
                             style={{
                               fontSize: 'var(--text-xs)',
                               padding: '2px 8px',
-                              backgroundColor: b.color || 'inherit',
-                              color: b.color ? '#fff' : 'inherit',
                             }}
                           >
                             {b.name}
@@ -454,12 +449,6 @@ export default function CenterList({
                       ) : (
                         <span className="ec-occ-muted">—</span>
                       )}
-                    </td>
-                    <td className="ec-cell-households" data-label="Households">
-                      <span className="ec-hh-number">{hh === null ? '—' : hh}</span>
-                      <span className="ec-hh-muted">
-                        {hh === null ? '' : hh === 1 ? 'household' : 'households'}
-                      </span>
                     </td>
                     <td className="ec-cell-status" data-label="Status"><StatusBadge status={status} /></td>
                     <td className="ec-cell-actions" data-label="Actions" onClick={(e) => e.stopPropagation()}>
@@ -573,11 +562,10 @@ export function SkeletonRows({ count = 4 }) {
       <table className="ds-table">
         <thead>
           <tr>
-            <th style={{ width: '26%' }}>Center</th>
-            <th style={{ width: '20%' }}>Structure</th>
-            <th style={{ width: '22%' }}>Occupancy</th>
-            <th style={{ width: '14%' }}>Households</th>
-            <th style={{ width: '10%' }}>Status</th>
+            <th style={{ width: '32%' }}>Center</th>
+            <th style={{ width: '22%' }}>Structure</th>
+            <th style={{ width: '26%' }}>Occupancy</th>
+            <th style={{ width: '12%' }}>Status</th>
             <th style={{ width: '8%' }}></th>
           </tr>
         </thead>
@@ -587,7 +575,6 @@ export function SkeletonRows({ count = 4 }) {
               <td><div className="ds-skeleton ds-skeleton--title" style={{ width: '55%' }} /><div className="ds-skeleton" style={{ width: '40%', height: 'var(--text-xs)' }} /></td>
               <td><div className="ds-skeleton ds-skeleton--text" style={{ width: '60%' }} /></td>
               <td><div className="ds-skeleton ds-skeleton--text" style={{ width: '45%' }} /></td>
-              <td><div className="ds-skeleton ds-skeleton--text" style={{ width: '50%' }} /></td>
               <td><div className="ds-skeleton ds-skeleton--text" style={{ width: '55%' }} /></td>
               <td><div className="ds-skeleton ds-skeleton--btn" /></td>
             </tr>

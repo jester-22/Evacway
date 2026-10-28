@@ -1,4 +1,6 @@
 import re
+import time
+from collections import defaultdict
 
 from datetime import date, datetime
 
@@ -13,6 +15,7 @@ from models import (
     Family,
     Barangay,
     EvacuationCenter,
+    EvacuationCenterBuilding,
     EvacuationCenterRoom,
     EvacuationAssignment,
     CenterBarangay,
@@ -2257,30 +2260,119 @@ def find_my_evacuation_center():
 
         evacuation_center_data = None
         room_data = None
+        is_checked_in = False
+        household_members_list = []
 
         if assignment:
-
-            room = EvacuationCenterRoom.query.get(
-                assignment.room_id
+            fam_assignments = (
+                db.session.query(EvacuationAssignment, Resident)
+                .join(Resident, EvacuationAssignment.resident_id == Resident.id)
+                .filter(Resident.family_id == family.id)
+                .all()
             )
+            for a_row, res_row in fam_assignments:
+                mem_checked_in = a_row.checked_in_at is not None
+                if mem_checked_in:
+                    is_checked_in = True
+                household_members_list.append({
+                    "resident_id": res_row.id,
+                    "full_name": res_row.get_full_name(),
+                    "is_checked_in": mem_checked_in,
+                    "checked_in_at": a_row.checked_in_at.isoformat() if a_row.checked_in_at else None,
+                    "checkin_status": "Checked in" if mem_checked_in else "Not yet arrived",
+                })
+
+            room = (
+                EvacuationCenterRoom.query.get(assignment.room_id)
+                if assignment.room_id
+                else None
+            )
+            center = None
+            if room:
+                center = EvacuationCenter.query.get(room.evacuation_center_id)
+            elif assignment.evacuation_center_id:
+                center = EvacuationCenter.query.get(assignment.evacuation_center_id)
 
             if room:
+                building = room.building
+                building_id = room.building_id
+                building_name = building.name if building else None
+
+                # If building not linked, find nearest building in the center
+                from geoalchemy2.shape import to_shape
+                from shapely.geometry import Point
+
+                if not building_name and center:
+                    center_buildings = EvacuationCenterBuilding.query.filter_by(
+                        evacuation_center_id=center.id
+                    ).all()
+                    if center_buildings:
+                        if room.latitude and room.longitude:
+                            rpt = Point(float(room.longitude), float(room.latitude))
+                            closest_b = min(
+                                center_buildings,
+                                key=lambda b: to_shape(b.geom).distance(rpt)
+                            )
+                            building_id = closest_b.id
+                            building_name = closest_b.name
+                        else:
+                            closest_b = center_buildings[0]
+                            building_id = closest_b.id
+                            building_name = closest_b.name
+
+                # Determine recommended entrance
+                recommended_entrance = "Entrance 1"
+                if center and center.entrance_geom is not None:
+                    try:
+                        entrances_shape = to_shape(center.entrance_geom)
+                        pts = (
+                            list(entrances_shape.geoms)
+                            if hasattr(entrances_shape, 'geoms')
+                            else [entrances_shape]
+                        )
+                        ref_pt = None
+                        if building_id:
+                            target_b = EvacuationCenterBuilding.query.get(building_id)
+                            if target_b:
+                                ref_pt = to_shape(target_b.geom).centroid
+                        if not ref_pt and room.latitude and room.longitude:
+                            ref_pt = Point(float(room.longitude), float(room.latitude))
+                        if ref_pt and pts:
+                            best_idx = 0
+                            min_d = float('inf')
+                            for idx, pt in enumerate(pts):
+                                d = pt.distance(ref_pt)
+                                if d < min_d:
+                                    min_d = d
+                                    best_idx = idx
+                            recommended_entrance = f"Entrance {best_idx + 1}"
+                        if building_id == 2 or (building_name and "south" in building_name.lower()):
+                            recommended_entrance = "Entrance 3"
+                    except Exception:
+                        if building_id == 2 or (building_name and "south" in building_name.lower()):
+                            recommended_entrance = "Entrance 3"
 
                 room_data = {
                     "id": room.id,
-                    "room_number": room.room_number
+                    "room_number": room.room_number,
+                    "building_id": building_id,
+                    "building_name": building_name,
+                    "floor_area": None,
+                    "recommended_entrance": recommended_entrance,
+                    "latitude": float(room.latitude) if room.latitude is not None else None,
+                    "longitude": float(room.longitude) if room.longitude is not None else None,
+                    "is_checked_in": is_checked_in,
+                    "checkin_status": "Checked in" if is_checked_in else "Reserved for your household",
+                    "members": household_members_list,
                 }
 
-                center = EvacuationCenter.query.get(
-                    room.evacuation_center_id
-                )
-
-                if center:
-
-                    evacuation_center_data = {
-                        "id": center.id,
-                        "name": center.name
-                    }
+            if center:
+                evacuation_center_data = {
+                    "id": center.id,
+                    "name": center.name,
+                    "center_type": center.center_type or "campus",
+                    "owner_name": center.owner_name,
+                }
 
         matches.append({
 
@@ -2292,11 +2384,23 @@ def find_my_evacuation_center():
 
             "family_code": family.family_code,
 
+            "family_members": len(household_members_list) or family.member_count or representative.family_members or 1,
+
+            "members": household_members_list,
+
             "address": representative.address or family.address,
 
             "barangay": (
                 barangay.name
                 if barangay
+                else None
+            ),
+
+            "is_checked_in": is_checked_in,
+
+            "checkin_status": (
+                ("Checked in" if is_checked_in else "Reserved for your household")
+                if assignment
                 else None
             ),
 
@@ -2308,3 +2412,93 @@ def find_my_evacuation_center():
     return jsonify({
         "matches": matches
     }), 200
+
+
+# =========================================================
+# AUTOSUGGEST (Name lookup suggestions for residents)
+# =========================================================
+
+_autosuggest_rate_limits = defaultdict(list)
+
+def _is_autosuggest_rate_limited(ip, max_requests=30, window_seconds=60):
+    now = time.time()
+    timestamps = _autosuggest_rate_limits[ip]
+    _autosuggest_rate_limits[ip] = [ts for ts in timestamps if now - ts < window_seconds]
+    if len(_autosuggest_rate_limits[ip]) >= max_requests:
+        return True
+    _autosuggest_rate_limits[ip].append(now)
+    return False
+
+
+@residents_bp.route('/api/residents/autosuggest', methods=['GET'])
+def autosuggest_residents():
+    client_ip = (
+        request.headers.get('X-Forwarded-For', '')
+        .split(',')[0]
+        .strip()
+        or request.remote_addr
+        or '127.0.0.1'
+    )
+
+    if _is_autosuggest_rate_limited(client_ip, max_requests=30, window_seconds=60):
+        return jsonify({
+            "error": "Rate limit exceeded. Please wait a moment before trying again."
+        }), 429
+
+    query = request.args.get('q', '').strip() or request.args.get('name', '').strip()
+    query_normalized = normalize_name(query)
+
+    if not query_normalized or len(query_normalized) < 3:
+        return jsonify({
+            "suggestions": []
+        }), 200
+
+    # Build barangay lookup
+    barangays = {b.id: b.name for b in Barangay.query.all()}
+
+    suggestions = []
+    seen = set()
+
+    # Query families
+    families = Family.query.all()
+    for family in families:
+        head_name = (family.head_name or '').strip()
+        if not head_name:
+            continue
+        head_normalized = normalize_name(head_name)
+        if _name_matches(query_normalized, head_normalized):
+            b_name = barangays.get(family.barangay_id, '')
+            key = (head_name.lower(), b_name.lower())
+            if key not in seen:
+                seen.add(key)
+                suggestions.append({
+                    "name": head_name,
+                    "barangay": b_name
+                })
+                if len(suggestions) >= 5:
+                    break
+
+    # If fewer than 5, also check individual residents
+    if len(suggestions) < 5:
+        residents = Resident.query.all()
+        for res in residents:
+            full_name = (res.get_full_name() or f"{res.first_name} {res.last_name}").strip()
+            if not full_name:
+                continue
+            res_normalized = normalize_name(full_name)
+            if _name_matches(query_normalized, res_normalized):
+                family = Family.query.get(res.family_id) if res.family_id else None
+                b_name = barangays.get(family.barangay_id, '') if family else ''
+                key = (full_name.lower(), b_name.lower())
+                if key not in seen:
+                    seen.add(key)
+                    suggestions.append({
+                        "name": full_name,
+                        "barangay": b_name
+                    })
+                    if len(suggestions) >= 5:
+                        break
+
+    return jsonify({
+        "suggestions": suggestions[:5]
+    }), 200

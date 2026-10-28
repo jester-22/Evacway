@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from config import Config
@@ -20,6 +20,7 @@ from barangays import barangays_bp
 from routes.families import families_bp
 from routes.notifications import notifications_bp
 from routes.rescue_requests import rescue_bp
+from routes.buildings import buildings_bp
 
 
 app = Flask(__name__)
@@ -76,6 +77,17 @@ app.register_blueprint(barangays_bp)
 app.register_blueprint(families_bp)
 app.register_blueprint(notifications_bp)
 app.register_blueprint(rescue_bp)
+app.register_blueprint(buildings_bp)
+
+
+# =========================================================
+# GLOBAL ERROR HANDLERS (Ensure JSON + CORS on errors)
+# =========================================================
+
+@app.errorhandler(500)
+def handle_500_error(e):
+    app.logger.exception("Internal server error: %s", e)
+    return jsonify({"error": "Internal server error"}), 500
 
 
 # =========================================================

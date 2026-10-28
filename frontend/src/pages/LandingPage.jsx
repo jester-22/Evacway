@@ -569,9 +569,10 @@ function LoginDialog({ dialogRef }) {
           </p>
         )}
 
-        <label className="ew-field">
+        <label className="ew-field" htmlFor="login-email">
           <span>Email</span>
           <input
+            id="login-email"
             type="email"
             name="email"
             autoComplete="email"
@@ -584,10 +585,11 @@ function LoginDialog({ dialogRef }) {
 
         {!recoveryMode && (
           <>
-            <label className="ew-field">
+            <label className="ew-field" htmlFor="login-password">
               <span>Password</span>
               <div className="ew-password">
                 <input
+                  id="login-password"
                   type={showPassword ? "text" : "password"}
                   name="password"
                   autoComplete="current-password"
@@ -601,6 +603,7 @@ function LoginDialog({ dialogRef }) {
                   className="ew-toggle"
                   onClick={() => setShowPassword((v) => !v)}
                   aria-pressed={showPassword}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
                 >
                   {showPassword ? "Hide" : "Show"}
                 </button>
@@ -616,7 +619,7 @@ function LoginDialog({ dialogRef }) {
 
         <button
           type="submit"
-          className="ew-btn ew-btn-primary ew-btn-block"
+          className="ew-btn ew-btn-primary ew-btn-block ds-btn ds-btn--primary"
           disabled={recoveryMode ? recoveryLoading : loading}
         >
           {recoveryMode
@@ -719,7 +722,7 @@ export default function LandingPage() {
             </nav>
             <button
               type="button"
-              className="ew-btn ew-btn-quiet ew-btn-login-pill"
+              className="ew-btn ew-btn-quiet ew-btn-login-pill ds-btn ds-btn--ghost"
               onClick={openLogin}
             >
               Log in
@@ -765,13 +768,13 @@ export default function LandingPage() {
               Southern Leyte, and steers around closed roads.
             </p>
             <div className="ew-actions">
-              <Link to="/map" className="ew-btn ew-btn-primary">
+              <Link to="/map" className="ew-btn ew-btn-primary ds-btn ds-btn--primary">
                 <span>Open the map</span>
                 <svg className="ew-btn-chevron" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
                   <path d="M6 3.5L10.5 8L6 12.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </Link>
-              <span className="ew-note">No account needed.</span>
+              <span className="ew-note" aria-hidden="true">No account needed.</span>
             </div>
           </div>
         </section>
@@ -829,7 +832,7 @@ export default function LandingPage() {
                 <h2 id="ew-account-title">Logging in is for LGU staff and admins.</h2>
                 <p>Everyone else can open the map and get a route without an account.</p>
               </div>
-              <button type="button" className="ew-btn ew-btn-outline" onClick={openLogin}>
+              <button type="button" className="ew-btn ew-btn-outline ds-btn ds-btn--ghost" onClick={openLogin}>
                 Log in
               </button>
             </div>

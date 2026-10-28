@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import 'leaflet/dist/leaflet.css'
 import './index.css'
 import './components_css/design-system.css'
+import './components_css/evac-centers.css'
 import App from './App.jsx'
 
 const queryClient = new QueryClient({
@@ -38,10 +39,13 @@ if ('serviceWorker' in navigator) {
       )
     }
 
-    // Register the service worker in both dev and prod so push subscriptions work.
-    await navigator.serviceWorker.register('/sw.js').catch((error) => {
-      console.error('Service worker registration failed:', error)
-    })
+    // Register the service worker in prod only; skip in dev to avoid Chrome
+    // serving stale cached shell/assets (blank page / not updating on reload).
+    if (import.meta.env.PROD) {
+      await navigator.serviceWorker.register('/sw.js').catch((error) => {
+        console.error('Service worker registration failed:', error)
+      })
+    }
   })
 }
 

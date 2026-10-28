@@ -11,7 +11,12 @@ function normalizeKeyId(id) {
 export const queryKeys = {
   activeCenters: ["evacuation-centers", "active"],
   allCenters: ["evacuation-centers", "all"],
+  evacuationCenters: (includeInactive = false) =>
+    includeInactive ? ["evacuation-centers", "all"] : ["evacuation-centers", "active"],
   rooms: (centerId) => ["rooms", normalizeKeyId(centerId)],
+  buildings: (centerId) => ["buildings", normalizeKeyId(centerId)],
+  buildingDetails: (buildingId) => ["building-details", normalizeKeyId(buildingId)],
+  centerDetails: (centerId) => ["evacuation-center-details", normalizeKeyId(centerId)],
   roomFamilies: (roomId) => ["room-families", normalizeKeyId(roomId)],
   barangays: ["barangays"],
   barangay: (barangayId) => ["barangays", "detail", normalizeKeyId(barangayId)],
@@ -38,7 +43,10 @@ export async function invalidateEvacuationQueries(queryClient) {
     queryClient.invalidateQueries({ queryKey: ["families"] }),
     queryClient.invalidateQueries({ queryKey: ["residents"] }),
     queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
+    queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] }),
     queryClient.invalidateQueries({ queryKey: ["rooms"] }),
+    queryClient.invalidateQueries({ queryKey: ["buildings"] }),
+    queryClient.invalidateQueries({ queryKey: ["building-details"] }),
     queryClient.invalidateQueries({ queryKey: ["room-families"] }),
   ]);
 }
@@ -187,6 +195,24 @@ export function useRoomFamilies(roomId, options = {}) {
   });
 }
 
+export function useCenterBuildings(centerId, options = {}) {
+  return useQuery({
+    queryKey: queryKeys.buildings(centerId),
+    queryFn: () => api.getCenterBuildings(centerId),
+    enabled: centerId != null,
+    ...options,
+  });
+}
+
+export function useBuildingDetails(buildingId, options = {}) {
+  return useQuery({
+    queryKey: queryKeys.buildingDetails(buildingId),
+    queryFn: () => api.getBuildingDetails(buildingId),
+    enabled: buildingId != null,
+    ...options,
+  });
+}
+
 export function useDashboardSummary(isAdmin) {
   const refreshOptions = {
     refetchInterval: 30000,
@@ -232,11 +258,12 @@ export function useDashboardSummary(isAdmin) {
       Boolean(
         room.is_assigned ||
         room.assignment_status === "Assigned" ||
-        Number(room.occupied) > 0
+        Number(room.assigned ?? room.occupied) > 0
       )
     ).length;
     const capacity = uniqueRooms.reduce((sum, room) => sum + Number(room.capacity || 0), 0);
-    const assignedPeople = uniqueRooms.reduce((sum, room) => sum + Number(room.occupied || 0), 0);
+    const occupiedPeople = uniqueRooms.reduce((sum, room) => sum + Number(room.occupied || 0), 0);
+    const assignedPeople = uniqueRooms.reduce((sum, room) => sum + Number(room.assigned ?? room.occupied ?? 0), 0);
 
     return {
       id: properties.id ?? properties.center_id ?? center.id,
@@ -250,8 +277,9 @@ export function useDashboardSummary(isAdmin) {
       unassignedRooms: Math.max(0, uniqueRooms.length - occupied),
       available: uniqueRooms.length - occupied,
       capacity,
+      occupiedPeople,
       assignedPeople,
-      remainingCapacity: Math.max(0, capacity - assignedPeople),
+      remainingCapacity: Math.max(0, capacity - occupiedPeople),
     };
   }).sort((first, second) =>
     second.available - first.available
@@ -295,6 +323,7 @@ export function useDashboardSummary(isAdmin) {
           residents: totalResidents,
           centers: centers.length,
           totalCapacity: centerRooms.reduce((total, center) => total + center.capacity, 0),
+          totalOccupiedPeople: centerRooms.reduce((total, center) => total + (center.occupiedPeople || 0), 0),
           totalAssignedPeople: centerRooms.reduce((total, center) => total + center.assignedPeople, 0),
           totalRooms,
           assignedRooms: occupiedRooms,
@@ -323,6 +352,16 @@ export function useDashboardSummary(isAdmin) {
       ]);
     },
   };
+}
+
+export function useCenterDetails(centerId, options = {}) {
+  return useQuery({
+    queryKey: queryKeys.centerDetails(centerId),
+    queryFn: () => api.getEvacuationCenter(centerId),
+    enabled: centerId != null,
+    staleTime: 60 * 1000,
+    ...options,
+  });
 }
 
 export function useBarangay(barangayId, options = {}) {
@@ -404,3 +443,46 @@ export function useRescueRequests(options = {}) {
     ...options,
   });
 }
+
+export function useBuildingsForCenters(centersData) {
+  const centerIds = useMemo(() => {
+    const features = Array.isArray(centersData?.features)
+      ? centersData.features
+      : Array.isArray(centersData)
+        ? centersData
+        : [];
+    return features
+      .map((f) => f.properties?.id ?? f.id)
+      .filter((id) => id !== undefined && id !== null);
+  }, [centersData]);
+
+  const queries = useQueries({
+    queries: centerIds.map((centerId) => ({
+      queryKey: queryKeys.buildings(centerId),
+      queryFn: () => api.getCenterBuildings(centerId),
+      enabled: centerId !== null && centerId !== undefined,
+      staleTime: 60 * 1000,
+    })),
+  });
+
+  const buildingsGeoJSON = useMemo(() => {
+    const allFeatures = [];
+    queries.forEach((q) => {
+      const fc = q.data;
+      if (fc && Array.isArray(fc.features)) {
+        allFeatures.push(...fc.features);
+      }
+    });
+    return {
+      type: "FeatureCollection",
+      features: allFeatures,
+    };
+  }, [queries]);
+
+  return {
+    buildingsGeoJSON,
+    isLoading: queries.some((q) => q.isLoading),
+    isFetching: queries.some((q) => q.isFetching),
+    refetch: () => Promise.all(queries.map((q) => q.refetch())),
+  };
+}

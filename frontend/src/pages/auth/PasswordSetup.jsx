@@ -58,7 +58,7 @@ function PasswordSetup() {
 
   return (
     <main className="password-setup-page">
-      <section className="password-setup-panel" aria-labelledby="password-setup-title">
+      <section className="password-setup-panel ds-card" aria-labelledby="password-setup-title">
         <div className="password-setup-brand">
           <span className="password-setup-brand-icon">
             <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
@@ -77,7 +77,7 @@ function PasswordSetup() {
             </span>
             <h1 id="password-setup-title">Password updated</h1>
             <p>Your account is ready. Sign in with your new password.</p>
-            <Link className="password-setup-submit" to="/">Return to sign in</Link>
+            <Link className="password-setup-submit ds-btn ds-btn--primary" to="/">Return to sign in</Link>
           </div>
         ) : (
           <>
@@ -89,8 +89,8 @@ function PasswordSetup() {
 
             <form className="password-setup-form" onSubmit={handleSubmit}>
               {error && (
-                <div className="password-setup-error" role="alert">
-                  <FontAwesomeIcon icon={faTriangleExclamation} />
+                <div className="password-setup-error ds-banner ds-banner--danger" role="alert">
+                  <FontAwesomeIcon icon={faTriangleExclamation} className="password-setup-error-icon" aria-hidden="true" />
                   <span>{error}</span>
                 </div>
               )}
@@ -107,9 +107,10 @@ function PasswordSetup() {
                   minLength={8}
                   required
                   autoFocus
+                  className="ds-input"
                 />
                   <button
-                    className="password-setup-visibility"
+                    className="password-setup-visibility ds-btn ds-btn--icon ds-btn--sm"
                     type="button"
                     onClick={() => setShowPassword((visible) => !visible)}
                     aria-label={showPassword ? "Hide passwords" : "Show passwords"}
@@ -131,6 +132,7 @@ function PasswordSetup() {
                   onChange={(event) => setConfirmation(event.target.value)}
                   minLength={8}
                   required
+                  className="ds-input"
                 />
                 </div>
               </div>
@@ -139,7 +141,7 @@ function PasswordSetup() {
                 At least 8 characters, with one uppercase letter, one lowercase letter, one number, and one special character.
               </p>
 
-              <button className="password-setup-submit" type="submit" disabled={submitting}>
+              <button className="password-setup-submit ds-btn ds-btn--primary" type="submit" disabled={submitting}>
                 {submitting ? "Saving password..." : "Save password"}
               </button>
             </form>

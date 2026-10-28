@@ -1,8 +1,11 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func, or_
+from collections import defaultdict
+from datetime import date
 from models import (
     db,
     EvacuationCenter,
+    EvacuationCenterBuilding,
     EvacuationCenterRoom,
     EvacuationAssignment,
     Barangay,
@@ -78,46 +81,63 @@ def _center_metrics(center):
     room_ids = [room.id for room in rooms]
     rooms_by_id = {room.id: room for room in rooms}
     assigned_by_barangay = {}
+    occupied_by_barangay = {}
     family_count_by_barangay = {}
     rooms_by_barangay = {}
     total_assigned = 0
+    total_occupied = 0
+
+    center_filter = or_(
+        EvacuationAssignment.evacuation_center_id == center.id,
+        EvacuationAssignment.room_id.in_(room_ids) if room_ids else False
+    )
+    totals_row = (
+        db.session.query(
+            func.count(EvacuationAssignment.id).label("assigned"),
+            func.count(EvacuationAssignment.checked_in_at).label("occupied"),
+        )
+        .filter(center_filter)
+        .first()
+    )
+    total_assigned = int((totals_row.assigned if totals_row else 0) or 0)
+    total_occupied = int((totals_row.occupied if totals_row else 0) or 0)
+
+    assignment_rows = (
+        db.session.query(
+            Family.barangay_id,
+            func.count(EvacuationAssignment.id),
+            func.count(EvacuationAssignment.checked_in_at),
+            func.count(func.distinct(Family.id))
+        )
+        .join(
+            Resident,
+            Resident.id == EvacuationAssignment.resident_id
+        )
+        .join(
+            Family,
+            Family.id == Resident.family_id
+        )
+        .filter(center_filter)
+        .group_by(Family.barangay_id)
+        .all()
+    )
+    assigned_by_barangay = {
+        barangay_id: assigned_count
+        for barangay_id, assigned_count, _, _ in assignment_rows
+        if barangay_id is not None
+    }
+    occupied_by_barangay = {
+        barangay_id: occupied_count
+        for barangay_id, _, occupied_count, _ in assignment_rows
+        if barangay_id is not None
+    }
+    family_count_by_barangay = {
+        barangay_id: family_count
+        for barangay_id, _, _, family_count in assignment_rows
+        if barangay_id is not None
+    }
 
     if room_ids:
-        total_assigned = (
-            db.session.query(func.count(EvacuationAssignment.id))
-            .filter(EvacuationAssignment.room_id.in_(room_ids))
-            .scalar()
-        ) or 0
-
-        assignment_rows = (
-            db.session.query(
-                Family.barangay_id,
-                func.count(EvacuationAssignment.id),
-                func.count(func.distinct(Family.id))
-            )
-            .join(
-                Resident,
-                Resident.id == EvacuationAssignment.resident_id
-            )
-            .join(
-                Family,
-                Family.id == Resident.family_id
-            )
-            .filter(EvacuationAssignment.room_id.in_(room_ids))
-            .group_by(Family.barangay_id)
-            .all()
-        )
-        assigned_by_barangay = {
-            barangay_id: assigned_count
-            for barangay_id, assigned_count, _ in assignment_rows
-            if barangay_id is not None
-        }
-        family_count_by_barangay = {
-            barangay_id: family_count
-            for barangay_id, _, family_count in assignment_rows
-            if barangay_id is not None
-        }
-
         room_barangay_rows = (
             db.session.query(
                 EvacuationAssignment.room_id,
@@ -147,7 +167,8 @@ def _center_metrics(center):
     effective_capacity = (
         total_capacity if total_capacity is not None else total_room_capacity
     )
-    center_available = max(effective_capacity - total_assigned, 0)
+    center_available = max(effective_capacity - total_occupied, 0)
+    center_unassigned = max(effective_capacity - total_assigned, 0)
 
     breakdown = []
     for barangay in linked_barangays:
@@ -159,35 +180,73 @@ def _center_metrics(center):
             if rid in rooms_by_id
         )
         assigned = assigned_by_barangay.get(barangay_id, 0)
+        occupied = occupied_by_barangay.get(barangay_id, 0)
         breakdown.append({
             **barangay,
             "rooms": len(used_room_ids) if used_room_ids else len(rooms),
             "assigned": assigned,
+            "occupied": occupied,
             "assigned_families": family_count_by_barangay.get(barangay_id, 0),
             "available": (
-                max(used_room_capacity - assigned, 0)
+                max(used_room_capacity - occupied, 0)
                 if used_room_ids
                 else center_available
-            )
+            ),
+            "unassigned": (
+                max(used_room_capacity - assigned, 0)
+                if used_room_ids
+                else center_unassigned
+            ),
         })
 
+    center_buildings = (
+        EvacuationCenterBuilding.query.filter_by(evacuation_center_id=center.id)
+        .order_by(EvacuationCenterBuilding.name.asc())
+        .all()
+    )
+    is_venue_or_private = (center.center_type or "campus") in ("single_venue", "private_property")
+    building_count = len(center_buildings)
+    unmapped_room_count = 0 if is_venue_or_private else sum(1 for room in rooms if room.building_id is None)
+    mapped_room_count = 0 if is_venue_or_private else sum(1 for room in rooms if room.building_id is not None)
+
     return {
+        "center_type": center.center_type or "campus",
+        "owner_name": center.owner_name,
         "barangays": linked_barangays,
         "barangay": ", ".join(item["name"] for item in linked_barangays) or None,
         "barangay_ids": [item["id"] for item in linked_barangays],
         "barangay_id": linked_barangays[0]["id"] if linked_barangays else None,
         "barangay_breakdown": breakdown,
         "capacity": total_capacity,
-        "occupied": total_assigned,
-        "current_occupancy": total_assigned,
+        "occupied": total_occupied,
+        "current_occupancy": total_occupied,
+        "assigned": total_assigned,
+        "total_assigned": total_assigned,
         "available": (
-            max(total_capacity - total_assigned, 0)
+            max(total_capacity - total_occupied, 0)
             if total_capacity is not None
             else center_available
         ),
+        "unassigned": (
+            max(total_capacity - total_assigned, 0)
+            if total_capacity is not None
+            else center_unassigned
+        ),
+        "is_fully_assigned": bool(effective_capacity > 0 and total_assigned >= effective_capacity),
+        "building_count": building_count,
+        "buildings": [
+            {
+                "id": b.id,
+                "name": b.name,
+                "evacuation_center_id": center.id,
+                "center_name": center.name,
+            }
+            for b in center_buildings
+        ],
         "room_count": len(rooms),
         "total_rooms": len(rooms),
-        "total_assigned": total_assigned
+        "unmapped_room_count": unmapped_room_count,
+        "mapped_room_count": mapped_room_count,
     }
 
 
@@ -207,23 +266,34 @@ def center_to_feature(center):
     # Imported centers may also have no entrance yet.
     if center.entrance_geom is not None:
         try:
-            entrance_shape = to_shape(center.entrance_geom)
+            from services.pathfinding import snap_point_to_road, MAX_ENTRANCE_SNAP_DISTANCE_METERS
 
+            entrance_shape = to_shape(center.entrance_geom)
+            raw_pts = []
             if hasattr(entrance_shape, "geoms"):
-                entrances = [
-                    {
-                        "lat": point.y,
-                        "lng": point.x
-                    }
-                    for point in entrance_shape.geoms
-                ]
+                raw_pts = list(entrance_shape.geoms)
             elif hasattr(entrance_shape, "y") and hasattr(entrance_shape, "x"):
-                entrances = [
-                    {
-                        "lat": entrance_shape.y,
-                        "lng": entrance_shape.x
-                    }
-                ]
+                raw_pts = [entrance_shape]
+
+            for idx, point in enumerate(raw_pts):
+                snap_pt, edge_dist_m, sub_info, is_conn = snap_point_to_road(point.y, point.x)
+                reasons = []
+                if edge_dist_m > MAX_ENTRANCE_SNAP_DISTANCE_METERS:
+                    reasons.append(f"Snap distance is {edge_dist_m:.1f}m (> 25m threshold)")
+                if not is_conn:
+                    reasons.append("Road segment is not connected to the walkable network")
+
+                entrances.append({
+                    "index": idx + 1,
+                    "name": f"Entrance {idx + 1}",
+                    "lat": point.y,
+                    "lng": point.x,
+                    "snap_distance_m": round(edge_dist_m, 1),
+                    "nearest_road": sub_info["road_name"] if sub_info else "Unknown",
+                    "is_connected": is_conn,
+                    "has_warning": bool(reasons),
+                    "warning": "; ".join(reasons) if reasons else None,
+                })
 
         except (TypeError, ValueError):
             entrances = []
@@ -236,6 +306,8 @@ def center_to_feature(center):
         "properties": {
             "id": center.id,
             "name": center.name,
+            "center_type": center.center_type or "campus",
+            "owner_name": center.owner_name,
             **metrics,
             "building_material": center.building_material,
             "accessibility_notes": center.accessibility_notes,
@@ -251,14 +323,50 @@ def center_to_feature(center):
 def build_polygon(points):
     if not points or len(points) < 3:
         raise ValueError("A footprint needs at least 3 points.")
-    coords = [(p['lng'], p['lat']) for p in points]
-    return Polygon(coords)
+    coords = []
+    for p in points:
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            coords.append((float(p[0]), float(p[1])))
+        elif isinstance(p, dict):
+            lng = p.get('lng') if p.get('lng') is not None else p.get('longitude')
+            lat = p.get('lat') if p.get('lat') is not None else p.get('latitude')
+            if lng is None or lat is None:
+                raise ValueError("Each point must have lat and lng coordinates.")
+            coords.append((float(lng), float(lat)))
+        else:
+            raise ValueError("Invalid point format in footprint.")
+
+    # Check distinct points count for real point-count validation
+    distinct_coords = coords[:-1] if (len(coords) >= 2 and coords[0] == coords[-1]) else coords
+    if len(distinct_coords) < 3:
+        raise ValueError("A footprint needs at least 3 points.")
+
+    try:
+        poly = Polygon(coords)
+    except Exception:
+        raise ValueError("A footprint needs at least 3 points.")
+
+    if not poly.is_valid:
+        raise ValueError("The outline crosses itself. Please redraw it so the lines do not cross.")
+    return poly
 
 
 def build_multipoint(points):
     if not points or len(points) < 1:
         raise ValueError("At least one entrance point is required.")
-    return MultiPoint([(p['lng'], p['lat']) for p in points])
+    coords = []
+    for p in points:
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            coords.append((float(p[0]), float(p[1])))
+        elif isinstance(p, dict):
+            lng = p.get('lng') if p.get('lng') is not None else p.get('longitude')
+            lat = p.get('lat') if p.get('lat') is not None else p.get('latitude')
+            if lng is None or lat is None:
+                raise ValueError("Each entrance must have lat and lng coordinates.")
+            coords.append((float(lng), float(lat)))
+        else:
+            raise ValueError("Invalid entrance point format.")
+    return MultiPoint(coords)
 
 
 @centers_bp.route('/api/evacuation-centers', methods=['GET'])
@@ -327,12 +435,19 @@ def get_evacuation_center_details(center_id):
     }
     rooms_data = []
     for room in rooms:
-        occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
-        is_assigned = occupied > 0
+        assigned = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+        occupied = EvacuationAssignment.query.filter(
+            EvacuationAssignment.room_id == room.id,
+            EvacuationAssignment.checked_in_at.isnot(None)
+        ).count()
+        is_assigned = assigned > 0
         room_dict = room.to_dict()
         room_dict["occupied"] = occupied
-        room_dict["available"] = max(room.capacity - occupied, 0)
+        room_dict["assigned"] = assigned
+        room_dict["available"] = max((room.capacity or 0) - occupied, 0)
+        room_dict["unassigned"] = max((room.capacity or 0) - assigned, 0)
         room_dict["is_assigned"] = is_assigned
+        room_dict["is_fully_assigned"] = bool((room.capacity or 0) > 0 and assigned >= (room.capacity or 0))
         room_dict["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
         assigned_bid = (
             db.session.query(Family.barangay_id)
@@ -348,38 +463,103 @@ def get_evacuation_center_details(center_id):
         room_dict["barangay"] = linked_by_id.get(room_bid) if room_bid else None
         rooms_data.append(room_dict)
 
-    # Load distinct assigned families across all rooms of this center
+    # Load distinct assigned families across all rooms or direct assignments of this center
+    center_assignment_filter = or_(
+        EvacuationAssignment.evacuation_center_id == center_id,
+        EvacuationCenterRoom.evacuation_center_id == center_id
+    )
     assigned_families_query = (
         db.session.query(
             Family.id,
             Family.family_code,
             Family.head_name,
+            Family.member_count,
             Family.contact_number,
             Family.evacuation_status,
             EvacuationCenterRoom.id.label('room_id'),
             EvacuationCenterRoom.room_number,
-            func.count(EvacuationAssignment.id).label('assigned_members')
+            EvacuationCenterRoom.building_id,
+            EvacuationCenterBuilding.name.label('building_name'),
+            func.count(EvacuationAssignment.id).label('assigned_members'),
+            func.count(EvacuationAssignment.checked_in_at).label('checked_in_members')
         )
         .join(Resident, Resident.family_id == Family.id)
         .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
-        .join(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
-        .filter(EvacuationCenterRoom.evacuation_center_id == center_id)
-        .group_by(Family.id, Family.family_code, Family.head_name, Family.contact_number, Family.evacuation_status, EvacuationCenterRoom.id, EvacuationCenterRoom.room_number)
+        .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+        .outerjoin(EvacuationCenterBuilding, EvacuationCenterRoom.building_id == EvacuationCenterBuilding.id)
+        .filter(center_assignment_filter)
+        .group_by(
+            Family.id,
+            Family.family_code,
+            Family.head_name,
+            Family.member_count,
+            Family.contact_number,
+            Family.evacuation_status,
+            EvacuationCenterRoom.id,
+            EvacuationCenterRoom.room_number,
+            EvacuationCenterRoom.building_id,
+            EvacuationCenterBuilding.name,
+        )
         .all()
     )
+
+    # Precompute special-needs chips per (family_id, room_id) from assigned residents
+    special_needs_by_family_room = defaultdict(list)
+    assigned_residents_rows = (
+        db.session.query(Resident, EvacuationAssignment.room_id)
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+        .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+        .filter(center_assignment_filter)
+        .all()
+    )
+    today = date.today()
+    for res, r_id in assigned_residents_rows:
+        if not res.family_id:
+            continue
+        age = None
+        if res.date_of_birth:
+            age = today.year - res.date_of_birth.year - (
+                (today.month, today.day) < (res.date_of_birth.month, res.date_of_birth.day)
+            )
+        flags = []
+        if res.is_pwd:
+            flags.append("PWD")
+        if age is not None and age >= 60:
+            flags.append("Senior")
+        if age is not None and age <= 2:
+            flags.append("Infant")
+        if res.is_pregnant:
+            flags.append("Pregnant")
+        if res.is_lactating:
+            flags.append("Lactating")
+        if res.is_solo_parent:
+            flags.append("Solo Parent")
+        if res.needs_assistance:
+            flags.append("Needs Assistance")
+        key = (res.family_id, r_id)
+        for fl in flags:
+            if fl not in special_needs_by_family_room[key]:
+                special_needs_by_family_room[key].append(fl)
 
     families_data = [
         {
             "family_id": row.id,
             "family_code": row.family_code,
             "head_name": row.head_name,
+            "member_count": row.member_count or row.assigned_members,
             "contact_number": row.contact_number,
             "evacuation_status": "Assigned",
             "assignment_status": "Assigned",
             "is_assigned": True,
             "room_id": row.room_id,
             "room_number": row.room_number,
-            "assigned_members": row.assigned_members
+            "building_id": row.building_id,
+            "building_name": (row.building_name or f"Building #{row.building_id}") if row.building_id else None,
+            "assigned_members": row.assigned_members,
+            "checked_in_members": int(row.checked_in_members or 0),
+            "is_checked_in": int(row.checked_in_members or 0) > 0,
+            "checkin_status": "Checked in" if int(row.checked_in_members or 0) > 0 else "Not yet arrived",
+            "special_needs": special_needs_by_family_room.get((row.id, row.room_id), []),
         }
         for row in assigned_families_query
     ]
@@ -425,9 +605,15 @@ def create_evacuation_center():
         capacity = None
 
     geom = None
-    if data.get('polygon'):
+    polygon_data = data.get('polygon')
+    if polygon_data is None and isinstance(data.get('geometry'), dict):
+        geom_val = data['geometry']
+        if geom_val.get('type') == 'Polygon' and geom_val.get('coordinates'):
+            polygon_data = geom_val['coordinates'][0]
+
+    if polygon_data:
         try:
-            polygon = build_polygon(data['polygon'])
+            polygon = build_polygon(polygon_data)
             geom = from_shape(polygon, srid=4326)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -442,8 +628,15 @@ def create_evacuation_center():
 
     user_id = get_jwt_identity()
 
+    raw_center_type = str(data.get('center_type') or 'campus').strip().lower()
+    valid_types = {'campus', 'single_venue', 'private_property'}
+    center_type = raw_center_type if raw_center_type in valid_types else 'campus'
+    owner_name = str(data.get('owner_name') or '').strip() or None
+
     center = EvacuationCenter(
         name=name,
+        center_type=center_type,
+        owner_name=owner_name,
         capacity=capacity,
         building_material=data.get('building_material'),
         accessibility_notes=data.get('accessibility_notes'),
@@ -469,6 +662,7 @@ def create_evacuation_center():
 
 
 @centers_bp.route('/api/evacuation-centers/<int:center_id>', methods=['PUT'])
+@centers_bp.route('/api/evacuation-centers/<int:center_id>/mapping', methods=['PATCH', 'PUT'])
 @role_required('admin', 'lgu_personnel')
 def update_evacuation_center(center_id):
     center = EvacuationCenter.query.get_or_404(center_id)
@@ -521,23 +715,38 @@ def update_evacuation_center(center_id):
         else:
             center.capacity = None
 
-    for field in ['building_material', 'accessibility_notes', 'hazard_exposure_score', 'contact_number']:
+    for field in ['building_material', 'accessibility_notes', 'hazard_exposure_score', 'contact_number', 'owner_name']:
         if field in data:
             setattr(center, field, data[field])
 
-    if data.get('polygon'):
+    if 'center_type' in data:
+        raw_type = str(data.get('center_type') or 'campus').strip().lower()
+        if raw_type in {'campus', 'single_venue', 'private_property'}:
+            center.center_type = raw_type
+
+    polygon_data = data.get('polygon')
+    if polygon_data is None and isinstance(data.get('geometry'), dict):
+        geom_val = data['geometry']
+        if geom_val.get('type') == 'Polygon' and geom_val.get('coordinates'):
+            polygon_data = geom_val['coordinates'][0]
+
+    if polygon_data is not None:
         try:
-            polygon = build_polygon(data['polygon'])
+            polygon = build_polygon(polygon_data)
             center.geom = from_shape(polygon, srid=4326)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
-    if data.get('entrances'):
-        try:
-            multipoint = build_multipoint(data['entrances'])
-            center.entrance_geom = from_shape(multipoint, srid=4326)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+    if 'entrances' in data:
+        entrances_data = data['entrances']
+        if entrances_data:
+            try:
+                multipoint = build_multipoint(entrances_data)
+                center.entrance_geom = from_shape(multipoint, srid=4326)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+        else:
+            center.entrance_geom = None
 
     db.session.commit()
 
@@ -585,8 +794,11 @@ def delete_evacuation_center(center_id):
     # Check for active assignments
     active_assignments = (
         db.session.query(func.count(EvacuationAssignment.id))
-        .join(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
-        .filter(EvacuationCenterRoom.evacuation_center_id == center.id)
+        .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+        .filter(or_(
+            EvacuationAssignment.evacuation_center_id == center.id,
+            EvacuationCenterRoom.evacuation_center_id == center.id
+        ))
         .scalar() or 0
     )
     if active_assignments > 0:
@@ -607,6 +819,57 @@ def delete_evacuation_center(center_id):
     user_id = get_jwt_identity()
     db.session.add(SystemLog(user_id=user_id, action=f"Safely deactivated/deleted evacuation center: {center.name}"))
     db.session.commit()
+
+    return jsonify({"message": f"Evacuation center '{center.name}' successfully deleted"}), 200
+
+
+@centers_bp.route('/api/evacuation-centers/<int:center_id>/available-families', methods=['GET'])
+@role_required('admin', 'lgu_personnel')
+def get_center_available_families(center_id):
+    center = EvacuationCenter.query.get_or_404(center_id)
+
+    assigned_family_ids = (
+        db.session.query(Resident.family_id)
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+        .filter(Resident.family_id.is_not(None))
+        .distinct()
+        .all()
+    )
+    assigned_ids = [row[0] for row in assigned_family_ids]
+
+    linked_barangay_ids = [link.barangay_id for link in center.barangay_links] if center.barangay_links else []
+
+    query = Family.query
+    if linked_barangay_ids:
+        query = query.filter(Family.barangay_id.in_(linked_barangay_ids))
+    if assigned_ids:
+        query = query.filter(~Family.id.in_(assigned_ids))
+
+    unassigned_families = query.order_by(Family.head_name.asc()).all()
+
+    result = []
+    for fam in unassigned_families:
+        residents = Resident.query.filter_by(family_id=fam.id).all()
+        member_count = len(residents) if residents else (fam.member_count or 1)
+        address = next((r.address for r in residents if r.address), None)
+        contact = fam.contact_number or next((r.contact_number for r in residents if r.contact_number), None)
+        result.append({
+            "id": fam.id,
+            "family_id": fam.id,
+            "family_code": fam.family_code,
+            "household_head_name": fam.head_name,
+            "head_name": fam.head_name,
+            "barangay": fam.barangay.name if fam.barangay else None,
+            "barangay_id": fam.barangay_id,
+            "address": address,
+            "contact_number": contact,
+            "family_members": member_count,
+            "member_count": member_count,
+            "evacuation_status": "Unassigned",
+            "assignment_status": "Unassigned"
+        })
+
+    return jsonify(result), 200
 
     return jsonify({
         "message": f"Evacuation center '{center.name}' deactivated safely.",

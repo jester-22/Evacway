@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap");
+/* Fonts are loaded globally via design-system.css (main.jsx). No duplicate import here. */
 
 /* ==========================================================================
    1. DESIGN TOKENS (:root)
@@ -190,19 +190,15 @@
 .ew-btn-primary {
   min-height: 44px;
   padding: 0 24px;
-  background: linear-gradient(180deg, #1E62D0 0%, #0F3E8E 100%);
+  background: var(--brand);
   color: #FFFFFF;
-  border: 1.5px solid rgba(96, 165, 250, 0.55);
-  box-shadow:
-    0 10px 24px rgba(21, 79, 178, 0.42),
-    inset 0 1px 1px rgba(255, 255, 255, 0.35);
+  border: 1.5px solid var(--brand-border, #bfdbfe);
+  box-shadow: var(--shadow-md);
 }
 
 .ew-btn-primary:hover {
-  background: linear-gradient(180deg, #256CE0 0%, #1248A3 100%);
-  box-shadow:
-    0 14px 30px rgba(21, 79, 178, 0.52),
-    inset 0 1px 1px rgba(255, 255, 255, 0.45);
+  background: var(--brand-hover);
+  box-shadow: var(--shadow-lg);
   transform: translateY(-1px);
 }
 
@@ -217,19 +213,15 @@
   min-height: 36px;
   padding: 0 18px;
   font-size: 0.84375rem; /* 13.5px */
-  background: linear-gradient(180deg, #1854B8 0%, #0D357A 100%);
+  background: var(--brand);
   color: #FFFFFF;
-  border: 1.5px solid rgba(96, 165, 250, 0.5);
-  box-shadow:
-    0 8px 20px rgba(18, 67, 152, 0.38),
-    inset 0 1px 1px rgba(255, 255, 255, 0.3);
+  border: 1.5px solid var(--brand-border, #bfdbfe);
+  box-shadow: var(--shadow-sm);
 }
 
 .ew-btn-login-pill:hover {
-  background: linear-gradient(180deg, #1E62D0 0%, #114092 100%);
-  box-shadow:
-    0 10px 24px rgba(18, 67, 152, 0.48),
-    inset 0 1px 1px rgba(255, 255, 255, 0.4);
+  background: var(--brand-hover);
+  box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
 
@@ -558,10 +550,6 @@
 .ew-key {
   position: relative;
   background-color: var(--ew-paper);
-  background-image:
-    linear-gradient(to right, rgba(184, 203, 227, 0.25) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(184, 203, 227, 0.25) 1px, transparent 1px);
-  background-size: 48px 48px;
   border-bottom: 1px solid var(--ew-rule);
   padding: 72px 0;
 }
@@ -610,7 +598,7 @@
   width: 48px;
   height: 20px;
   border-radius: 999px;
-  background: repeating-linear-gradient(42deg, rgba(224, 109, 59, 0.45) 0 2px, rgba(251, 146, 60, 0.14) 2px 6px);
+  background: var(--flood-bg, #f0f9ff);
   border: 1.6px solid var(--flood);
 }
 
@@ -618,7 +606,7 @@
   width: 48px;
   height: 20px;
   border-radius: 12px 6px 12px 6px;
-  background: repeating-linear-gradient(42deg, rgba(234, 88, 12, 0.55) 0 2px, rgba(251, 146, 60, 0.16) 2px 6px);
+  background: var(--slide-bg, #fefce8);
   border: 1.6px solid var(--slide);
 }
 
@@ -626,7 +614,7 @@
   width: 48px;
   height: 5px;
   margin: 10px 0 20px;
-  background: repeating-linear-gradient(90deg, var(--alert) 0 7px, transparent 7px 12px);
+  background: var(--alert);
 }
 
 .ew-sw-center {
@@ -634,7 +622,7 @@
   height: 24px;
   margin-bottom: 10px;
   border-radius: 50%;
-  background: #1D58C8;
+  background: var(--brand);
   border: 2.5px solid #FFFFFF;
   box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.28);
 }
@@ -644,7 +632,7 @@
   height: 5px;
   margin: 10px 0 20px;
   border-radius: 999px;
-  background: var(--ew-route-grad);
+  background: var(--brand);
   box-shadow: 0 2px 8px rgba(37, 99, 235, 0.45);
 }
 

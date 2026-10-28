@@ -41,9 +41,19 @@ def philippines_now():
 
 
 # ---------------------------------------------------------
+# BASE MODEL (typed keyword constructor for static analyzers)
+# ---------------------------------------------------------
+class BaseModel(db.Model):
+    __abstract__ = True
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+# ---------------------------------------------------------
 # USERS
 # ---------------------------------------------------------
-class User(db.Model):
+class User(BaseModel):
     __tablename__ = 'users'
 
     id = db.Column(
@@ -108,7 +118,7 @@ class User(db.Model):
 # ---------------------------------------------------------
 # HAZARD ZONES
 # ---------------------------------------------------------
-class HazardZone(db.Model):
+class HazardZone(BaseModel):
     __tablename__ = 'hazard_zones'
 
     id = db.Column(
@@ -162,7 +172,7 @@ class HazardZone(db.Model):
 #
 # Barangay relationship is many-to-many through CenterBarangay.
 # ---------------------------------------------------------
-class EvacuationCenter(db.Model):
+class EvacuationCenter(BaseModel):
     __tablename__ = 'evacuation_centers'
 
     id = db.Column(
@@ -198,6 +208,18 @@ class EvacuationCenter(db.Model):
     is_active = db.Column(
         db.Boolean,
         default=True
+    )
+
+    center_type = db.Column(
+        db.String(50),
+        nullable=False,
+        default='campus',
+        server_default='campus'
+    )
+
+    owner_name = db.Column(
+        db.String(150),
+        nullable=True
     )
 
     # Can be NULL until center is placed on map.
@@ -264,6 +286,8 @@ class EvacuationCenter(db.Model):
             "barangay_ids": [item["id"] for item in barangays],
             "barangay_id": barangays[0]["id"] if barangays else None,
             "capacity": self.capacity,
+            "center_type": self.center_type or "campus",
+            "owner_name": self.owner_name,
             "building_material": self.building_material,
             "accessibility_notes": self.accessibility_notes,
             "hazard_exposure_score": self.hazard_exposure_score,
@@ -281,7 +305,7 @@ class EvacuationCenter(db.Model):
         return f"<EvacuationCenter {self.name}>"
 
 
-class CenterBarangay(db.Model):
+class CenterBarangay(BaseModel):
     __tablename__ = 'center_barangays'
 
     center_id = db.Column(
@@ -316,7 +340,7 @@ class CenterBarangay(db.Model):
 # ---------------------------------------------------------
 # ROAD SEGMENTS
 # ---------------------------------------------------------
-class RoadSegment(db.Model):
+class RoadSegment(BaseModel):
     __tablename__ = 'road_segments'
 
     id = db.Column(
@@ -360,7 +384,7 @@ class RoadSegment(db.Model):
 # ---------------------------------------------------------
 # HAZARD REPORTS
 # ---------------------------------------------------------
-class HazardReport(db.Model):
+class HazardReport(BaseModel):
     __tablename__ = 'hazard_reports'
 
     id = db.Column(
@@ -419,7 +443,7 @@ class HazardReport(db.Model):
 # ---------------------------------------------------------
 # SYSTEM LOGS
 # ---------------------------------------------------------
-class SystemLog(db.Model):
+class SystemLog(BaseModel):
     __tablename__ = 'system_logs'
 
     id = db.Column(
@@ -443,6 +467,9 @@ class SystemLog(db.Model):
         default=philippines_now
     )
 
+    def __init__(self, user_id=None, action=None, timestamp=None, **kwargs):
+        super().__init__(user_id=user_id, action=action, timestamp=timestamp, **kwargs)
+
     def __repr__(self):
         return f"<SystemLog {self.action} @ {self.timestamp}>"
 
@@ -450,7 +477,7 @@ class SystemLog(db.Model):
 # ---------------------------------------------------------
 # STAFF NOTIFICATIONS
 # ---------------------------------------------------------
-class StaffNotification(db.Model):
+class StaffNotification(BaseModel):
     __tablename__ = 'staff_notifications'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -468,7 +495,7 @@ class StaffNotification(db.Model):
 # ---------------------------------------------------------
 # RESIDENT RESCUE REQUESTS
 # ---------------------------------------------------------
-class RescueRequest(db.Model):
+class RescueRequest(BaseModel):
     __tablename__ = 'rescue_requests'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -488,7 +515,7 @@ class RescueRequest(db.Model):
 # ---------------------------------------------------------
 # WEB PUSH SUBSCRIPTIONS
 # ---------------------------------------------------------
-class PushSubscription(db.Model):
+class PushSubscription(BaseModel):
     __tablename__ = 'push_subscriptions'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -502,7 +529,7 @@ class PushSubscription(db.Model):
 # ---------------------------------------------------------
 # BARANGAYS
 # ---------------------------------------------------------
-class Barangay(db.Model):
+class Barangay(BaseModel):
     __tablename__ = 'barangays'
 
     id = db.Column(
@@ -539,19 +566,59 @@ class Barangay(db.Model):
         lazy=True
     )
 
+    def __init__(self, name=None, population=0, geom=None, **kwargs):
+        super().__init__(name=name, population=population, geom=geom, **kwargs)
+
     def __repr__(self):
         return f"<Barangay {self.name}>"
 
 
 # ---------------------------------------------------------
+# ROSTER YEARS
+# ---------------------------------------------------------
+class RosterYear(BaseModel):
+    __tablename__ = 'roster_years'
+
+    id = db.Column(db.Integer, primary_key=True)
+    year = db.Column(db.Integer, unique=True, nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "year": self.year,
+            "is_active": self.is_active,
+            "created_at": (
+                self.created_at.isoformat()
+                if self.created_at
+                else None
+            )
+        }
+
+    def __repr__(self):
+        return f"<RosterYear {self.year} (active={self.is_active})>"
+
+
+# ---------------------------------------------------------
 # FAMILIES
 # ---------------------------------------------------------
-class Family(db.Model):
+class Family(BaseModel):
     __tablename__ = 'families'
+    __table_args__ = (
+        db.UniqueConstraint('family_code', 'roster_year_id', name='uq_families_code_roster_year'),
+    )
 
     id = db.Column(
         db.Integer,
         primary_key=True
+    )
+
+    roster_year_id = db.Column(
+        db.Integer,
+        db.ForeignKey('roster_years.id'),
+        nullable=False,
+        index=True
     )
 
     barangay_id = db.Column(
@@ -594,6 +661,11 @@ class Family(db.Model):
         onupdate=philippines_now
     )
 
+    roster_year = db.relationship(
+        'RosterYear',
+        backref=db.backref('families', lazy=True)
+    )
+
     residents = db.relationship(
         'Resident',
         backref='family',
@@ -603,6 +675,8 @@ class Family(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
+            "roster_year_id": self.roster_year_id,
+            "roster_year": self.roster_year.year if self.roster_year else None,
             "barangay_id": self.barangay_id,
             "family_code": self.family_code,
             "head_name": self.head_name,
@@ -630,7 +704,7 @@ class Family(db.Model):
 #
 # One Excel row = one resident.
 # ---------------------------------------------------------
-class Resident(db.Model):
+class Resident(BaseModel):
     __tablename__ = 'residents'
 
     id = db.Column(
@@ -641,6 +715,12 @@ class Resident(db.Model):
     family_id = db.Column(
         db.Integer,
         db.ForeignKey('families.id'),
+        nullable=True
+    )
+
+    roster_year_id = db.Column(
+        db.Integer,
+        db.ForeignKey('roster_years.id'),
         nullable=True
     )
 
@@ -779,6 +859,8 @@ class Resident(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
+            "roster_year_id": self.family.roster_year_id if self.family else None,
+            "roster_year": self.family.roster_year.year if (self.family and self.family.roster_year) else None,
             "family_id": self.family_id,
 
             "first_name": self.first_name,
@@ -844,12 +926,78 @@ class Resident(db.Model):
 
 
 # ---------------------------------------------------------
+# EVACUATION CENTER BUILDINGS
+#
+# Physical buildings within an evacuation center, stored as polygons.
+# Links to one evacuation center and zero or more rooms.
+# ---------------------------------------------------------
+class EvacuationCenterBuilding(BaseModel):
+    __tablename__ = 'evacuation_center_buildings'
+
+    id = db.Column(
+        db.Integer,
+        primary_key=True
+    )
+
+    evacuation_center_id = db.Column(
+        db.Integer,
+        db.ForeignKey('evacuation_centers.id'),
+        nullable=False,
+        index=True
+    )
+
+    name = db.Column(
+        db.String(100),
+        nullable=True
+    )
+
+    geom = db.Column(
+        Geometry('POLYGON', srid=4326),
+        nullable=False
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        default=philippines_now
+    )
+
+    updated_at = db.Column(
+        db.DateTime,
+        default=philippines_now,
+        onupdate=philippines_now
+    )
+
+    evacuation_center = db.relationship(
+        'EvacuationCenter',
+        backref=db.backref('buildings', cascade='all, delete-orphan', lazy=True)
+    )
+
+    rooms = db.relationship(
+        'EvacuationCenterRoom',
+        backref='building',
+        lazy=True
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "evacuation_center_id": self.evacuation_center_id,
+            "name": self.name,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<EvacuationCenterBuilding {self.id}: {self.name}>"
+
+
+# ---------------------------------------------------------
 # EVACUATION CENTER ROOMS
 #
 # A room can be imported from Excel before its map
 # location is placed.
 # ---------------------------------------------------------
-class EvacuationCenterRoom(db.Model):
+class EvacuationCenterRoom(BaseModel):
     __tablename__ = 'evacuation_center_rooms'
 
     id = db.Column(
@@ -861,6 +1009,13 @@ class EvacuationCenterRoom(db.Model):
         db.Integer,
         db.ForeignKey('evacuation_centers.id'),
         nullable=False
+    )
+
+    building_id = db.Column(
+        db.Integer,
+        db.ForeignKey('evacuation_center_buildings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True
     )
 
     room_number = db.Column(
@@ -907,6 +1062,12 @@ class EvacuationCenterRoom(db.Model):
         return {
             "id": self.id,
             "evacuation_center_id": self.evacuation_center_id,
+            "building_id": self.building_id,
+            "building_name": (
+                (self.building.name or f"Building #{self.building.id}")
+                if self.building is not None
+                else None
+            ),
             "room_number": self.room_number,
             "capacity": self.capacity,
             "is_active": self.is_active,
@@ -939,7 +1100,7 @@ class EvacuationCenterRoom(db.Model):
 #
 # One resident/family member can have one room assignment.
 # ---------------------------------------------------------
-class EvacuationAssignment(db.Model):
+class EvacuationAssignment(BaseModel):
     __tablename__ = 'evacuation_assignments'
 
     id = db.Column(
@@ -954,10 +1115,17 @@ class EvacuationAssignment(db.Model):
         unique=True
     )
 
+    evacuation_center_id = db.Column(
+        db.Integer,
+        db.ForeignKey('evacuation_centers.id', ondelete='CASCADE'),
+        nullable=True,
+        index=True
+    )
+
     room_id = db.Column(
         db.Integer,
         db.ForeignKey('evacuation_center_rooms.id'),
-        nullable=False
+        nullable=True
     )
 
     assigned_at = db.Column(
@@ -965,21 +1133,41 @@ class EvacuationAssignment(db.Model):
         default=philippines_now
     )
 
+    checked_in_at = db.Column(
+        db.DateTime,
+        nullable=True,
+        default=None
+    )
+
+    evacuation_center = db.relationship(
+        'EvacuationCenter',
+        backref=db.backref('direct_assignments', cascade='all, delete-orphan', lazy=True),
+        foreign_keys=[evacuation_center_id]
+    )
+
     def to_dict(self):
         return {
             "id": self.id,
             "resident_id": self.resident_id,
+            "evacuation_center_id": self.evacuation_center_id,
             "room_id": self.room_id,
             "assigned_at": (
                 self.assigned_at.isoformat()
                 if self.assigned_at
                 else None
-            )
+            ),
+            "checked_in_at": (
+                self.checked_in_at.isoformat()
+                if self.checked_in_at
+                else None
+            ),
+            "is_checked_in": self.checked_in_at is not None,
         }
 
     def __repr__(self):
         return (
             f"<EvacuationAssignment "
             f"resident={self.resident_id} "
+            f"center={self.evacuation_center_id} "
             f"room={self.room_id}>"
         )

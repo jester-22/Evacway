@@ -22,26 +22,9 @@ import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
 import { queryKeys } from "../../hooks/useEvacuationQueries";
 import { useQueryClient } from "@tanstack/react-query";
-import Sidebar from "../../components/Sidebar";
+import { useIsMobile } from "../../hooks/useIsMobile";
+import Sidebar from "../../components/Sidebar/Sidebar";
 import "./ManageProfile.css";
-
-const MOBILE_BREAKPOINT = 1024;
-
-function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== "undefined" ? window.innerWidth < breakpoint : false
-  );
-
-  useEffect(() => {
-    function handleResize() {
-      setIsMobile(window.innerWidth < breakpoint);
-    }
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [breakpoint]);
-
-  return isMobile;
-}
 
 const PASSWORD_RULES = [
   { id: "length", label: "At least 8 characters", test: (p) => p.length >= 8 },
@@ -355,14 +338,14 @@ export default function ManageProfile() {
           </div>
 
           {/* IDENTITY CARD HEADER */}
-          <section className="profile-identity-card" aria-label="Account Identity">
+          <section className="profile-identity-card ds-card" aria-label="Account Identity">
             <div className="profile-identity-avatar" aria-hidden="true">
               <span>{initials}</span>
             </div>
             <div className="profile-identity-info">
               <div className="profile-identity-name-row">
                 <h2 className="profile-identity-name">{user?.name || "Officer"}</h2>
-                <span className={`profile-role-badge ${isAdmin ? "is-admin" : "is-lgu"}`}>
+                <span className={`ds-badge ds-badge--neutral profile-role-badge ${isAdmin ? "is-admin" : "is-lgu"}`}>
                   <FontAwesomeIcon icon={faShieldHalved} className="profile-role-icon" />
                   {isAdmin ? "Administrator" : "LGU Personnel"}
                 </span>
@@ -387,7 +370,7 @@ export default function ManageProfile() {
                 <button
                   type="button"
                   onClick={handleStartEdit}
-                  className="profile-btn profile-btn-secondary"
+                  className="profile-btn profile-btn-secondary ds-btn ds-btn--secondary"
                   aria-label="Edit personal information"
                 >
                   <FontAwesomeIcon icon={faPen} />
@@ -397,14 +380,14 @@ export default function ManageProfile() {
             </div>
 
             {profileSuccessMsg && (
-              <div className="profile-alert is-success" role="status">
+              <div className="profile-alert is-success ds-banner ds-banner--success" role="status">
                 <FontAwesomeIcon icon={faCircleCheck} />
                 <span>{profileSuccessMsg}</span>
               </div>
             )}
 
             {profileErrorMsg && (
-              <div className="profile-alert is-error" role="alert">
+              <div className="profile-alert is-error ds-banner ds-banner--danger" role="alert">
                 <FontAwesomeIcon icon={faTriangleExclamation} />
                 <span>{profileErrorMsg}</span>
               </div>
@@ -519,7 +502,7 @@ export default function ManageProfile() {
                     type="button"
                     onClick={handleCancelEdit}
                     disabled={profileSaving}
-                    className="profile-btn profile-btn-secondary"
+                    className="profile-btn profile-btn-secondary ds-btn ds-btn--secondary"
                   >
                     Cancel
                   </button>
@@ -536,7 +519,7 @@ export default function ManageProfile() {
           </section>
 
           {/* 2. ACCOUNT DETAILS SECTION (READ-ONLY) */}
-          <section className="profile-card" aria-labelledby="account-details-heading">
+          <section className="profile-card ds-card" aria-labelledby="account-details-heading">
             <div className="profile-card-header">
               <div>
                 <h2 id="account-details-heading" className="profile-card-title">
@@ -577,7 +560,7 @@ export default function ManageProfile() {
           </section>
 
           {/* 3. PASSWORD & SECURITY SECTION */}
-          <section className="profile-card" aria-labelledby="password-heading">
+          <section className="profile-card ds-card" aria-labelledby="password-heading">
             <div className="profile-card-header">
               <div>
                 <h2 id="password-heading" className="profile-card-title">
@@ -590,14 +573,14 @@ export default function ManageProfile() {
             </div>
 
             {passwordSuccessMsg && (
-              <div className="profile-alert is-success" role="status">
+              <div className="profile-alert is-success ds-banner ds-banner--success" role="status">
                 <FontAwesomeIcon icon={faCircleCheck} />
                 <span>{passwordSuccessMsg}</span>
               </div>
             )}
 
             {passwordErrorMsg && (
-              <div className="profile-alert is-error" role="alert">
+              <div className="profile-alert is-error ds-banner ds-banner--danger" role="alert">
                 <FontAwesomeIcon icon={faTriangleExclamation} />
                 <span>{passwordErrorMsg}</span>
               </div>
@@ -724,7 +707,7 @@ export default function ManageProfile() {
                 <button
                   type="submit"
                   disabled={passwordSaving || !passwordForm.current || !passwordForm.next}
-                  className="profile-btn profile-btn-primary"
+                  className="profile-btn profile-btn-primary ds-btn ds-btn--primary"
                 >
                   <FontAwesomeIcon icon={faLock} />
                   <span>{passwordSaving ? "Updating password..." : "Update Password"}</span>
@@ -756,7 +739,7 @@ export default function ManageProfile() {
                 type="button"
                 onClick={handleRequestReset}
                 disabled={resetSending || resetCooldown > 0}
-                className="profile-btn profile-btn-secondary shrink-0"
+                className="profile-btn profile-btn-secondary ds-btn ds-btn--secondary shrink-0"
               >
                 <FontAwesomeIcon icon={faPaperPlane} />
                 <span>

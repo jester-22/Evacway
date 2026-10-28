@@ -6,40 +6,16 @@ import { api } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { queryKeys, useEvacuationCenters, useHazardZones, useLogs, useNotifications } from "../../hooks/useEvacuationQueries";
 import { useQueryClient } from "@tanstack/react-query";
+import { useIsMobile } from "../../hooks/useIsMobile";
 
-import Sidebar from "../../components/Sidebar";
-import EvacuationCenterManager from "../../components/EvacuationCenterManager";
-import HazardReportReview from "../../components/HazardReportReview";
-import BarangayManager from "../../components/BarangayManager";
-import RescueRequestManager from "../../components/RescueRequestManager";
-import SystemAndLogs from "../../components/SystemAndLogs";
-
-const MOBILE_BREAKPOINT = 1024;
-
-function useIsMobile(breakpoint = MOBILE_BREAKPOINT) {
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== "undefined"
-      ? window.innerWidth < breakpoint
-      : false
-  );
-
-  useEffect(() => {
-    function handleResize() {
-      setIsMobile(window.innerWidth < breakpoint);
-    }
-
-    window.addEventListener("resize", handleResize);
-
-    return () => {
-      window.removeEventListener("resize", handleResize);
-    };
-  }, [breakpoint]);
-
-  return isMobile;
-}
+import Sidebar from "../../components/Sidebar/Sidebar";
+import EvacuationCenterManager from "../../components/EvacuationCenter/EvacuationCenterManager";
+import HazardReportReview from "../../components/HazardReportReview/HazardReportReview";
+import BarangayManager from "../../components/BarangayManager/BarangayManager";
+import RescueRequestManager from "../../components/RescueRequestManager/RescueRequestManager";
+import SystemAndLogs from "../../components/ActivityLogs/SystemAndLogs";
 
 function LguDashboard() {
-  const location = useLocation();
   const requestedTab = new URLSearchParams(location.search).get("tab");
   const notificationId = new URLSearchParams(location.search).get("notificationId");
   const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "settings"].includes(requestedTab) ? requestedTab : "centers");

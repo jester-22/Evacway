@@ -1,10 +1,12 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func
 from collections import defaultdict
+from datetime import date
 
 from models import (
     db,
     EvacuationCenter,
+    EvacuationCenterBuilding,
     EvacuationCenterRoom,
     CenterBarangay,
     Barangay,
@@ -52,15 +54,22 @@ def get_rooms(center_id):
     result = []
 
     for room in rooms:
-        occupied = EvacuationAssignment.query.filter_by(
+        assigned = EvacuationAssignment.query.filter_by(
             room_id=room.id
+        ).count()
+        occupied = EvacuationAssignment.query.filter(
+            EvacuationAssignment.room_id == room.id,
+            EvacuationAssignment.checked_in_at.isnot(None)
         ).count()
 
         room_data = room.to_dict()
         room_data["occupied"] = occupied
-        room_data["available"] = max(room.capacity - occupied, 0)
-        is_assigned = occupied > 0
+        room_data["assigned"] = assigned
+        room_data["available"] = max((room.capacity or 0) - occupied, 0)
+        room_data["unassigned"] = max((room.capacity or 0) - assigned, 0)
+        is_assigned = assigned > 0
         room_data["is_assigned"] = is_assigned
+        room_data["is_fully_assigned"] = bool((room.capacity or 0) > 0 and assigned >= (room.capacity or 0))
         room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
         # Make sure coordinates are returned as numbers for Mapbox
@@ -171,8 +180,22 @@ def create_room(center_id):
             "error": f"A room with number '{room_number}' already exists in this center"
         }), 400
 
+    # Optional building_id
+    parsed_building_id = None
+    raw_building_id = data.get('building_id')
+    if raw_building_id is not None and str(raw_building_id).strip() != "":
+        try:
+            b_id = int(raw_building_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid building_id"}), 400
+        building = db.session.get(EvacuationCenterBuilding, b_id)
+        if not building or building.evacuation_center_id != center_id:
+            return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
+        parsed_building_id = building.id
+
     room = EvacuationCenterRoom(
         evacuation_center_id=center_id,
+        building_id=parsed_building_id,
         room_number=room_number,
         capacity=capacity,
         latitude=parsed_lat,
@@ -194,7 +217,9 @@ def create_room(center_id):
 
     room_data = room.to_dict()
     room_data["occupied"] = 0
+    room_data["assigned"] = 0
     room_data["available"] = capacity
+    room_data["unassigned"] = capacity
 
     return jsonify({
         "message": "Room added successfully",
@@ -217,7 +242,11 @@ def update_room(room_id):
 
     data = request.get_json() or {}
 
-    current_occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    current_assigned = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    current_occupied = EvacuationAssignment.query.filter(
+        EvacuationAssignment.room_id == room.id,
+        EvacuationAssignment.checked_in_at.isnot(None)
+    ).count()
 
     if 'capacity' in data:
         cap = data.get('capacity')
@@ -227,9 +256,9 @@ def update_room(room_id):
             parsed_cap = int(cap)
             if parsed_cap <= 0:
                 return jsonify({"error": "Room capacity must be greater than 0"}), 400
-            if parsed_cap < current_occupied:
+            if parsed_cap < current_assigned:
                 return jsonify({
-                    "error": f"Room capacity ({parsed_cap}) cannot be less than current occupancy ({current_occupied})"
+                    "error": f"Room capacity ({parsed_cap}) cannot be less than current assigned count ({current_assigned})"
                 }), 400
             room.capacity = parsed_cap
         except (TypeError, ValueError):
@@ -249,6 +278,20 @@ def update_room(room_id):
         if duplicate:
             return jsonify({"error": f"A room with number '{num}' already exists in this center"}), 400
         room.room_number = num
+
+    if 'building_id' in data:
+        raw_building_id = data.get('building_id')
+        if raw_building_id is None or str(raw_building_id).strip() == "":
+            room.building_id = None
+        else:
+            try:
+                b_id = int(raw_building_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid building_id"}), 400
+            building = db.session.get(EvacuationCenterBuilding, b_id)
+            if not building or building.evacuation_center_id != room.evacuation_center_id:
+                return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
+            room.building_id = building.id
 
     if 'latitude' in data and 'longitude' in data:
         lat = data.get('latitude')
@@ -274,11 +317,14 @@ def update_room(room_id):
     )
     db.session.commit()
 
-    is_assigned = current_occupied > 0
+    is_assigned = current_assigned > 0
     room_data = room.to_dict()
     room_data["occupied"] = current_occupied
+    room_data["assigned"] = current_assigned
     room_data["available"] = max(room.capacity - current_occupied, 0)
+    room_data["unassigned"] = max(room.capacity - current_assigned, 0)
     room_data["is_assigned"] = is_assigned
+    room_data["is_fully_assigned"] = bool(room.capacity > 0 and current_assigned >= room.capacity)
     room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
     return jsonify({
@@ -303,6 +349,40 @@ def update_room_location(room_id):
     data = request.get_json() or {}
     latitude = data.get("latitude")
     longitude = data.get("longitude")
+
+    if latitude is None and longitude is None:
+        center = EvacuationCenter.query.get(room.evacuation_center_id)
+        room.latitude = None
+        room.longitude = None
+
+        user_id = get_jwt_identity()
+        db.session.add(
+            SystemLog(
+                user_id=user_id,
+                action=f"Removed room {room.room_number} location in center: {center.name if center else room.evacuation_center_id}"
+            )
+        )
+        db.session.commit()
+
+        assigned = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+        occupied = EvacuationAssignment.query.filter(
+            EvacuationAssignment.room_id == room.id,
+            EvacuationAssignment.checked_in_at.isnot(None)
+        ).count()
+        is_assigned = assigned > 0
+        room_data = room.to_dict()
+        room_data["occupied"] = occupied
+        room_data["assigned"] = assigned
+        room_data["available"] = max(room.capacity - occupied, 0)
+        room_data["unassigned"] = max(room.capacity - assigned, 0)
+        room_data["is_assigned"] = is_assigned
+        room_data["is_fully_assigned"] = bool(room.capacity > 0 and assigned >= room.capacity)
+        room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
+
+        return jsonify({
+            "message": "Room location removed successfully",
+            "room": room_data
+        }), 200
 
     if latitude is None or longitude is None:
         return jsonify({"error": "Room location is required"}), 400
@@ -332,12 +412,19 @@ def update_room_location(room_id):
     )
     db.session.commit()
 
-    occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
-    is_assigned = occupied > 0
+    assigned = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    occupied = EvacuationAssignment.query.filter(
+        EvacuationAssignment.room_id == room.id,
+        EvacuationAssignment.checked_in_at.isnot(None)
+    ).count()
+    is_assigned = assigned > 0
     room_data = room.to_dict()
     room_data["occupied"] = occupied
+    room_data["assigned"] = assigned
     room_data["available"] = max(room.capacity - occupied, 0)
+    room_data["unassigned"] = max(room.capacity - assigned, 0)
     room_data["is_assigned"] = is_assigned
+    room_data["is_fully_assigned"] = bool(room.capacity > 0 and assigned >= room.capacity)
     room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
     return jsonify({
@@ -373,12 +460,19 @@ def toggle_room_active(room_id):
     db.session.add(SystemLog(user_id=user_id, action=f"{action} room: {room.room_number} (ID: {room.id})"))
     db.session.commit()
 
-    occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
-    is_assigned = occupied > 0
+    assigned = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    occupied = EvacuationAssignment.query.filter(
+        EvacuationAssignment.room_id == room.id,
+        EvacuationAssignment.checked_in_at.isnot(None)
+    ).count()
+    is_assigned = assigned > 0
     room_data = room.to_dict()
     room_data["occupied"] = occupied
+    room_data["assigned"] = assigned
     room_data["available"] = max(room.capacity - occupied, 0)
+    room_data["unassigned"] = max(room.capacity - assigned, 0)
     room_data["is_assigned"] = is_assigned
+    room_data["is_fully_assigned"] = bool(room.capacity > 0 and assigned >= room.capacity)
     room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
     return jsonify(room_data), 200
@@ -431,8 +525,8 @@ def get_room_families(room_id):
 
     assignments = EvacuationAssignment.query.filter_by(room_id=room_id).all()
 
-    # Total occupied individuals is the exact count of assignments in this room
-    total_individuals = len(assignments)
+    total_assigned = len(assignments)
+    total_occupied = sum(1 for a in assignments if a.checked_in_at is not None)
 
     # Group by family
     family_members_map = defaultdict(list)
@@ -441,6 +535,35 @@ def get_room_families(room_id):
         if not resident:
             continue
         family_id = resident.family_id
+
+        age = None
+        if resident.date_of_birth:
+            today = date.today()
+            age = today.year - resident.date_of_birth.year - (
+                (today.month, today.day) < (resident.date_of_birth.month, resident.date_of_birth.day)
+            )
+
+        is_senior = bool(age is not None and age >= 60)
+        is_infant = bool(age is not None and age <= 2)
+        is_pwd = bool(resident.is_pwd)
+        is_pregnant = bool(resident.is_pregnant)
+        is_lactating = bool(resident.is_lactating)
+        is_solo_parent = bool(resident.is_solo_parent)
+
+        member_flags = []
+        if is_pwd:
+            member_flags.append("PWD")
+        if is_senior:
+            member_flags.append("Senior")
+        if is_infant:
+            member_flags.append("Infant")
+        if is_pregnant:
+            member_flags.append("Pregnant")
+        if is_lactating:
+            member_flags.append("Lactating")
+        if is_solo_parent:
+            member_flags.append("Solo Parent")
+
         family_members_map[family_id].append({
             "assignment_id": assignment.id,
             "resident_id": resident.id,
@@ -452,11 +575,34 @@ def get_room_families(room_id):
             "address": resident.address,
             "contact_number": resident.contact_number,
             "vulnerable_members": resident.vulnerable_members,
-            "remarks": resident.remarks
+            "is_pwd": is_pwd,
+            "is_pregnant": is_pregnant,
+            "is_lactating": is_lactating,
+            "is_solo_parent": is_solo_parent,
+            "is_senior": is_senior,
+            "is_infant": is_infant,
+            "age": age,
+            "special_needs": member_flags,
+            "remarks": resident.remarks,
+            "is_checked_in": assignment.checked_in_at is not None,
+            "checked_in_at": assignment.checked_in_at.isoformat() if assignment.checked_in_at else None,
+            "checkin_status": "Checked in" if assignment.checked_in_at is not None else "Not yet arrived",
         })
+
+    def extract_family_special_needs(members_list):
+        tags = []
+        for m in members_list:
+            for flag in m.get("special_needs", []):
+                if flag not in tags:
+                    tags.append(flag)
+        return tags
 
     families = []
     for family_id, residents_in_room in family_members_map.items():
+        fam_flags = extract_family_special_needs(residents_in_room)
+        checked_in_mems = sum(1 for m in residents_in_room if m.get("is_checked_in"))
+        is_fam_checked_in = checked_in_mems > 0
+        checkin_status = "Checked in" if is_fam_checked_in else "Not yet arrived"
         if family_id:
             fam = Family.query.get(family_id)
             if fam:
@@ -471,7 +617,11 @@ def get_room_families(room_id):
                     "contact_number": fam.contact_number or residents_in_room[0]["contact_number"],
                     "family_members": len(residents_in_room),
                     "assigned_members": len(residents_in_room),
+                    "checked_in_members": checked_in_mems,
+                    "is_checked_in": is_fam_checked_in,
+                    "checkin_status": checkin_status,
                     "total_members": fam.member_count or len(residents_in_room),
+                    "special_needs": fam_flags,
                     "evacuation_status": "Assigned",
                     "assignment_status": "Assigned",
                     "members": residents_in_room
@@ -491,25 +641,34 @@ def get_room_families(room_id):
             "contact_number": representative["contact_number"],
             "family_members": len(residents_in_room),
             "assigned_members": len(residents_in_room),
+            "checked_in_members": checked_in_mems,
+            "is_checked_in": is_fam_checked_in,
+            "checkin_status": checkin_status,
             "total_members": len(residents_in_room),
+            "special_needs": fam_flags,
             "evacuation_status": "Assigned",
             "assignment_status": "Assigned",
             "members": residents_in_room
         })
 
     center = EvacuationCenter.query.get(room.evacuation_center_id)
-    is_assigned = total_individuals > 0
+    is_assigned = total_assigned > 0
 
     return jsonify({
         "room_id": room.id,
         "room_number": room.room_number,
+        "building_id": room.building_id,
+        "building_name": (room.building.name or f"Building #{room.building.id}") if room.building else None,
         "center_id": room.evacuation_center_id,
         "center_name": center.name if center else "Unknown",
         "capacity": room.capacity,
-        "occupied": total_individuals,
-        "available": max(room.capacity - total_individuals, 0),
+        "occupied": total_occupied,
+        "assigned": total_assigned,
+        "available": max((room.capacity or 0) - total_occupied, 0),
+        "unassigned": max((room.capacity or 0) - total_assigned, 0),
         "is_active": room.is_active,
         "is_assigned": is_assigned,
+        "is_fully_assigned": bool((room.capacity or 0) > 0 and total_assigned >= (room.capacity or 0)),
         "assignment_status": "Assigned" if is_assigned else "Unassigned",
         "families": families
     })
@@ -733,18 +892,25 @@ def assign_families(room_id):
     )
     db.session.commit()
 
-    new_occupied = current_occupied + total_members_needed
-    is_assigned = new_occupied > 0
+    new_assigned = current_occupied + total_members_needed
+    current_checked_in = EvacuationAssignment.query.filter(
+        EvacuationAssignment.room_id == room.id,
+        EvacuationAssignment.checked_in_at.isnot(None)
+    ).count()
+    is_assigned = new_assigned > 0
 
     return jsonify({
         "message": "Families assigned successfully",
         "room_id": room.id,
         "families_assigned": len(families_to_assign),
         "total_members": total_members_needed,
-        "room_occupied": new_occupied,
+        "room_occupied": current_checked_in,
+        "room_assigned": new_assigned,
         "room_capacity": room.capacity,
-        "room_available": max(room.capacity - new_occupied, 0),
+        "room_available": max(room.capacity - current_checked_in, 0),
+        "room_unassigned": max(room.capacity - new_assigned, 0),
         "is_assigned": is_assigned,
+        "is_fully_assigned": bool(room.capacity > 0 and new_assigned >= room.capacity),
         "assignment_status": "Assigned" if is_assigned else "Unassigned"
     }), 201
 
@@ -823,13 +989,20 @@ def remove_family_from_room(room_id, resident_or_family_id):
     )
     db.session.commit()
 
-    current_occupied = EvacuationAssignment.query.filter_by(room_id=room.id).count()
-    is_assigned = current_occupied > 0
+    current_assigned = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+    current_occupied = EvacuationAssignment.query.filter(
+        EvacuationAssignment.room_id == room.id,
+        EvacuationAssignment.checked_in_at.isnot(None)
+    ).count()
+    is_assigned = current_assigned > 0
 
     return jsonify({
         "message": f"Family '{household_name}' unassigned from room successfully",
         "room_occupied": current_occupied,
+        "room_assigned": current_assigned,
         "room_available": max(room.capacity - current_occupied, 0),
+        "room_unassigned": max(room.capacity - current_assigned, 0),
         "is_assigned": is_assigned,
+        "is_fully_assigned": bool(room.capacity > 0 and current_assigned >= room.capacity),
         "assignment_status": "Assigned" if is_assigned else "Unassigned"
     }), 200

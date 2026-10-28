@@ -105,6 +105,7 @@
   --text-0: var(--ink);
   --text-1: var(--text);
   --text-2: var(--muted);
+  --ew-text-muted: var(--muted); /* 4.5:1 on canvas and white (§8) */
   --safe: var(--success);
   --safe-dim: var(--success-soft);
   --danger-dim: var(--danger-soft);
@@ -727,6 +728,48 @@ code, kbd, samp, pre {
   color: var(--danger);
 }
 
+/* Kebabs render buttons[role="menuitem"], not anchors — give them the same
+   target size and focus ring as the anchor menu items (§4.8 / §8). */
+.ds-menu > li > button[role="menuitem"],
+.ds-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--control-height);
+  padding: 0 var(--space-4);
+  background-color: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background-color var(--transition), color var(--transition);
+}
+.ds-menu > li > button[role="menuitem"]:hover,
+.ds-menu__item:hover {
+  background-color: var(--neutral-soft);
+  color: var(--ink);
+}
+.ds-menu > li > button[role="menuitem"]:focus-visible,
+.ds-menu__item:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+.ds-menu > li > button[role="menuitem"].ds-menu__item--danger,
+.ds-menu__item.ds-menu__item--danger {
+  color: var(--danger);
+}
+.ds-menu > li > button[role="menuitem"].ds-menu__item--danger:hover,
+.ds-menu__item.ds-menu__item--danger:hover {
+  background-color: var(--danger-soft);
+  color: var(--danger);
+}
+
 /* ==========================================================================
    KPI (.ds-kpi)
    ========================================================================== */
@@ -843,6 +886,10 @@ code, kbd, samp, pre {
   color: var(--brand);
   border-bottom-color: var(--brand);
   font-weight: var(--weight-semibold);
+}
+.ds-tab:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }
 
 /* ==========================================================================

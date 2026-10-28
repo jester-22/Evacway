@@ -1,7 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import { icon } from "@fortawesome/fontawesome-svg-core";
 import { faBan, faTriangleExclamation } from "@fortawesome/free-solid-svg-icons";
-import { createReportPopup } from "../components/mapReports";
+import { createReportPopup } from "../components/mapReports/mapReports";
 
 /**
  * Creates a GeoJSON circle polygon for accuracy circles or buffers.

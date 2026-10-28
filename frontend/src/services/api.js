@@ -164,6 +164,12 @@ export const api = {
       method: "DELETE",
     }),
 
+  patch: (path, body) =>
+    request(path.startsWith("/api") ? path : `/api${path}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
 
   // -------------------------------------------------------
   // HAZARD REPORTS
@@ -286,10 +292,14 @@ export const api = {
   // ROUTING
   // -------------------------------------------------------
 
-  getEvacuationRoute: (lat, lng) =>
+  getEvacuationRoute: (lat, lng, centerId = null) =>
     request(
-      `/api/evacuation-route?lat=${lat}&lng=${lng}`
+      `/api/evacuation-route?lat=${lat}&lng=${lng}${
+        centerId != null ? `&center_id=${centerId}` : ""
+      }`
     ),
+
+  getProblemEntrances: () => request("/api/routing/problem-entrances"),
 
 
   // -------------------------------------------------------
@@ -361,10 +371,15 @@ export const api = {
       `/api/rooms/${roomId}/families`
     ),
 
-  getAvailableFamilies: (roomId) =>
-    request(
-      `/api/rooms/${roomId}/available-families`
-    ),
+  getAvailableFamilies: (roomId, centerId) => {
+    if (roomId && roomId !== "all") {
+      return request(`/api/rooms/${roomId}/available-families`);
+    }
+    if (centerId) {
+      return request(`/api/evacuation-centers/${centerId}/available-families`);
+    }
+    return Promise.resolve([]);
+  },
 
   assignFamilies: (
     roomId,
@@ -520,6 +535,55 @@ export const api = {
     });
     return requestFile(`/api/families/export?${params.toString()}`);
   },
+
+  getRosterYears: () => request("/api/roster-years"),
+
+  // -------------------------------------------------------
+  // BUILDINGS & ROOM MAPPING
+  // -------------------------------------------------------
+
+  getCenterBuildings: (centerId) =>
+    request(`/api/evacuation-centers/${centerId}/buildings`),
+
+  createBuilding: (centerId, data) =>
+    request(`/api/evacuation-centers/${centerId}/buildings`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  updateBuilding: (buildingId, data) =>
+    request(`/api/buildings/${buildingId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  deleteBuilding: (buildingId) =>
+    request(`/api/buildings/${buildingId}`, {
+      method: "DELETE",
+    }),
+
+  suggestRoomsForBuildings: (centerId) =>
+    request(`/api/evacuation-centers/${centerId}/suggest-rooms`),
+
+  getBuildingDetails: (buildingId, params = {}) => {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, val]) => {
+      if (val !== undefined && val !== null && val !== "") {
+        searchParams.set(key, val);
+      }
+    });
+    const qs = searchParams.toString();
+    return request(`/api/buildings/${buildingId}/details${qs ? `?${qs}` : ""}`);
+  },
+
+  // -------------------------------------------------------
+  // AUTOSUGGEST
+  // -------------------------------------------------------
+
+  autosuggestResidents: (query, signal) =>
+    request(`/api/residents/autosuggest?q=${encodeURIComponent(query)}`, {
+      signal,
+    }),
 };
 
 

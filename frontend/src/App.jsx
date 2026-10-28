@@ -1,18 +1,19 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import LandingPage from "./pages/LandingPage";
 import { AuthProvider } from "./context/AuthContext";
-import ProtectedRoute from "./components/ProtectedRoute";
+import ProtectedRoute from "./components/ProtectedRoute/ProtectedRoute";
 
 import ResidentHome from "./pages/resident/ResidentHome";
 import LguDashboard from "./pages/lgu/LguDashboard";
 import AdminDashboard from "./pages/admin/AdminDashboard";
+
 import PasswordSetup from "./pages/auth/PasswordSetup";
-import NetworkStatus from "./components/NetworkStatus";
-import Dashboard from "./components/Dashboard";
+import NetworkStatus from "./components/NetworkStatus/NetworkStatus";
+import Dashboard from "./components/Dashboard/Dashboard";
 
 import ManageProfile from "./pages/profile/ManageProfile";
 import AdminMap from "./pages/admin/AdminMap";
-import ErrorBoundary from "./components/ErrorBoundary";
+import ErrorBoundary from "./components/ErrorBoundary/ErrorBoundary";
 
 function App() {
   return (

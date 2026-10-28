@@ -4,6 +4,7 @@ import re
 import uuid
 import time
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 
 from flask import Blueprint, request, jsonify, Response
@@ -11,8 +12,11 @@ from flask_jwt_extended import jwt_required
 from openpyxl import Workbook
 from openpyxl import load_workbook
 from sqlalchemy import false, func, or_
+from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy.exc import IntegrityError
 from flask_jwt_extended import get_jwt_identity
+
+WHITESPACE_RE = re.compile(r'\s+')
 
 from models import (
     db,
@@ -20,9 +24,11 @@ from models import (
     Family,
     Resident,
     EvacuationAssignment,
+    EvacuationCenterBuilding,
     EvacuationCenterRoom,
     EvacuationCenter,
     SystemLog,
+    RosterYear,
 )
 
 from utils import role_required
@@ -64,8 +70,47 @@ families_bp = Blueprint('families', __name__)
 FAMILY_EXPORT_FIELDS = [
     'family_code', 'head_name', 'member_count', 'barangay',
     'contact_number', 'address', 'evacuation_center',
-    'rooms', 'assigned_members', 'evacuation_status',
+    'buildings', 'rooms', 'assigned_members', 'evacuation_status',
 ]
+
+
+def get_or_create_active_year():
+    """
+    Get or create the roster year corresponding to current calendar year in Asia/Manila.
+    Ensures that this row has is_active=True and all other rows False in one transaction.
+    Handles unique constraint race conditions where two requests create the same year at once.
+    """
+    current_year = datetime.now(ZoneInfo("Asia/Manila")).year
+    try:
+        year_row = RosterYear.query.filter_by(year=current_year).first()
+        if not year_row:
+            year_row = RosterYear(year=current_year, is_active=True)
+            db.session.add(year_row)
+            db.session.flush()
+
+        year_row.is_active = True
+        RosterYear.query.filter(RosterYear.id != year_row.id).update(
+            {'is_active': False},
+            synchronize_session=False
+        )
+        db.session.commit()
+        return year_row
+    except IntegrityError:
+        db.session.rollback()
+        year_row = RosterYear.query.filter_by(year=current_year).first()
+        if year_row:
+            if not year_row.is_active or RosterYear.query.filter(RosterYear.id != year_row.id, RosterYear.is_active == True).first():
+                year_row.is_active = True
+                RosterYear.query.filter(RosterYear.id != year_row.id).update(
+                    {'is_active': False},
+                    synchronize_session=False
+                )
+                db.session.commit()
+            return year_row
+        return RosterYear.query.filter_by(is_active=True).first()
+    except Exception:
+        db.session.rollback()
+        return RosterYear.query.filter_by(year=current_year).first() or RosterYear.query.filter_by(is_active=True).first()
 
 
 def _normalize_text(value):
@@ -171,7 +216,7 @@ def _sync_household_and_barangay(family, old_barangay_id=None):
     return residents
 
 
-def _family_query(search='', barangay_id='', assignment_status=''):
+def _family_query(search='', barangay_id='', assignment_status='', building_id=''):
     query = Family.query.join(Barangay, Family.barangay_id == Barangay.id)
     search = str(search or '').strip()
 
@@ -226,6 +271,33 @@ def _family_query(search='', barangay_id='', assignment_status=''):
             .filter(Resident.family_id.is_not(None))
         ))
 
+    raw_b_id = str(building_id or '').strip().lower()
+    if raw_b_id:
+        if raw_b_id in ('unmapped', 'none', 'null'):
+            query = query.filter(Family.id.in_(
+                db.session.query(Resident.family_id)
+                .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+                .join(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+                .filter(
+                    Resident.family_id.is_not(None),
+                    EvacuationCenterRoom.building_id.is_(None),
+                )
+            ))
+        else:
+            try:
+                parsed_b_id = int(raw_b_id)
+                query = query.filter(Family.id.in_(
+                    db.session.query(Resident.family_id)
+                    .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+                    .join(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+                    .filter(
+                        Resident.family_id.is_not(None),
+                        EvacuationCenterRoom.building_id == parsed_b_id,
+                    )
+                ))
+            except (TypeError, ValueError):
+                query = query.filter(false())
+
     return query
 
 
@@ -247,11 +319,21 @@ def _family_list_rows(families):
             EvacuationCenterRoom.id.label('room_id'),
             EvacuationCenterRoom.room_number,
             EvacuationCenterRoom.capacity,
+            EvacuationCenterRoom.building_id,
+            EvacuationCenterBuilding.name.label('building_name'),
             func.count(EvacuationAssignment.id),
+            func.count(EvacuationAssignment.checked_in_at),
         )
         .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
-        .join(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
-        .join(EvacuationCenter, EvacuationCenterRoom.evacuation_center_id == EvacuationCenter.id)
+        .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+        .join(
+            EvacuationCenter,
+            or_(
+                EvacuationAssignment.evacuation_center_id == EvacuationCenter.id,
+                EvacuationCenterRoom.evacuation_center_id == EvacuationCenter.id
+            )
+        )
+        .outerjoin(EvacuationCenterBuilding, EvacuationCenterRoom.building_id == EvacuationCenterBuilding.id)
         .filter(Resident.family_id.in_(family_ids))
         .group_by(
             Resident.family_id,
@@ -260,18 +342,39 @@ def _family_list_rows(families):
             EvacuationCenterRoom.id,
             EvacuationCenterRoom.room_number,
             EvacuationCenterRoom.capacity,
+            EvacuationCenterRoom.building_id,
+            EvacuationCenterBuilding.name,
         )
         .all()
     )
     assignments_by_family = defaultdict(list)
-    for family_id, center_id, center_name, room_id, room_number, room_capacity, assigned_count in assignment_rows:
+    for (
+        family_id,
+        center_id,
+        center_name,
+        room_id,
+        room_number,
+        room_capacity,
+        building_id,
+        building_name,
+        assigned_count,
+        checked_in_count,
+    ) in assignment_rows:
+        c_in = int(checked_in_count or 0)
+        resolved_b_name = (building_name or f'Building #{building_id}') if building_id else None
         assignments_by_family[family_id].append({
             'center_id': center_id,
             'center': center_name,
+            'building_id': building_id,
+            'building': resolved_b_name,
+            'building_name': resolved_b_name,
             'room_id': room_id,
             'room': room_number,
             'room_capacity': room_capacity,
             'assigned_members': assigned_count,
+            'checked_in_members': c_in,
+            'is_checked_in': c_in > 0,
+            'checkin_status': 'Checked in' if c_in > 0 else 'Not yet arrived',
         })
 
     result = []
@@ -281,6 +384,8 @@ def _family_list_rows(families):
         head_member = next((m for m in family_members if m.is_head_of_family), None)
         first_member = head_member or (family_members[0] if family_members else None)
         primary_assignment = assignments[0] if assignments else None
+        total_checked_in = sum(item['checked_in_members'] for item in assignments)
+        is_checked_in = total_checked_in > 0
         result.append({
             **family.to_dict(),
             'barangay': family.barangay.name if family.barangay else None,
@@ -291,14 +396,23 @@ def _family_list_rows(families):
             'address': next((member.address for member in family_members if member.address), None),
             'remarks': (head_member.remarks if head_member and head_member.remarks else next((m.remarks for m in family_members if m.remarks), None)),
             'assignments': assignments,
-            'evacuation_center': ', '.join(dict.fromkeys(item['center'] for item in assignments)) or None,
-            'rooms': ', '.join(dict.fromkeys(item['room'] for item in assignments)) or None,
+            'evacuation_center': ', '.join(dict.fromkeys(item['center'] for item in assignments if item.get('center'))) or None,
+            'buildings': ', '.join(dict.fromkeys((item['building'] or 'Unmapped') for item in assignments if item.get('building') or item.get('center'))) or None,
+            'rooms': ', '.join(dict.fromkeys(str(item['room']) for item in assignments if item.get('room'))) or None,
             'current_center_id': primary_assignment['center_id'] if primary_assignment else None,
+            'current_building_id': primary_assignment['building_id'] if primary_assignment else None,
             'current_room_id': primary_assignment['room_id'] if primary_assignment else None,
             'current_center': primary_assignment['center'] if primary_assignment else None,
+            'current_center_name': primary_assignment['center'] if primary_assignment else None,
+            'current_building': primary_assignment['building'] if primary_assignment else None,
+            'current_building_name': primary_assignment['building'] if primary_assignment else None,
             'current_room': primary_assignment['room'] if primary_assignment else None,
+            'current_room_name': primary_assignment['room'] if primary_assignment else None,
             'current_room_capacity': primary_assignment['room_capacity'] if primary_assignment else None,
             'assigned_members': sum(item['assigned_members'] for item in assignments),
+            'checked_in_members': total_checked_in,
+            'is_checked_in': is_checked_in,
+            'checkin_status': ('Checked in' if is_checked_in else 'Not yet arrived') if assignments else None,
             'is_assigned': bool(assignments),
             'assignment_status': 'Assigned' if assignments else 'Unassigned',
             'evacuation_status': 'Assigned' if assignments else 'Unassigned',
@@ -312,6 +426,7 @@ def list_families():
     search = request.args.get('search', '')
     barangay_id = request.args.get('barangay_id', '')
     assignment_status = request.args.get('assignment_status', '')
+    building_id = request.args.get('building_id', '')
     sort_by = request.args.get('sort_by', 'family_code')
     direction = request.args.get('direction', 'asc')
     allowed_sorts = {
@@ -324,7 +439,7 @@ def list_families():
     }
     sort_column = allowed_sorts.get(sort_by, Family.family_code)
     order = sort_column.desc() if direction == 'desc' else sort_column.asc()
-    query = _family_query(search, barangay_id, assignment_status)
+    query = _family_query(search, barangay_id, assignment_status, building_id)
 
     matching_ids_subq = query.with_entities(Family.id).subquery()
     total = (
@@ -382,6 +497,7 @@ def export_families():
         request.args.get('search', ''),
         request.args.get('barangay_id', ''),
         request.args.get('assignment_status', ''),
+        request.args.get('building_id', ''),
     )
     families = query.order_by(Family.family_code.asc(), Family.id.asc()).all()
     rows = _family_list_rows(families)
@@ -791,48 +907,82 @@ def _preview_family_workbook(file_storage):
     families_by_key = {}
     row_count = 0
 
-    def cell(row, key):
-        index = column_indexes.get(key)
-        if index is None or index >= len(row):
-            return ''
-        val = row[index]
+    def _clean_cell(val):
         if val is None:
             return ''
         if isinstance(val, float) and val.is_integer():
             return str(int(val))
         if isinstance(val, int) and not isinstance(val, bool):
             return str(val)
-        return re.sub(r'\s+', ' ', str(val).strip())
+        s = str(val).strip()
+        if '  ' in s or '\t' in s or '\n' in s:
+            return WHITESPACE_RE.sub(' ', s)
+        return s
 
-    def cell_raw(row, key):
-        index = column_indexes.get(key)
-        if index is None or index >= len(row):
-            return None
-        return row[index]
+    # Cache column index lookups to avoid repeated dictionary lookups per row
+    idx_household_id = column_indexes.get('household_id')
+    idx_family_code = column_indexes.get('family_code')
+    idx_head_name = column_indexes.get('head_name')
+    idx_barangay = column_indexes.get('barangay')
+    idx_address = column_indexes.get('address')
+    idx_first_name = column_indexes.get('first_name')
+    idx_middle_name = column_indexes.get('middle_name')
+    idx_last_name = column_indexes.get('last_name')
+    idx_suffix = column_indexes.get('suffix')
+    idx_dob = column_indexes.get('date_of_birth')
+    idx_fam_members = column_indexes.get('family_members')
+    idx_contact = column_indexes.get('contact_number')
+    idx_alt_contact = column_indexes.get('alternate_contact')
+    idx_rel = column_indexes.get('relationship_to_head')
+    idx_is_head = column_indexes.get('is_head_of_family')
+    idx_is_pwd = column_indexes.get('is_pwd')
+    idx_disability_type = column_indexes.get('disability_type')
+    idx_disability_notes = column_indexes.get('disability_notes')
+    idx_is_pregnant = column_indexes.get('is_pregnant')
+    idx_is_lactating = column_indexes.get('is_lactating')
+    idx_is_solo_parent = column_indexes.get('is_solo_parent')
+    idx_needs_assistance = column_indexes.get('needs_assistance')
+    idx_medical_notes = column_indexes.get('medical_notes')
+    idx_notes = column_indexes.get('notes')
+    idx_remarks = column_indexes.get('remarks')
+    idx_vulnerable = column_indexes.get('vulnerable_members')
+    idx_gender = column_indexes.get('gender')
+    idx_member_contact = column_indexes.get('member_contact')
 
-    def cell_contact(row, key):
-        index = column_indexes.get(key)
-        if index is None or index >= len(row):
+    def cell_at(row, idx):
+        if idx is None or idx >= len(row):
             return ''
-        return _normalize_contact_cell(row[index])
+        return _clean_cell(row[idx])
 
-    has_explicit_code_col = ('family_code' in column_indexes or 'household_id' in column_indexes)
+    def cell_raw_at(row, idx):
+        if idx is None or idx >= len(row):
+            return None
+        return row[idx]
+
+    def cell_contact_at(row, idx):
+        if idx is None or idx >= len(row):
+            return ''
+        return _normalize_contact_cell(row[idx])
+
+    # Pre-fetch all barangays once into a case-insensitive lookup table to avoid N database queries in loop
+    all_barangays = Barangay.query.all()
+    barangays_by_name = {b.name.strip().casefold(): b for b in all_barangays}
 
     for row_number, row in enumerate(values, start=2):
         if not row or not any(value is not None and str(value).strip() for value in row):
             continue
         row_count += 1
-        household_id = cell(row, 'household_id')
-        explicit_code = cell(row, 'family_code') or household_id
-        head_name = cell(row, 'head_name')
-        barangay_name = cell(row, 'barangay')
-        address = cell(row, 'address')
-        first_name = cell(row, 'first_name')
-        middle_name = cell(row, 'middle_name')
-        last_name = cell(row, 'last_name')
-        suffix = cell(row, 'suffix') or None
-        dob = _normalize_dob(cell_raw(row, 'date_of_birth'))
-        raw_fam_count = cell(row, 'family_members')
+        household_id = cell_at(row, idx_household_id)
+        explicit_code = cell_at(row, idx_family_code) or household_id
+        head_name = cell_at(row, idx_head_name)
+        barangay_name = cell_at(row, idx_barangay)
+        address = cell_at(row, idx_address)
+        first_name = cell_at(row, idx_first_name)
+        middle_name = cell_at(row, idx_middle_name)
+        last_name = cell_at(row, idx_last_name)
+        suffix = cell_at(row, idx_suffix) or None
+        dob = _normalize_dob(cell_raw_at(row, idx_dob))
+        raw_fam_count = cell_at(row, idx_fam_members)
 
         missing_fields = [
             label for value, label in (
@@ -846,9 +996,9 @@ def _preview_family_workbook(file_storage):
             errors.append({'row': row_number, 'message': f'Missing required values: {", ".join(missing_fields)}'})
             continue
 
-        barangay = Barangay.query.filter(func.lower(Barangay.name) == barangay_name.casefold()).first()
+        barangay = barangays_by_name.get(barangay_name.casefold())
         if not barangay:
-            errors.append({'row': row_number, 'message': f'Barangay "{barangay_name}" is not registered in the system.'})
+            errors.append({'row': row_number, 'message': f'Barangay "{barangay_name}" has not been added yet. Add it in the Barangays tab first.'})
             continue
 
         if explicit_code:
@@ -870,7 +1020,7 @@ def _preview_family_workbook(file_storage):
                 'head_name': head_name,
                 'barangay_id': barangay.id,
                 'barangay': barangay.name,
-                'contact_number': cell_contact(row, 'contact_number') or None,
+                'contact_number': cell_contact_at(row, idx_contact) or None,
                 'address': address or None,
                 'declared_count': int(raw_fam_count) if (raw_fam_count and raw_fam_count.isdigit()) else None,
                 'members': [],
@@ -886,27 +1036,27 @@ def _preview_family_workbook(file_storage):
                 continue
             if _normalize_text(existing_group['head_name']) != _normalize_text(head_name):
                 warnings.append(
-                    f'Row {row_number}: Household "{head_name}" resolves to the same key as "{existing_group["head_name"]}" in {barangay.name}. Grouped for review.'
+                    f'Rows for "{head_name}" and "{existing_group["head_name"]}" in {barangay.name} look like the same household, so they were grouped together. Please check.'
                 )
             if existing_group.get('declared_count') is None and raw_fam_count and raw_fam_count.isdigit():
                 existing_group['declared_count'] = int(raw_fam_count)
 
-        gender = cell(row, 'gender') or None
-        alternate_contact = cell_contact(row, 'alternate_contact') or None
-        relationship_to_head = cell(row, 'relationship_to_head') or None
-        is_head_flag = _parse_boolean_cell(cell_raw(row, 'is_head_of_family'), 'Is Head of Family', row_number, warnings)
-        is_pwd = _parse_boolean_cell(cell_raw(row, 'is_pwd'), 'Is PWD', row_number, warnings)
-        disability_type = cell(row, 'disability_type') or None
-        disability_notes = cell(row, 'disability_notes') or None
-        is_pregnant = _parse_boolean_cell(cell_raw(row, 'is_pregnant'), 'Is Pregnant', row_number, warnings)
-        is_lactating = _parse_boolean_cell(cell_raw(row, 'is_lactating'), 'Is Lactating', row_number, warnings)
-        is_solo_parent = _parse_boolean_cell(cell_raw(row, 'is_solo_parent'), 'Is Solo Parent', row_number, warnings)
-        needs_assistance = _parse_boolean_cell(cell_raw(row, 'needs_assistance'), 'Needs Assistance', row_number, warnings)
-        medical_notes = cell(row, 'medical_notes') or None
-        notes = cell(row, 'notes') or None
-        remarks = cell(row, 'remarks') or None
-        vulnerable_members = cell(row, 'vulnerable_members') or None
-        member_contact = cell_contact(row, 'member_contact') or None
+        gender = cell_at(row, idx_gender) or None
+        alternate_contact = cell_contact_at(row, idx_alt_contact) or None
+        relationship_to_head = cell_at(row, idx_rel) or None
+        is_head_flag = _parse_boolean_cell(cell_raw_at(row, idx_is_head), 'Is Head of Family', row_number, warnings)
+        is_pwd = _parse_boolean_cell(cell_raw_at(row, idx_is_pwd), 'Is PWD', row_number, warnings)
+        disability_type = cell_at(row, idx_disability_type) or None
+        disability_notes = cell_at(row, idx_disability_notes) or None
+        is_pregnant = _parse_boolean_cell(cell_raw_at(row, idx_is_pregnant), 'Is Pregnant', row_number, warnings)
+        is_lactating = _parse_boolean_cell(cell_raw_at(row, idx_is_lactating), 'Is Lactating', row_number, warnings)
+        is_solo_parent = _parse_boolean_cell(cell_raw_at(row, idx_is_solo_parent), 'Is Solo Parent', row_number, warnings)
+        needs_assistance = _parse_boolean_cell(cell_raw_at(row, idx_needs_assistance), 'Needs Assistance', row_number, warnings)
+        medical_notes = cell_at(row, idx_medical_notes) or None
+        notes = cell_at(row, idx_notes) or None
+        remarks = cell_at(row, idx_remarks) or None
+        vulnerable_members = cell_at(row, idx_vulnerable) or None
+        member_contact = cell_contact_at(row, idx_member_contact) or None
 
         member_name = ' '.join(part for part in (first_name, middle_name, last_name, suffix) if part)
         member_dict = {
@@ -916,7 +1066,7 @@ def _preview_family_workbook(file_storage):
             'suffix': suffix,
             'date_of_birth': dob,
             'full_name': member_name,
-            'contact_number': member_contact or cell_contact(row, 'contact_number') or existing_group['contact_number'],
+            'contact_number': member_contact or cell_contact_at(row, idx_contact) or existing_group['contact_number'],
             'address': address or existing_group['address'],
             'gender': gender,
             'alternate_contact': alternate_contact,
@@ -943,7 +1093,7 @@ def _preview_family_workbook(file_storage):
         )
         if has_dup_in_file:
             warnings.append(
-                f'Household "{head_name}": multiple rows found for member "{member_name}" (Row {row_number}). Both rows are retained for review.'
+                f'"{member_name}" appears twice in the household of "{head_name}" (row {row_number}). Both rows were kept. Please check.'
             )
 
         existing_group['members'].append(member_dict)
@@ -954,7 +1104,7 @@ def _preview_family_workbook(file_storage):
     for family in families:
         if family.get('declared_count') is not None and family['declared_count'] != len(family['members']):
             warnings.append(
-                f'Household "{family["head_name"]}": "Family Members" column indicates {family["declared_count"]}, but {len(family["members"])} member row(s) were found.'
+                f'The file says "{family["head_name"]}" has {family["declared_count"]} family members, but {len(family["members"])} row(s) were found.'
             )
 
         # Check if head appears as a member
@@ -964,13 +1114,17 @@ def _preview_family_workbook(file_storage):
             for m in family['members']
         ):
             warnings.append(
-                f'Household "{family["head_name"]}": head of family is not listed as a distinct member row.'
+                f'The head "{family["head_name"]}" is not listed as a member row. A record for the head will be added automatically.'
             )
 
     # -------------------------------------------------------------------------
     # CLASSIFY AGAINST DATABASE: NEW / UPDATED / SKIPPED / CONFLICT
+    # Eager load residents and barangays to prevent N+1 queries during matching
     # -------------------------------------------------------------------------
-    db_families = Family.query.all()
+    db_families = Family.query.options(
+        selectinload(Family.residents),
+        joinedload(Family.barangay)
+    ).all()
     db_by_code = {f.family_code.casefold(): f for f in db_families}
     db_by_head_brgy = {(f.barangay_id, _normalize_text(f.head_name)): f for f in db_families}
 
@@ -992,9 +1146,8 @@ def _preview_family_workbook(file_storage):
                 errors.append({
                     'row': family['source_rows'][0],
                     'message': (
-                        f'Conflict on Family Code "{family["family_code"]}": already registered in database for '
-                        f'"{candidate.head_name}" in {cand_brgy_name}, but workbook row specifies '
-                        f'"{family["head_name"]}" in {family["barangay"]}.'
+                        f'Family code "{family["family_code"]}" already belongs to "{candidate.head_name}" in {cand_brgy_name}, '
+                        f'but this file uses it for "{family["head_name"]}" in {family["barangay"]}. Please correct the family code in the file.'
                     )
                 })
                 family['status'] = 'conflict'
@@ -1009,7 +1162,7 @@ def _preview_family_workbook(file_storage):
                 candidate = db_by_head_brgy[head_key]
                 # Head + barangay match BUT the family code is different: do not auto-merge
                 warnings.append(
-                    f'Household "{family["head_name"]}" in {family["barangay"]} matches an existing database household but has a different family code ("{family["family_code"]}" vs "{candidate.family_code}"). Skipped for review.'
+                    f'The household of "{family["head_name"]}" in {family["barangay"]} is already registered under a different family code ("{family["family_code"]}" vs "{candidate.family_code}"). This household was not changed. Please check it.'
                 )
                 family['status'] = 'skipped'
                 family['db_family_id'] = candidate.id
@@ -1065,7 +1218,7 @@ def _preview_family_workbook(file_storage):
     if skipped_households > 0:
         warnings.insert(
             0,
-            f'{skipped_households} household{"" if skipped_households == 1 else "s"} already exist in the database with identical members and will be skipped.'
+            f'{skipped_households} household{"" if skipped_households == 1 else "s"} are already registered with the same members. They will be left unchanged.'
         )
 
     can_import = (len(errors) == 0 and (new_households > 0 or new_members_to_add > 0 or members_to_fill > 0))
@@ -1129,6 +1282,10 @@ def import_families():
     if not preview['can_import']:
         return jsonify({**preview, 'error': 'Resolve all import errors or ensure there are new records to commit.'}), 400
 
+    active_year = get_or_create_active_year()
+    if not active_year:
+        return jsonify({'error': 'No active roster year found. Please configure an active roster year first.'}), 400
+
     # Execute commit inside single transaction
     created_count = 0
     updated_count = 0
@@ -1142,6 +1299,7 @@ def import_families():
             status = item.get('status')
             if status == 'new':
                 family = Family(
+                    roster_year_id=active_year.id,
                     barangay_id=item['barangay_id'],
                     family_code=item['family_code'],
                     head_name=item['head_name'],
@@ -1279,11 +1437,40 @@ def stage_family_import():
     }
     _cleanup_staged_imports()
 
+    # Send optimized family payload to the frontend for the review UI
+    slim_families = [
+        {
+            'family_code': f['family_code'],
+            'head_name': f['head_name'],
+            'barangay': f['barangay'],
+            'barangay_id': f['barangay_id'],
+            'contact_number': f.get('contact_number'),
+            'address': f.get('address'),
+            'member_count': f['member_count'],
+            'status': f.get('status', 'new'),
+            'db_family_id': f.get('db_family_id'),
+            'new_members': [
+                {'full_name': m.get('full_name') or f"{m.get('first_name', '')} {m.get('last_name', '')}".strip()}
+                for m in f.get('new_members', [])
+            ],
+            'members_to_fill': [
+                {'name': m.get('name', '')}
+                for m in f.get('members_to_fill', [])
+            ],
+            'existing_members': f.get('existing_members', []),
+            'members': [
+                {'full_name': m.get('full_name') or f"{m.get('first_name', '')} {m.get('last_name', '')}".strip()}
+                for m in f.get('members', [])
+            ] if f.get('status') == 'new' else [],
+        }
+        for f in preview['families']
+    ]
+
     return jsonify({
         'staging_token': token,
         'expires_in': STAGING_TTL_SECONDS,
         'filename': file_storage.filename,
-        'families': preview['families'],
+        'families': slim_families,
         'errors': preview['errors'],
         'warnings': preview['warnings'],
         'rows': preview['rows'],
@@ -1307,24 +1494,24 @@ def commit_family_import():
 
     if not token:
         return jsonify({
-            'error': 'A staging token is required. Please validate the file first.'
+            'error': 'This upload has expired. Please upload the file again.'
         }), 400
 
     staged = STAGED_IMPORTS.get(token)
     if not staged:
         return jsonify({
-            'error': 'Import session not found or has expired. Please re-upload the file.'
+            'error': 'This upload has expired. Please upload the file again.'
         }), 400
 
     if time.time() > staged['expires_at']:
         del STAGED_IMPORTS[token]
         return jsonify({
-            'error': 'Import session has expired. Please re-upload the file.'
+            'error': 'This upload has expired. Please upload the file again.'
         }), 400
 
     if str(staged.get('created_by')) != str(get_jwt_identity()):
         return jsonify({
-            'error': 'Import session not found or has expired. Please re-upload the file.'
+            'error': 'This upload has expired. Please upload the file again.'
         }), 400
 
     # Re-validate on the server against the live database state
@@ -1332,13 +1519,17 @@ def commit_family_import():
         wrapper = _BytesFileWrapper(staged['file_bytes'], staged.get('filename', 'import.xlsx'))
         preview = _preview_family_workbook(wrapper)
     except Exception as e:
-        return jsonify({'error': f'Failed to re-validate workbook before committing: {str(e)}'}), 400
+        return jsonify({'error': f'Failed to check file before saving: {str(e)}'}), 400
 
     if preview['errors']:
-        return jsonify({'error': 'Validation errors found during commit. Cannot proceed.'}), 400
+        return jsonify({'error': 'Errors found in the file. Cannot proceed.'}), 400
 
     if not preview['can_import']:
-        return jsonify({'error': 'Nothing new to import. All records already exist.'}), 400
+        return jsonify({'error': 'Nothing to add. Everyone in this file is already registered.'}), 400
+
+    active_year = get_or_create_active_year()
+    if not active_year:
+        return jsonify({'error': 'No active roster year found. Please configure an active roster year first.'}), 400
 
     created_count = 0
     updated_count = 0
@@ -1352,6 +1543,7 @@ def commit_family_import():
             status = item.get('status')
             if status == 'new':
                 family = Family(
+                    roster_year_id=active_year.id,
                     barangay_id=item['barangay_id'],
                     family_code=item['family_code'],
                     head_name=item['head_name'],
@@ -1466,6 +1658,8 @@ def _serialize_family_detail(family):
                     'center_id': center.id,
                     'center_name': center.name,
                     'assigned_at': assignment.assigned_at.isoformat() if assignment.assigned_at else None,
+                    'checked_in_at': assignment.checked_in_at.isoformat() if assignment.checked_in_at else None,
+                    'is_checked_in': assignment.checked_in_at is not None,
                 }
     members_list = []
     for member in residents:
@@ -1474,9 +1668,15 @@ def _serialize_family_detail(family):
         members_list.append(m_dict)
     result['members'] = members_list
     if result.get('current_room_id'):
-        room_occ = EvacuationAssignment.query.filter_by(room_id=result['current_room_id']).count()
+        room_assigned = EvacuationAssignment.query.filter_by(room_id=result['current_room_id']).count()
+        room_occ = EvacuationAssignment.query.filter(
+            EvacuationAssignment.room_id == result['current_room_id'],
+            EvacuationAssignment.checked_in_at.isnot(None)
+        ).count()
         result['current_room_occupied'] = room_occ
+        result['current_room_assigned'] = room_assigned
         result['current_room_available'] = max((result.get('current_room_capacity') or 0) - room_occ, 0)
+        result['current_room_unassigned'] = max((result.get('current_room_capacity') or 0) - room_assigned, 0)
     return result
 
 
@@ -1487,6 +1687,28 @@ def get_family(family_id):
     if not family:
         return jsonify({'error': 'Family not found'}), 404
     return jsonify(_serialize_family_detail(family))
+
+
+def _family_duplicate(barangay_id, family_code, head_name):
+    active_year = get_or_create_active_year()
+    if not active_year:
+        return None
+    if family_code:
+        existing_code = Family.query.filter_by(
+            roster_year_id=active_year.id,
+            family_code=family_code
+        ).first()
+        if existing_code:
+            return f"Family code '{family_code}' already exists for this roster year."
+    if head_name and barangay_id:
+        existing_head = Family.query.filter(
+            Family.roster_year_id == active_year.id,
+            Family.barangay_id == barangay_id,
+            func.lower(Family.head_name) == func.lower(head_name)
+        ).first()
+        if existing_head:
+            return f"Family with head '{head_name}' already exists in this barangay for this roster year."
+    return None
 
 
 @families_bp.route('/api/families', methods=['POST'])
@@ -1661,8 +1883,13 @@ def add_family():
     if duplicate_error:
         return jsonify({'error': duplicate_error}), 409
 
+    active_year = get_or_create_active_year()
+    if not active_year:
+        return jsonify({'error': 'No active roster year found. Please configure an active roster year first.'}), 400
+
     member_count = len(parsed_members) + 1
     family = Family(
+        roster_year_id=active_year.id,
         barangay_id=barangay_id,
         family_code=family_code,
         head_name=head_name,
@@ -2150,8 +2377,8 @@ def assign_family(family_id):
     center_id = data.get('center_id')
     room_id = data.get('room_id')
 
-    if not center_id or not room_id:
-        return jsonify({"error": "Center ID and Room ID are required"}), 400
+    if not center_id:
+        return jsonify({"error": "Center ID is required"}), 400
 
     center = EvacuationCenter.query.get(center_id)
     if not center:
@@ -2159,15 +2386,17 @@ def assign_family(family_id):
     if not center.is_active:
         return jsonify({"error": "Cannot assign to an inactive evacuation center"}), 400
 
-    room = EvacuationCenterRoom.query.get(room_id)
-    if not room:
-        return jsonify({"error": "Room not found"}), 404
-    if not room.is_active:
-        return jsonify({"error": "Cannot assign to an inactive room"}), 400
-    if room.evacuation_center_id != center.id:
-        return jsonify({"error": "Room does not belong to the selected evacuation center"}), 400
+    room = None
+    if room_id:
+        room = EvacuationCenterRoom.query.get(room_id)
+        if not room:
+            return jsonify({"error": "Room not found"}), 404
+        if not room.is_active:
+            return jsonify({"error": "Cannot assign to an inactive room"}), 400
+        if room.evacuation_center_id != center.id:
+            return jsonify({"error": "Room does not belong to the selected evacuation center"}), 400
 
-    # A family must not have multiple active room assignments
+    # A family must not have multiple active assignments
     existing_assignment = (
         db.session.query(EvacuationAssignment)
         .join(Resident, EvacuationAssignment.resident_id == Resident.id)
@@ -2175,44 +2404,66 @@ def assign_family(family_id):
         .first()
     )
     if existing_assignment:
-        return jsonify({"error": "Family already has an active room assignment. Use the move option to change rooms."}), 400
+        return jsonify({"error": "Family already has an active assignment. Use the move option to change rooms or shelters."}), 400
 
     residents = _sync_household_and_barangay(family)
-
     needed_spaces = len(residents)
-    current_occupancy = EvacuationAssignment.query.filter_by(room_id=room.id).count()
-    remaining = max(room.capacity - current_occupancy, 0)
 
-    if current_occupancy + needed_spaces > room.capacity:
-        return jsonify({
-            "error": f"Room does not have enough capacity. Available: {remaining}, Needed: {needed_spaces}",
-            "capacity": room.capacity,
-            "occupied": current_occupancy,
-            "available": remaining,
-            "needed": needed_spaces
-        }), 400
+    if room:
+        current_occupancy = EvacuationAssignment.query.filter_by(room_id=room.id).count()
+        remaining = max(room.capacity - current_occupancy, 0)
+        if current_occupancy + needed_spaces > room.capacity:
+            return jsonify({
+                "error": f"Room does not have enough capacity. Available: {remaining}, Needed: {needed_spaces}",
+                "capacity": room.capacity,
+                "occupied": current_occupancy,
+                "available": remaining,
+                "needed": needed_spaces
+            }), 400
+    else:
+        current_center_assigned = (
+            db.session.query(func.count(EvacuationAssignment.id))
+            .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+            .filter(or_(
+                EvacuationAssignment.evacuation_center_id == center.id,
+                EvacuationCenterRoom.evacuation_center_id == center.id
+            ))
+            .scalar() or 0
+        )
+        effective_cap = center.capacity if center.capacity is not None else sum(r.capacity or 0 for r in center.rooms)
+        if effective_cap > 0 and current_center_assigned + needed_spaces > effective_cap:
+            remaining = max(effective_cap - current_center_assigned, 0)
+            return jsonify({
+                "error": f"Center does not have enough capacity. Available: {remaining}, Needed: {needed_spaces}",
+                "capacity": effective_cap,
+                "occupied": current_center_assigned,
+                "available": remaining,
+                "needed": needed_spaces
+            }), 400
 
     for resident in residents:
-        db.session.add(EvacuationAssignment(resident_id=resident.id, room_id=room.id))
+        db.session.add(EvacuationAssignment(
+            resident_id=resident.id,
+            room_id=room.id if room else None,
+            evacuation_center_id=center.id
+        ))
 
     family.evacuation_status = "Assigned"
     user_id = get_jwt_identity()
+    target_desc = f"{center.name} - Room {room.room_number}" if room else center.name
     db.session.add(SystemLog(
         user_id=user_id,
-        action=f"Assigned family '{family.head_name}' ({family.family_code}) to {center.name} - Room {room.room_number}"
+        action=f"Assigned family '{family.head_name}' ({family.family_code}) to {target_desc}"
     ))
     db.session.commit()
 
     return jsonify({
-        "message": f"Family '{family.head_name}' successfully assigned to Room {room.room_number}.",
+        "message": f"Family '{family.head_name}' successfully assigned to {target_desc}.",
         "family_id": family.id,
         "center_id": center.id,
         "center_name": center.name,
-        "room_id": room.id,
-        "room_number": room.room_number,
-        "room_capacity": room.capacity,
-        "room_occupied": current_occupancy + needed_spaces,
-        "room_available": max(room.capacity - (current_occupancy + needed_spaces), 0),
+        "room_id": room.id if room else None,
+        "room_number": room.room_number if room else None,
         "is_assigned": True,
         "assignment_status": "Assigned"
     }), 200
@@ -2230,21 +2481,29 @@ def move_family(family_id):
     new_room_id = data.get('room_id')
     new_center_id = data.get('center_id')
 
-    if not new_room_id:
-        return jsonify({"error": "Target room ID is required"}), 400
+    if not new_room_id and not new_center_id:
+        return jsonify({"error": "Target center or room ID is required"}), 400
 
-    new_room = EvacuationCenterRoom.query.get(new_room_id)
-    if not new_room:
-        return jsonify({"error": "Target room not found"}), 404
-    if not new_room.is_active:
-        return jsonify({"error": "Cannot move to an inactive room"}), 400
+    target_center = None
+    new_room = None
 
-    target_center = EvacuationCenter.query.get(new_room.evacuation_center_id)
-    if not target_center or not target_center.is_active:
-        return jsonify({"error": "Target evacuation center is inactive or not found"}), 400
+    if new_room_id:
+        new_room = EvacuationCenterRoom.query.get(new_room_id)
+        if not new_room:
+            return jsonify({"error": "Target room not found"}), 404
+        if not new_room.is_active:
+            return jsonify({"error": "Cannot move to an inactive room"}), 400
 
-    if new_center_id and int(new_center_id) != target_center.id:
-        return jsonify({"error": "Target room does not belong to the selected evacuation center"}), 400
+        target_center = EvacuationCenter.query.get(new_room.evacuation_center_id)
+        if not target_center or not target_center.is_active:
+            return jsonify({"error": "Target evacuation center is inactive or not found"}), 400
+
+        if new_center_id and int(new_center_id) != target_center.id:
+            return jsonify({"error": "Target room does not belong to the selected evacuation center"}), 400
+    else:
+        target_center = EvacuationCenter.query.get(new_center_id)
+        if not target_center or not target_center.is_active:
+            return jsonify({"error": "Target evacuation center is inactive or not found"}), 400
 
     current_assignments = (
         db.session.query(EvacuationAssignment)
@@ -2255,45 +2514,71 @@ def move_family(family_id):
     if not current_assignments:
         return jsonify({"error": "Family has no active assignments to move. Use assign instead."}), 400
 
-    if current_assignments[0].room_id == new_room.id:
+    old_room_id = current_assignments[0].room_id
+    old_center_id = current_assignments[0].evacuation_center_id
+    if new_room and old_room_id == new_room.id:
         return jsonify({"error": "Family is already in this room."}), 400
+    if not new_room and old_room_id is None and old_center_id == target_center.id:
+        return jsonify({"error": "Family is already assigned directly to this shelter."}), 400
 
-    old_room = EvacuationCenterRoom.query.get(current_assignments[0].room_id)
+    old_room = EvacuationCenterRoom.query.get(old_room_id) if old_room_id else None
+    old_center = EvacuationCenter.query.get(old_center_id) if old_center_id else (old_room.evacuation_center if old_room else None)
 
     members_count = len(current_assignments)
-    target_occupancy = EvacuationAssignment.query.filter_by(room_id=new_room.id).count()
-    remaining = max(new_room.capacity - target_occupancy, 0)
 
-    if target_occupancy + members_count > new_room.capacity:
-        return jsonify({
-            "error": f"Target room does not have enough capacity. Available: {remaining}, Needed: {members_count}",
-            "capacity": new_room.capacity,
-            "occupied": target_occupancy,
-            "available": remaining,
-            "needed": members_count
-        }), 400
+    if new_room:
+        target_occupancy = EvacuationAssignment.query.filter_by(room_id=new_room.id).count()
+        remaining = max(new_room.capacity - target_occupancy, 0)
+        if target_occupancy + members_count > new_room.capacity:
+            return jsonify({
+                "error": f"Target room does not have enough capacity. Available: {remaining}, Needed: {members_count}",
+                "capacity": new_room.capacity,
+                "occupied": target_occupancy,
+                "available": remaining,
+                "needed": members_count
+            }), 400
+    else:
+        target_occupancy = (
+            db.session.query(func.count(EvacuationAssignment.id))
+            .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+            .filter(or_(
+                EvacuationAssignment.evacuation_center_id == target_center.id,
+                EvacuationCenterRoom.evacuation_center_id == target_center.id
+            ))
+            .scalar() or 0
+        )
+        effective_cap = target_center.capacity if target_center.capacity is not None else sum(r.capacity or 0 for r in target_center.rooms)
+        if effective_cap > 0 and target_occupancy + members_count > effective_cap:
+            remaining = max(effective_cap - target_occupancy, 0)
+            return jsonify({
+                "error": f"Target shelter does not have enough capacity. Available: {remaining}, Needed: {members_count}",
+                "capacity": effective_cap,
+                "occupied": target_occupancy,
+                "available": remaining,
+                "needed": members_count
+            }), 400
 
     for assignment in current_assignments:
-        assignment.room_id = new_room.id
+        assignment.room_id = new_room.id if new_room else None
+        assignment.evacuation_center_id = target_center.id
 
     family.evacuation_status = "Assigned"
     user_id = get_jwt_identity()
-    old_room_desc = f"Room {old_room.room_number}" if old_room else "previous room"
+    old_desc = f"{old_center.name} - Room {old_room.room_number}" if (old_center and old_room) else (f"Room {old_room.room_number}" if old_room else (old_center.name if old_center else "previous shelter"))
+    new_desc = f"{target_center.name} - Room {new_room.room_number}" if new_room else target_center.name
     db.session.add(SystemLog(
         user_id=user_id,
-        action=f"Moved family '{family.head_name}' ({family.family_code}) from {old_room_desc} to {target_center.name} - Room {new_room.room_number}"
+        action=f"Moved family '{family.head_name}' ({family.family_code}) from {old_desc} to {new_desc}"
     ))
     db.session.commit()
 
     return jsonify({
-        "message": f"Family '{family.head_name}' moved to Room {new_room.room_number} successfully.",
+        "message": f"Family '{family.head_name}' moved to {new_desc} successfully.",
         "family_id": family.id,
         "center_id": target_center.id,
         "center_name": target_center.name,
-        "room_id": new_room.id,
-        "room_number": new_room.room_number,
-        "new_room_occupied": target_occupancy + members_count,
-        "new_room_available": max(new_room.capacity - (target_occupancy + members_count), 0),
+        "room_id": new_room.id if new_room else None,
+        "room_number": new_room.room_number if new_room else None,
         "is_assigned": True,
         "assignment_status": "Assigned"
     }), 200
@@ -2318,8 +2603,10 @@ def unassign_family(family_id):
         return jsonify({"message": "Family is not currently assigned to any room."}), 200
 
     room_id = current_assignments[0].room_id
-    room = EvacuationCenterRoom.query.get(room_id)
-    room_number = room.room_number if room else "Room"
+    center_id = current_assignments[0].evacuation_center_id
+    room = EvacuationCenterRoom.query.get(room_id) if room_id else None
+    center = EvacuationCenter.query.get(center_id) if center_id else (room.evacuation_center if room else None)
+    shelter_desc = f"{center.name} - Room {room.room_number}" if (center and room) else (f"Room {room.room_number}" if room else (center.name if center else "assigned shelter"))
 
     for assignment in current_assignments:
         db.session.delete(assignment)
@@ -2329,7 +2616,7 @@ def unassign_family(family_id):
     user_id = get_jwt_identity()
     db.session.add(SystemLog(
         user_id=user_id,
-        action=f"Unassigned family '{family.head_name}' ({family.family_code}) from {room_number}"
+        action=f"Unassigned family '{family.head_name}' ({family.family_code}) from {shelter_desc}"
     ))
     db.session.commit()
 
@@ -2489,4 +2776,36 @@ def delete_family(family_id):
     ))
     db.session.commit()
 
-    return jsonify({"message": f"Family '{head_name}' deleted successfully."}), 200
+    return jsonify({"message": f"Family '{head_name}' deleted successfully."}), 200
+
+
+# =========================================================
+# GET ROSTER YEARS (ADMIN-ONLY)
+# =========================================================
+@families_bp.route('/api/roster-years', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_roster_years():
+    get_or_create_active_year()
+
+    counts = dict(
+        db.session.query(
+            Family.roster_year_id,
+            func.count(Family.id)
+        )
+        .group_by(Family.roster_year_id)
+        .all()
+    )
+
+    years = RosterYear.query.order_by(RosterYear.year.desc()).all()
+    return jsonify([
+        {
+            'id': y.id,
+            'year': y.year,
+            'is_active': bool(y.is_active),
+            'households': counts.get(y.id, 0),
+            'household_count': counts.get(y.id, 0),
+        }
+        for y in years
+    ]), 200
+

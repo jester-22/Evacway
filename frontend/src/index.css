@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 :root {
@@ -30,6 +30,222 @@
   --danger-dim: #fef2f2;
   --caution: #d97706;
   --info: var(--brand);
+
+  /* EvacWay Design System Tokens (design-system.md) */
+  --ew-brand-primary: #2563eb;
+  --ew-brand-hover: #1d4ed8;
+  --ew-brand-dark: #1e40af;
+  --ew-brand-tint: #eff6ff;
+  --ew-brand-border: #bfdbfe;
+
+  --ew-safe: #16a34a;
+  --ew-safe-bg: #f0fdf4;
+  --ew-safe-border: #bbf7d0;
+  --ew-safe-text: #15803d;
+
+  --ew-warning: #d97706;
+  --ew-warning-bg: #fffbeb;
+  --ew-warning-border: #fde68a;
+  --ew-warning-text: #92400e;
+
+  --ew-danger: #dc2626;
+  --ew-danger-bg: #fef2f2;
+  --ew-danger-border: #fecaca;
+  --ew-danger-text: #991b1b;
+
+  --ew-flood: #0284c7;
+  --ew-flood-bg: #f0f9ff;
+  --ew-flood-border: #bae6fd;
+  --ew-flood-text: #0369a1;
+
+  --ew-slide: #b45309;
+  --ew-slide-bg: #fefce8;
+  --ew-slide-border: #fef08a;
+  --ew-slide-text: #854d0e;
+
+  --ew-bg-canvas: #f8fafc;
+  --ew-bg-surface: #ffffff;
+  --ew-bg-subtle: #f1f5f9;
+  --ew-bg-muted: #e2e8f0;
+  --ew-bg-overlay: rgba(15, 23, 42, 0.65);
+
+  --ew-text-primary: #0f172a;
+  --ew-text-secondary: #334155;
+  --ew-text-muted: #64748b;
+  --ew-text-inverse: #ffffff;
+
+  --ew-border-subtle: #e2e8f0;
+  --ew-border-strong: #cbd5e1;
+  --ew-focus-ring: #2563eb;
+
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.10), 0 4px 6px -4px rgba(15, 23, 42, 0.08);
+  --shadow-modal: 0 20px 25px -5px rgba(15, 23, 42, 0.20), 0 8px 10px -6px rgba(15, 23, 42, 0.15);
+  --shadow-map-control: 0 2px 8px rgba(15, 23, 42, 0.15);
+
+  /* §5 Design tokens - type scale */
+  --text-page-title: 28px;
+  --text-card-title: 16px;
+  --text-body: 14px;
+  --text-caption: 12px;
+  --text-kpi: 28px;
+
+  /* §5 Design tokens - semantic radii (aliases to existing values) */
+  --radius-control: var(--radius-md);
+  --radius-card: var(--radius-lg);
+  --radius-chip: var(--radius-full);
+
+  /* §5 Design tokens - elevation */
+  --shadow-card: 0 1px 3px 0 rgba(15, 23, 42, 0.08);
+  --shadow-overlay: 0 20px 25px -5px rgba(15, 23, 42, 0.20), 0 8px 10px -6px rgba(15, 23, 42, 0.15);
+
+  /* §5 Design tokens - control heights */
+  --control-height: 36px;
+  --control-height-primary: 40px;
+  --control-height-touch: 44px;
+
+  /* §5 Design tokens - semantic colors + soft backgrounds */
+  --primary: var(--brand);
+  --primary-soft: var(--tint);
+  --success: var(--safe);
+  --success-soft: var(--safe-dim);
+  --warning: var(--caution);
+  --warning-soft: #fffbeb;
+  --info-soft: var(--tint);
+  --neutral: var(--muted);
+  --neutral-soft: #f1f5f9;
+}
+
+/* ==========================================================================
+   Base classes (§5)
+   ========================================================================== */
+
+.card {
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-5) var(--space-6);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-0-5);
+  height: var(--control-height);
+  min-height: var(--control-height);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--bg-1);
+  color: var(--text-0);
+  font-size: var(--text-body);
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: 150ms color, 150ms background-color, 150ms border-color;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) { background: var(--brand-dark); border-color: var(--brand-dark); }
+
+.btn-secondary {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink);
+}
+.btn-secondary:hover:not(:disabled) { background: var(--bg-2); }
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--bg-2); }
+
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) { opacity: 0.9; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-size: var(--text-caption);
+  font-weight: 500;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+
+.badge--available { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.badge--near-full { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
+.badge--full { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+.badge--closed { background: var(--neutral-soft); color: var(--neutral); border-color: transparent; }
+
+.page {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-6);
+}
+
+@media (max-width: 768px) {
+  .page { padding: var(--space-4); }
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
 }
 
 *, *::before, *::after { box-sizing: border-box; }

@@ -1,0 +1,79 @@
+/* Fonts are loaded globally via design-system.css (main.jsx). No duplicate import here. */
+
+.dashboard-page {
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+
+.dashboard-heading {
+  font-family: var(--font-display);
+  letter-spacing: 0.015em;
+}
+
+.dashboard-body {
+  font-family: var(--font-body);
+}
+
+.dashboard-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-skeleton > div {
+  background-color: var(--border);
+}
+
+.dashboard-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition), border-color var(--transition);
+}
+
+.dashboard-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.dashboard-card-soft {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.dashboard-scrollbar::-webkit-scrollbar-track {
+  background: var(--bg);
+  border-radius: var(--radius-xs);
+}
+
+.dashboard-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: var(--radius-xs);
+}
+
+.dashboard-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--text);
+}
+
+@media (max-width: 768px) {
+  .dashboard-card {
+    padding: var(--space-4);
+  }
+}
+
+@media (max-width: 360px) {
+  .dashboard-card {
+    padding: var(--space-3);
+    border-radius: var(--radius-control);
+  }
+}

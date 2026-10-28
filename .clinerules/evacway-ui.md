@@ -1,0 +1,12 @@
+# EvacWay UI rules
+- Read docs/evacuation-centers-design.md before any UI task. Follow its section numbers.
+- Frontend only. Never change the Flask backend, database, migrations or API contracts.
+- Reuse existing components, TanStack Query hooks and CSS variables in index.css. No hardcoded hex values, no inline layout styles.
+- Fonts: Oswald headings, Inter body, JetBrains Mono numbers.
+- Do exactly the one step requested. Do not start the next step. Do not refactor unrelated files.
+- All hooks at the top of components, never conditional. Every capitalized JSX tag must be defined or imported.
+- After changes: run `npm run build`, open the page in the browser, screenshot at 1366x768 (and other sizes when asked), scroll to the bottom, fix what you see, then report.
+- Report: files changed, what to test, anything that needs a backend change (list it, do not implement it).
+- Before using any imported name (hooks, router, query, icons), find how an existing working file imports it and copy that exact package and import style. Never guess an import.
+- After every change run: npm run build and npx eslint on the changed files. Fix any no-undef, import/named, or react-hooks errors before reporting.
+- If you cannot log in to test the page in the browser, say so clearly. Do not claim it works.

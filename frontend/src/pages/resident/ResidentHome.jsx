@@ -1,13 +1,13 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
 import { Link } from "react-router-dom";
 import { api, BASE_URL } from "../../services/api";
-import HazardReportModal from "../../components/HazardReportModal";
-import RescueAlertModal from "../../components/RescueAlertModal";
-import { MapLegend } from "../../components/MapOverlays";
-import { createReportPopup } from "../../components/mapReports";
+import HazardReportModal from "../../components/HazardReportModal/HazardReportModal";
+import RescueAlertModal from "../../components/RescueAlertModal/RescueAlertModal";
+import { MapLegend } from "../../components/DashboardMap/MapOverlays";
+import { createReportPopup } from "../../components/mapReports/mapReports";
 import {
   setOrUpdateSelectedLocationMarker,
   setOrUpdateAccuracyCircle,
@@ -20,6 +20,16 @@ import { useEvacuationData } from "../../hooks/useEvacuationData";
 import { usePublicHazardReports, useRoadSegments, useSogodBoundary } from "../../hooks/useEvacuationQueries";
 import { useRouting } from "../../hooks/useRouting";
 import { displayEntityName } from "../../utils/displayEntityName";
+import BuildingDetailsModal from "../../components/BuildingDetailsModal/BuildingDetailsModal";
+import {
+  initBuildingLayers,
+  setSelectedBuilding,
+  setBuildingsGeoJSON,
+  initEntranceLayers,
+  setEntrancesGeoJSON,
+  setUserBuilding,
+  pulseBuilding,
+} from "../../utils/mapBuildingLayers";
 
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { icon } from "@fortawesome/fontawesome-svg-core";
@@ -41,16 +51,20 @@ import {
   faBuildingColumns,
   faDoorOpen,
   faChevronRight,
+  faChevronDown,
+  faChevronUp,
   faArrowUp,
   faTriangleExclamation,
   faBan,
   faEllipsis,
   faCircle,
   faCircleQuestion,
+  faSpinner,
+  faHouseFlag,
 } from "@fortawesome/free-solid-svg-icons";
 
 import "../../components_css/MyLocationMarker.css";
-import "../../components_css/MapOverlays.css";
+import "../../components/DashboardMap/MapOverlays.css";
 import "./ResidentHome.css";
 import "./ResidentHome.motion.css";
 
@@ -123,6 +137,91 @@ function getDistanceMeters(first, second) {
   return 6371000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
+function calculateBearing(lat1, lon1, lat2, lon2) {
+  const toRad = Math.PI / 180;
+  const toDeg = 180 / Math.PI;
+  const dLon = (lon2 - lon1) * toRad;
+  const y = Math.sin(dLon) * Math.cos(lat2 * toRad);
+  const x =
+    Math.cos(lat1 * toRad) * Math.sin(lat2 * toRad) -
+    Math.sin(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.cos(dLon);
+  return (Math.atan2(y, x) * toDeg + 360) % 360;
+}
+
+function projectPointToSegment(p, a, b) {
+  const latP = p[0], lngP = p[1];
+  const latA = a[0], lngA = a[1];
+  const latB = b[0], lngB = b[1];
+
+  const midLat = ((latA + latB) / 2) * (Math.PI / 180);
+  const cosLat = Math.cos(midLat);
+
+  const xP = lngP * cosLat, yP = latP;
+  const xA = lngA * cosLat, yA = latA;
+  const xB = lngB * cosLat, yB = latB;
+
+  const dx = xB - xA;
+  const dy = yB - yA;
+  const lenSq = dx * dx + dy * dy;
+
+  if (lenSq === 0) {
+    return {
+      snapped: [latA, lngA],
+      distance: getDistanceMeters(p, a),
+      t: 0,
+    };
+  }
+
+  let t = ((xP - xA) * dx + (yP - yA) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+
+  const snappedLng = (xA + t * dx) / cosLat;
+  const snappedLat = yA + t * dy;
+  const snapped = [snappedLat, snappedLng];
+
+  return {
+    snapped,
+    distance: getDistanceMeters(p, snapped),
+    t,
+  };
+}
+
+function snapLocationToRoute(userLocation, routePoints) {
+  if (!routePoints || routePoints.length < 2) {
+    return {
+      snappedPoint: userLocation,
+      distanceToRoute: 0,
+      segmentIndex: 0,
+      walkedPoints: [userLocation],
+      remainingPoints: routePoints || [userLocation],
+    };
+  }
+
+  let minDistance = Infinity;
+  let bestSnapped = routePoints[0];
+  let bestSegmentIndex = 0;
+
+  for (let i = 0; i < routePoints.length - 1; i++) {
+    const proj = projectPointToSegment(userLocation, routePoints[i], routePoints[i + 1]);
+    if (proj.distance < minDistance) {
+      minDistance = proj.distance;
+      bestSnapped = proj.snapped;
+      bestSegmentIndex = i;
+    }
+  }
+
+  const walked = [...routePoints.slice(0, bestSegmentIndex + 1), bestSnapped];
+  const remaining = [bestSnapped, ...routePoints.slice(bestSegmentIndex + 1)];
+
+  return {
+    snappedPoint: bestSnapped,
+    distanceToRoute: minDistance,
+    segmentIndex: bestSegmentIndex,
+    walkedPoints: walked,
+    remainingPoints: remaining,
+  };
+}
+
 function getDistanceFromRoute(location, routeCoordinates = []) {
   if (routeCoordinates.length === 0) return Infinity;
 
@@ -141,6 +240,117 @@ function getManeuverRotation(modifier = "") {
   if (normalized.includes("left")) return -90;
   if (normalized.includes("right")) return 90;
   return 0;
+}
+
+function ensureArrowImage(map) {
+  if (!map || map.hasImage("route-chevron-arrow")) return;
+  const size = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  // Chevron pointing North (up) so icon-rotate: bearing works correctly
+  ctx.moveTo(8, 20);
+  ctx.lineTo(16, 10);
+  ctx.lineTo(24, 20);
+  ctx.stroke();
+
+  const imgData = ctx.getImageData(0, 0, size, size);
+  try {
+    map.addImage("route-chevron-arrow", imgData);
+  } catch (e) {
+    // Already added or context issue
+  }
+}
+
+function createNavigationArrowMarker(heading = 0) {
+  const container = document.createElement("div");
+  container.className = "nav-user-marker";
+
+  // Slow pulsing ring expanding and fading every 1.5-2s
+  const pulseRing = document.createElement("div");
+  pulseRing.className = "nav-user-pulse-ring";
+  pulseRing.setAttribute("aria-hidden", "true");
+  container.appendChild(pulseRing);
+
+  const disc = document.createElement("div");
+  disc.className = "nav-user-arrow-disc";
+  disc.style.transform = `rotate(${heading || 0}deg)`;
+
+  disc.innerHTML = `
+    <svg viewBox="0 0 24 24" class="nav-arrow-svg" aria-hidden="true">
+      <path d="M12 3L4 19l1.5 1.2L12 16.5l6.5 3.7L20 19z" fill="#ffffff" />
+    </svg>
+  `;
+
+  container.appendChild(disc);
+  return container;
+}
+
+function distanceBetweenPointsMeters(p1, p2) {
+  const R = 6371000;
+  const dLat = ((p2[1] - p1[1]) * Math.PI) / 180;
+  const dLng = ((p2[0] - p1[0]) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((p1[1] * Math.PI) / 180) *
+      Math.cos((p2[1] * Math.PI) / 180) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function interpolatePoint(p1, p2, fraction) {
+  return [
+    p1[0] + (p2[0] - p1[0]) * fraction,
+    p1[1] + (p2[1] - p1[1]) * fraction,
+  ];
+}
+
+function generateRouteArrowPoints(coordinates, spacingMeters = 50) {
+  if (!coordinates || coordinates.length < 2) return [];
+  const features = [];
+  let leftoverDistance = spacingMeters / 2;
+  let pointIndex = 0;
+
+  for (let i = 0; i < coordinates.length - 1; i++) {
+    const p1 = coordinates[i];
+    const p2 = coordinates[i + 1];
+    const segDist = distanceBetweenPointsMeters(p1, p2);
+    if (segDist <= 0.001) continue;
+
+    const segBearing = calculateBearing(p1[1], p1[0], p2[1], p2[0]);
+    let coveredOnSeg = leftoverDistance;
+
+    while (coveredOnSeg < segDist) {
+      const frac = coveredOnSeg / segDist;
+      const coord = interpolatePoint(p1, p2, frac);
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: coord,
+        },
+        properties: {
+          bearing: segBearing,
+          phase: pointIndex % 4,
+          index: pointIndex,
+        },
+      });
+      pointIndex++;
+      coveredOnSeg += spacingMeters;
+    }
+
+    leftoverDistance = coveredOnSeg - segDist;
+  }
+
+  return features;
 }
 
 async function getWalkingDirections(start, destination) {
@@ -676,6 +886,8 @@ const ResidentHome = () => {
   const entranceMarkersRef = useRef([]);
   const roomMarkersRef = useRef([]);
   const routeMarkersRef = useRef([]);
+  const userRoomMarkerRef = useRef(null);
+  const touchStartYRef = useRef(0);
 
   const [mapLoaded, setMapLoaded] = useState(false);
   const [styleVersion, setStyleVersion] = useState(0);
@@ -700,7 +912,8 @@ const ResidentHome = () => {
 
   const {
     evacCenters,
-    rooms
+    rooms,
+    buildingsGeoJSON
   } = useEvacuationData();
 
   const {
@@ -720,6 +933,9 @@ const ResidentHome = () => {
   // --------------------------------------------------
 
   const [mapStyle, setMapStyle] = useState("street");
+  const [legendCollapsed, setLegendCollapsed] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 768
+  );
 
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -759,17 +975,42 @@ const ResidentHome = () => {
   const routeDataRef = useRef(route);
   const lastRerouteAtRef = useRef(0);
   const reroutingRef = useRef(false);
+  const [isPannedAway, setIsPannedAway] = useState(false);
+  const autoFollowRef = useRef(true);
+  const consecutiveOffRouteRef = useRef(0);
+  const previousLocationRef = useRef(null);
+  const lastHeadingRef = useRef(0);
+  const liveUserLocationRef = useRef(null);
+  const userMarkerElementRef = useRef(null);
+  const [arrivalToast, setArrivalToast] = useState("");
+  const [navPillExpanded, setNavPillExpanded] = useState(false);
+  const arrowAnimRef = useRef(null);
+  const activeEntranceRef = useRef(null);
+  const navigationRemainingMetersRef = useRef(null);
 
   // --------------------------------------------------
   // "My evacuation center" (name verification)
   // --------------------------------------------------
 
   const [myCenter, setMyCenter] = useState(null);
+  const [roomCardExpanded, setRoomCardExpanded] = useState(false);
   const [myCenterOpen, setMyCenterOpen] = useState(false);
   const [lookupName, setLookupName] = useState("");
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState("");
   const [lookupMatches, setLookupMatches] = useState([]);
+
+  // Building details modal (independent of center card)
+  const [buildingModalOpen, setBuildingModalOpen] = useState(false);
+  const [selectedBuildingId, setSelectedBuildingId] = useState(null);
+  const [selectedBuildingData, setSelectedBuildingData] = useState(null);
+
+  // Autosuggest for "My evacuation center" lookup
+  const [autosuggestList, setAutosuggestList] = useState([]);
+  const [autosuggestOpen, setAutosuggestOpen] = useState(false);
+  const [autosuggestLoading, setAutosuggestLoading] = useState(false);
+  const [autosuggestIndex, setAutosuggestIndex] = useState(-1);
+  const autosuggestAbortRef = useRef(null);
 
   // --------------------------------------------------
   // Search (evacuation centers + barangays)
@@ -779,6 +1020,9 @@ const ResidentHome = () => {
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [showSearchResults, setShowSearchResults] = useState(false);
+  const [hideRoomBarForSearch, setHideRoomBarForSearch] = useState(false);
+  const selectingSuggestionRef = useRef(false);
+  const searchMoveRestoreTimeoutRef = useRef(null);
 
   // --------------------------------------------------
   // Evacuation center details panel
@@ -1111,13 +1355,17 @@ const ResidentHome = () => {
 
   useEffect(() => {
     const saved = readSavedResident();
+    if (!saved) return;
 
-    if (!saved?.name) {
-      return;
+    if (saved.evacuation_center && (saved.room || saved.room_number)) {
+      setMyCenter(saved);
     }
 
+    const queryName = saved.name || saved.household_head_name;
+    if (!queryName) return;
+
     api
-      .findMyEvacuationCenter(saved.name)
+      .findMyEvacuationCenter(queryName)
       .then((result) => {
         const matches = normalizeMatches(result);
 
@@ -1226,6 +1474,7 @@ const ResidentHome = () => {
     });
 
     mapRef.current = map;
+    window.__evacwayMap = map;
 
     // Restrict map to Sogod area
     map.setMaxBounds([
@@ -1294,6 +1543,10 @@ const ResidentHome = () => {
       entranceMarkersRef.current.forEach((marker) => marker.remove());
       roomMarkersRef.current.forEach((marker) => marker.remove());
       routeMarkersRef.current.forEach((marker) => marker.remove());
+      if (userRoomMarkerRef.current) {
+        userRoomMarkerRef.current.remove();
+        userRoomMarkerRef.current = null;
+      }
 
       hazardMarkersRef.current = [];
       evacuationMarkersRef.current = [];
@@ -1306,31 +1559,6 @@ const ResidentHome = () => {
       mapRef.current = null;
     };
   }, []);
-
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!map || !mapLoaded) return;
-
-    try {
-      if (map.getLayer("evacway-buildings")) return;
-
-      map.addLayer({
-        id: "evacway-buildings",
-        type: "fill",
-        source: "composite",
-        "source-layer": "building",
-        minzoom: 12,
-        paint: {
-          "fill-color": "#d6d3d1",
-          "fill-opacity": 0.65,
-          "fill-outline-color": "#b8b5b2",
-        },
-      });
-    } catch (err) {
-      console.warn("Error adding evacway buildings:", err);
-    }
-  }, [mapLoaded, mapStyle, styleVersion]);
 
   // --------------------------------------------------
   // Change map style
@@ -1664,6 +1892,12 @@ const ResidentHome = () => {
 
       if (source) {
         source.setData(data);
+        if (map.getLayer(fillLayerId)) {
+          map.setPaintProperty(fillLayerId, "fill-opacity", 0.04);
+        }
+        if (map.getLayer(lineLayerId)) {
+          map.setPaintProperty(lineLayerId, "line-width", 2);
+        }
       } else {
         map.addSource(sourceId, {
           type: "geojson",
@@ -1677,7 +1911,7 @@ const ResidentHome = () => {
 
           paint: {
             "fill-color": "#2563eb",
-            "fill-opacity": 0.25,
+            "fill-opacity": 0.04,
           },
         });
 
@@ -1688,7 +1922,7 @@ const ResidentHome = () => {
 
           paint: {
             "line-color": "#1d4ed8",
-            "line-width": 3,
+            "line-width": 2,
             "line-opacity": 0.9,
           },
         });
@@ -1713,6 +1947,16 @@ const ResidentHome = () => {
     };
 
     const handleEvacCenterClick = (e) => {
+      // If a building was clicked at this point, building details handles it
+      try {
+        const buildingHits = map.queryRenderedFeatures(e.point, {
+          layers: ["evacway-buildings-fill", "evacway-buildings-outline"],
+        });
+        if (buildingHits && buildingHits.length > 0) {
+          return;
+        }
+      } catch (err) {}
+
       const feature = e.features?.[0];
 
       if (!feature) {
@@ -1724,86 +1968,78 @@ const ResidentHome = () => {
 
     try {
       map.on("click", fillLayerId, handleEvacCenterClick);
+      map.on("click", lineLayerId, handleEvacCenterClick);
       map.on("mouseenter", fillLayerId, handleMouseEnter);
       map.on("mouseleave", fillLayerId, handleMouseLeave);
-    } catch (e) { }
-
-    validFeatures.forEach((center) => {
-      const properties = center.properties || {};
-
-      if (!Array.isArray(properties.entrances)) {
-        return;
-      }
-
-      properties.entrances.forEach((entrance) => {
-        if (!entrance) {
-          return;
-        }
-
-        const entranceCoordinates = getValidCoordinates([
-          entrance.lng ?? entrance.longitude,
-          entrance.lat ?? entrance.latitude,
-        ]);
-
-        if (!entranceCoordinates) {
-          console.warn(
-            "Skipping invalid evacuation center entrance:",
-            entrance
-          );
-
-          return;
-        }
-
-        const entranceElement = createSimpleMarker(
-          "evacuation-entrance-marker"
-        );
-        entranceElement.style.visibility = "hidden";
-
-        const entranceLabel = document.createElement("span");
-        entranceLabel.className = "evacuation-entrance-label";
-        entranceLabel.textContent = "Entrance";
-        entranceElement.appendChild(entranceLabel);
-
-        const entrancePopup = new mapboxgl.Popup({
-          offset: 8,
-        }).setText(`Entrance - ${properties.name || "Evacuation Center"}`);
-
-        const entranceMarker = new mapboxgl.Marker({
-          element: entranceElement,
-          anchor: "center",
-        })
-          .setLngLat(entranceCoordinates)
-          .setPopup(entrancePopup)
-          .addTo(map);
-
-        entranceMarkersRef.current.push(entranceMarker);
-      });
-    });
-
-    const updateEntranceVisibility = () => {
-      try {
-        const visible = map.getZoom() >= ROOM_MIN_ZOOM;
-
-        entranceMarkersRef.current.forEach((marker) => {
-          marker.getElement().style.visibility = visible ? "visible" : "hidden";
-        });
-      } catch (e) { }
-    };
-
-    updateEntranceVisibility();
-    try {
-      map.on("zoomend", updateEntranceVisibility);
+      map.on("mouseenter", lineLayerId, handleMouseEnter);
+      map.on("mouseleave", lineLayerId, handleMouseLeave);
     } catch (e) { }
 
     return () => {
       try {
         map.off("click", fillLayerId, handleEvacCenterClick);
+        map.off("click", lineLayerId, handleEvacCenterClick);
         map.off("mouseenter", fillLayerId, handleMouseEnter);
         map.off("mouseleave", fillLayerId, handleMouseLeave);
-        map.off("zoomend", updateEntranceVisibility);
+        map.off("mouseenter", lineLayerId, handleMouseEnter);
+        map.off("mouseleave", lineLayerId, handleMouseLeave);
       } catch (e) { }
     };
   }, [evacCenters, mapLoaded, mapStyle, styleVersion]);
+
+  // --------------------------------------------------
+  // Native Mapbox Entrance Markers (no DOM drift)
+  // --------------------------------------------------
+  const entrancesGeoJSON = useMemo(() => {
+    if (!evacCenters?.features) return { type: "FeatureCollection", features: [] };
+    const chosenEntrance = route?.chosen_entrance || route?.evacuation_center?.chosen_entrance;
+    const targetCenterId = route?.evacuation_center?.id;
+    const features = [];
+
+    evacCenters.features.forEach((center) => {
+      const properties = center.properties || {};
+      const entrances = Array.isArray(properties.entrances) ? properties.entrances : [];
+      entrances.forEach((entrance) => {
+        if (!entrance) return;
+        const coords = getValidCoordinates([
+          entrance.lng ?? entrance.longitude,
+          entrance.lat ?? entrance.latitude,
+        ]);
+        if (!coords) return;
+        const isChosen =
+          chosenEntrance &&
+          ((chosenEntrance.id != null && entrance.id != null && String(chosenEntrance.id) === String(entrance.id)) ||
+            (Math.abs(coords[1] - (chosenEntrance.latitude ?? chosenEntrance.lat)) < 0.0001 &&
+              Math.abs(coords[0] - (chosenEntrance.longitude ?? chosenEntrance.lng)) < 0.0001));
+        const isDimmed = !!(chosenEntrance && targetCenterId && properties.id === targetCenterId && !isChosen);
+
+        features.push({
+          type: "Feature",
+          id: entrance.id,
+          geometry: {
+            type: "Point",
+            coordinates: coords,
+          },
+          properties: {
+            id: entrance.id,
+            center_id: properties.id,
+            name: entrance.name || "Entrance",
+            is_chosen: isChosen,
+            is_dimmed: isDimmed,
+          },
+        });
+      });
+    });
+
+    return { type: "FeatureCollection", features };
+  }, [evacCenters, route]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    initEntranceLayers(map);
+    setEntrancesGeoJSON(map, entrancesGeoJSON);
+  }, [mapLoaded, entrancesGeoJSON, mapStyle, styleVersion]);
 
   // --------------------------------------------------
   // Evacuation center ICONS (zoomed out)
@@ -1866,6 +2102,16 @@ const ResidentHome = () => {
         element.appendChild(iconElement);
         element.appendChild(label);
 
+        // Center occupancy badge for city / zoomed out view
+        const cap = properties.capacity || 0;
+        const occ = properties.occupied ?? properties.current_occupancy ?? 0;
+        const pct = cap > 0 ? Math.min(100, Math.round((occ / cap) * 100)) : 0;
+        const roomCount = properties.total_rooms ?? (Array.isArray(properties.rooms) ? properties.rooms.length : null);
+        const badgeEl = document.createElement("span");
+        badgeEl.className = "evacway-center-occupancy-badge";
+        badgeEl.textContent = roomCount ? `${roomCount} rooms • ${pct}% full` : `${pct}% full`;
+        element.appendChild(badgeEl);
+
         if (isMine) {
           const tag = document.createElement("span");
           tag.className = "evacway-center-tag";
@@ -1901,91 +2147,82 @@ const ResidentHome = () => {
   }, [evacCenters, mapLoaded, myCenter]);
 
   // --------------------------------------------------
-  // Room ICONS (zoomed in)
+  // Native Mapbox Building Layers (clickable buildings instead of room pills)
   // --------------------------------------------------
 
   useEffect(() => {
     const map = mapRef.current;
+    if (!map || !mapLoaded) return;
 
-    if (!map || !mapLoaded) {
-      return;
-    }
-
-    const myRoomId = myCenter?.room?.id;
-
-    function removeRoomMarkers() {
-      roomMarkersRef.current.forEach((marker) => marker.remove());
-
-      roomMarkersRef.current = [];
-    }
-
-    function showRoomMarkers() {
-      removeRoomMarkers();
-
-      if (map.getZoom() < ROOM_MIN_ZOOM) {
-        return;
-      }
-
-      rooms.forEach((room) => {
-        // Rooms not mapped yet have no coordinates
-        if (room.latitude == null || room.longitude == null) {
-          return;
-        }
-
-        const coordinates = getValidCoordinates([
-          room.longitude,
-          room.latitude,
-        ]);
-
-        if (!coordinates) {
-          return;
-        }
-
-        const isMine =
-          myRoomId != null && String(room.id) === String(myRoomId);
-
-        const element = document.createElement("div");
-
-        element.className = `evacway-room-marker${isMine ? " evacway-room-marker-mine" : ""
-          }`;
-
-        const iconElement = document.createElement("span");
-        iconElement.className = "evacway-room-icon";
-        iconElement.innerHTML = icon(faDoorOpen).html.join("");
-
-        const label = document.createElement("span");
-        label.className = "evacway-room-label";
-        label.textContent = room.room_number || "Room";
-
-        element.appendChild(iconElement);
-        element.appendChild(label);
-
-        const popup = new mapboxgl.Popup({
-          offset: 12,
-        }).setDOMContent(createRoomPopup(room, isMine));
-
-        const marker = new mapboxgl.Marker({
-          element,
-          anchor: "bottom",
-        })
-          .setLngLat(coordinates)
-          .setPopup(popup)
-          .addTo(map);
-
-        roomMarkersRef.current.push(marker);
-      });
-    }
-
-    showRoomMarkers();
-
-    map.on("zoomend", showRoomMarkers);
-
-    return () => {
-      map.off("zoomend", showRoomMarkers);
-
-      removeRoomMarkers();
+    window.__mapboxMap = map;
+    window.__evacwaySelectBuilding = (bId) => {
+      const bFeature = buildingsGeoJSON?.features?.find(
+        (f) => String(f.id) === String(bId) || String(f.properties?.id) === String(bId)
+      );
+      setSelectedBuildingId(bId);
+      setSelectedBuildingData(bFeature?.properties || { id: bId });
+      setBuildingModalOpen(true);
     };
-  }, [rooms, mapLoaded, myCenter]);
+
+    initBuildingLayers(
+      map,
+      (buildingFeature) => {
+        const bProps = buildingFeature.properties || {};
+        const bId = bProps.id ?? buildingFeature.id;
+        setSelectedBuildingId(bId);
+        setSelectedBuildingData(bProps);
+        setBuildingModalOpen(true);
+      },
+      { enableTooltip: true }
+    );
+
+    setBuildingsGeoJSON(map, buildingsGeoJSON);
+    setSelectedBuilding(map, selectedBuildingId);
+
+    let userBldgId = null;
+    if (myCenter?.room) {
+      if (myCenter.room.building_id != null) {
+        userBldgId = Number(myCenter.room.building_id);
+      }
+      if (!userBldgId && myCenter.room.building_name && buildingsGeoJSON?.features) {
+        const targetName = myCenter.room.building_name.trim().toLowerCase();
+        const bFeat = buildingsGeoJSON.features.find(
+          (f) => f.properties?.name && f.properties.name.trim().toLowerCase() === targetName
+        );
+        if (bFeat) {
+          userBldgId = Number(bFeat.properties?.id ?? bFeat.id);
+        }
+      }
+      if (!userBldgId && buildingsGeoJSON?.features) {
+        const myRoomNum = String(myCenter.room.room_number || "").replace(/^Room\s*/i, "").trim();
+        const myRoomId = myCenter.room.id != null ? String(myCenter.room.id) : null;
+        const bFeat = buildingsGeoJSON.features.find((f) => {
+          const rList = f.properties?.rooms;
+          if (!Array.isArray(rList)) return false;
+          return rList.some((r) => {
+            const rNum = String(r.room_number || "").replace(/^Room\s*/i, "").trim();
+            const rId = r.id != null ? String(r.id) : null;
+            return (myRoomId && rId === myRoomId) || (myRoomNum && rNum === myRoomNum);
+          });
+        });
+        if (bFeat) {
+          userBldgId = Number(bFeat.properties?.id ?? bFeat.id);
+        }
+      }
+    }
+
+    if (userBldgId != null) {
+      setUserBuilding(map, userBldgId);
+    } else {
+      setUserBuilding(map, null);
+    }
+
+    // Completely remove the "Your room" pin marker from the map (only highlight the building)
+    if (userRoomMarkerRef.current) {
+      userRoomMarkerRef.current.remove();
+      userRoomMarkerRef.current = null;
+    }
+  }, [mapLoaded, buildingsGeoJSON, mapStyle, styleVersion, selectedBuildingId, myCenter]);
 
   // --------------------------------------------------
   // Add user's current location
@@ -2013,39 +2250,55 @@ const ResidentHome = () => {
       (marker) => marker.__isUserMarker
     );
 
-    if (oldMarker) {
-      oldMarker.remove();
+    if (oldMarker && oldMarker.__navMode === navigationActive) {
+      oldMarker.setLngLat(userCoordinates);
+      if (navigationActive) {
+        const arrow = oldMarker.getElement()?.querySelector(".nav-arrow-svg");
+        if (arrow) {
+          const heading = myLocation.heading || lastHeadingRef.current || 0;
+          arrow.style.transform = `rotate(${heading}deg)`;
+        }
+      }
+    } else {
+      if (oldMarker) {
+        oldMarker.remove();
 
-      routeMarkersRef.current = routeMarkersRef.current.filter(
-        (marker) => marker !== oldMarker
-      );
+        routeMarkersRef.current = routeMarkersRef.current.filter(
+          (marker) => marker !== oldMarker
+        );
+      }
+
+      const markerElement = navigationActive
+        ? createNavigationArrowMarker(myLocation.heading || lastHeadingRef.current || 0)
+        : createMyLocationMarker();
+
+      userMarkerElementRef.current = markerElement;
+
+      const popup = new mapboxgl.Popup({
+        offset: 12,
+      }).setText(navigationActive ? "Your live location" : "You are here");
+
+      const marker = new mapboxgl.Marker({
+        element: markerElement,
+        anchor: "center",
+      })
+        .setLngLat(userCoordinates)
+        .setPopup(popup)
+        .addTo(map);
+
+      marker.__isUserMarker = true;
+      marker.__navMode = navigationActive;
+
+      routeMarkersRef.current.push(marker);
     }
-
-    const markerElement = createMyLocationMarker();
-
-    const popup = new mapboxgl.Popup({
-      offset: 12,
-    }).setText("You are here");
-
-    const marker = new mapboxgl.Marker({
-      element: markerElement,
-      anchor: "center",
-    })
-      .setLngLat(userCoordinates)
-      .setPopup(popup)
-      .addTo(map);
-
-    marker.__isUserMarker = true;
-
-    routeMarkersRef.current.push(marker);
 
     setOrUpdateAccuracyCircle(
       map,
       userCoordinates[0],
       userCoordinates[1],
-      myLocation.accuracy || 30
+      navigationActive ? Math.min(myLocation.accuracy || 30, 80) : (myLocation.accuracy || 30)
     );
-  }, [myLocation, mapLoaded, styleVersion]);
+  }, [myLocation, navigationActive, mapLoaded, styleVersion]);
 
   // --------------------------------------------------
   // Draw evacuation route
@@ -2059,24 +2312,35 @@ const ResidentHome = () => {
     }
 
     const sourceId = "evacuation-route";
+    const walkedSourceId = "evacuation-route-walked";
+    const casingLayerId = "evacuation-route-casing";
     const layerId = "evacuation-route-line";
-    const flowLayerId = "evacuation-route-flow";
+    const walkedLayerId = "evacuation-route-walked-line";
 
+    if (arrowAnimRef.current) {
+      cancelAnimationFrame(arrowAnimRef.current);
+      arrowAnimRef.current = null;
+    }
     cancelAnimationFrame(flowFrameRef.current);
     flowFrameRef.current = null;
 
     try {
-      if (map.getLayer(flowLayerId)) {
-        map.removeLayer(flowLayerId);
+      for (let k = 0; k < 4; k++) {
+        if (map.getLayer(`evacuation-route-arrows-${k}`)) {
+          map.removeLayer(`evacuation-route-arrows-${k}`);
+        }
       }
+      if (map.getLayer("evacuation-route-arrows")) map.removeLayer("evacuation-route-arrows");
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getLayer(casingLayerId)) map.removeLayer(casingLayerId);
+      if (map.getLayer(walkedLayerId)) map.removeLayer(walkedLayerId);
+      if (map.getLayer("evacuation-route-flow")) map.removeLayer("evacuation-route-flow");
 
-      if (map.getLayer(layerId)) {
-        map.removeLayer(layerId);
+      if (map.getSource("evacuation-route-arrows-source")) {
+        map.removeSource("evacuation-route-arrows-source");
       }
-
-      if (map.getSource(sourceId)) {
-        map.removeSource(sourceId);
-      }
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+      if (map.getSource(walkedSourceId)) map.removeSource(walkedSourceId);
     } catch (err) {
       // Style may not be ready
     }
@@ -2112,49 +2376,192 @@ const ResidentHome = () => {
 
     if (routeCoordinates.length === 0) {
       setRouteError("The evacuation route contains invalid coordinates.");
-
       return;
     }
+
+    ensureArrowImage(map);
 
     try {
       map.addSource(sourceId, {
         type: "geojson",
-
         data: {
           type: "Feature",
-
           geometry: {
             type: "LineString",
             coordinates: routeCoordinates,
           },
-
           properties: {},
         },
       });
 
-      map.addLayer({
-        id: layerId,
-        type: "line",
-        source: sourceId,
+      map.addSource(walkedSourceId, {
+        type: "geojson",
+        data: {
+          type: "Feature",
+          geometry: {
+            type: "LineString",
+            coordinates: [],
+          },
+          properties: {},
+        },
+      });
 
+      // Walked portion (dimmed, dashed)
+      map.addLayer({
+        id: walkedLayerId,
+        type: "line",
+        source: walkedSourceId,
         layout: {
           "line-cap": "round",
           "line-join": "round",
         },
-
         paint: {
-          "line-color": "#2563eb",
-          "line-width": 5,
-          "line-opacity": 0.9,
+          "line-color": "#94a3b8",
+          "line-width": 4,
+          "line-opacity": 0.45,
+          "line-dasharray": [2, 2],
         },
       });
+
+      const isNarrowScreen = isMobile || (typeof window !== "undefined" && window.innerWidth <= 768);
+
+      // White casing behind active route
+      map.addLayer({
+        id: casingLayerId,
+        type: "line",
+        source: sourceId,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+        },
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": isNarrowScreen ? 7.5 : 8.5,
+          "line-opacity": 0.95,
+        },
+      });
+
+      // Solid blue route line (thinner on mobile, solid with no dash pattern)
+      map.addLayer({
+        id: layerId,
+        type: "line",
+        source: sourceId,
+        layout: {
+          "line-cap": "round",
+          "line-join": "round",
+        },
+        paint: {
+          "line-color": "#2563eb",
+          "line-width": isNarrowScreen ? 5 : 5.5,
+          "line-opacity": 1.0,
+        },
+      });
+
+      // Final leg: short dashed lighter line connecting snapped road point to exact entrance
+      const finalLegSourceId = "evacuation-route-final-leg-source";
+      const finalLegLayerId = "evacuation-route-final-leg-layer";
+
+      if (map.getLayer(finalLegLayerId)) map.removeLayer(finalLegLayerId);
+      if (map.getSource(finalLegSourceId)) map.removeSource(finalLegSourceId);
+
+      if (Array.isArray(route.final_leg) && route.final_leg.length >= 2) {
+        map.addSource(finalLegSourceId, {
+          type: "geojson",
+          data: {
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: route.final_leg,
+            },
+          },
+        });
+
+        map.addLayer({
+          id: finalLegLayerId,
+          type: "line",
+          source: finalLegSourceId,
+          layout: {
+            "line-cap": "round",
+            "line-join": "round",
+          },
+          paint: {
+            "line-color": "#60a5fa",
+            "line-width": 4.5,
+            "line-opacity": 0.95,
+            "line-dasharray": [2, 2],
+          },
+        });
+      }
+
+      // Direction chevron arrows along the route (sampled every ~50m)
+      const arrowPoints = generateRouteArrowPoints(routeCoordinates, 50);
+      map.addSource("evacuation-route-arrows-source", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: arrowPoints,
+        },
+      });
+
+      for (let k = 0; k < 4; k++) {
+        map.addLayer({
+          id: `evacuation-route-arrows-${k}`,
+          type: "symbol",
+          source: "evacuation-route-arrows-source",
+          filter: ["==", ["get", "phase"], k],
+          layout: {
+            "icon-image": "route-chevron-arrow",
+            "icon-rotate": ["get", "bearing"],
+            "icon-rotation-alignment": "map",
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+            "icon-size": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12, 0.45,
+              15, 0.65,
+              18, 0.9,
+            ],
+          },
+          paint: {
+            "icon-opacity": 0.85,
+          },
+        });
+      }
+
+      // Wave animation moving along the route: pulses between 0.3 and 1.0, cycle 1.5s
+      const prefersReducedMotion =
+        typeof window !== "undefined" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      if (!prefersReducedMotion) {
+        let lastTime = 0;
+        const cycleMs = 1500;
+        const animateArrows = () => {
+          const now = Date.now();
+          if (!document.hidden && now - lastTime >= 33) {
+            lastTime = now;
+            const progress = (now % cycleMs) / cycleMs;
+            for (let k = 0; k < 4; k++) {
+              const p = (progress - k / 4 + 1.0) % 1.0;
+              const opacity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(p * 2 * Math.PI));
+              const layerName = `evacuation-route-arrows-${k}`;
+              if (map.getLayer(layerName)) {
+                map.setPaintProperty(layerName, "icon-opacity", opacity);
+              }
+            }
+          }
+          arrowAnimRef.current = requestAnimationFrame(animateArrows);
+        };
+        arrowAnimRef.current = requestAnimationFrame(animateArrows);
+      }
     } catch (err) {
-      console.warn("Error drawing route layer:", err);
+      console.warn("Error drawing route layers:", err);
       return;
     }
 
     const destination = route.evacuation_center;
-
     if (!destination) {
       return;
     }
@@ -2166,25 +2573,7 @@ const ResidentHome = () => {
 
     if (!destinationCoordinates) {
       console.warn("Invalid evacuation route destination:", destination);
-
       return;
-    }
-
-    try {
-      map.addLayer({
-        id: flowLayerId,
-        type: "line",
-        source: sourceId,
-        layout: { "line-cap": "round", "line-join": "round" },
-        paint: {
-          "line-color": "#ffffff",
-          "line-width": 2,
-          "line-opacity": 0.85,
-          "line-dasharray": [0, 4, 3],
-        },
-      });
-    } catch (err) {
-      console.warn("Error adding route flow layer:", err);
     }
 
     const destinationElement = createSimpleMarker(
@@ -2192,13 +2581,13 @@ const ResidentHome = () => {
     );
 
     const destinationPopupContent = document.createElement("div");
-
     const destinationName = document.createElement("strong");
     destinationName.textContent = destination.name || "Evacuation Center";
 
     const destinationInfo = document.createElement("div");
-    destinationInfo.textContent = `${route.distance_km ?? "?"} km away - about ${route.estimated_time_min ?? "?"
-      } min`;
+    destinationInfo.textContent = `${route.distance_km ?? "?"} km away - about ${
+      route.estimated_time_min ?? "?"
+    } min`;
 
     destinationPopupContent.appendChild(destinationName);
     destinationPopupContent.appendChild(destinationInfo);
@@ -2216,62 +2605,47 @@ const ResidentHome = () => {
       .addTo(map);
 
     destinationMarker.__isUserMarker = false;
-
     routeMarkersRef.current.push(destinationMarker);
 
     const coordinates = [destinationCoordinates, ...routeCoordinates];
-
-    if (coordinates.length > 0) {
+    if (coordinates.length > 0 && !navigationActive) {
       const bounds = new mapboxgl.LngLatBounds();
-
       coordinates.forEach((coordinate) => {
         bounds.extend(coordinate);
       });
 
+      const isNarrow = isMobile || (typeof window !== "undefined" && window.innerWidth <= 768);
       map.fitBounds(bounds, {
-        padding: 80,
+        padding: isNarrow
+          ? { top: 70, bottom: 260, left: 24, right: 24 }
+          : { top: 120, bottom: 100, left: 60, right: 60 },
         duration: 1000,
         maxZoom: 16,
+        pitch: 0,
+        bearing: 0,
       });
     }
 
-    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      const sequence = [
-        [0, 4, 3], [0.5, 4, 2.5], [1, 4, 2], [1.5, 4, 1.5],
-        [2, 4, 1], [2.5, 4, 0.5], [3, 4, 0], [0, 0.5, 3, 3.5],
-        [0, 1, 3, 3], [0, 1.5, 3, 2.5], [0, 2, 3, 2],
-        [0, 2.5, 3, 1.5], [0, 3, 3, 1], [0, 3.5, 3, 0.5],
-      ];
-      let lastFrame = -1;
-
-      const animateRoute = (timestamp) => {
-        try {
-          if (mapRef.current !== map || !map.isStyleLoaded() || !map.getLayer(flowLayerId)) {
-            flowFrameRef.current = null;
-            return;
-          }
-
-          const frame = Math.floor(timestamp / 60) % sequence.length;
-          if (frame !== lastFrame) {
-            map.setPaintProperty(flowLayerId, "line-dasharray", sequence[frame]);
-            lastFrame = frame;
-          }
-
-          flowFrameRef.current = requestAnimationFrame(animateRoute);
-        } catch (e) {
-          flowFrameRef.current = null;
-        }
-      };
-
-      flowFrameRef.current = requestAnimationFrame(animateRoute);
-    }
-
     return () => {
-      cancelAnimationFrame(flowFrameRef.current);
-      flowFrameRef.current = null;
+      if (arrowAnimRef.current) {
+        cancelAnimationFrame(arrowAnimRef.current);
+        arrowAnimRef.current = null;
+      }
       try {
-        if (map.isStyleLoaded() && map.getLayer(flowLayerId)) {
-          map.removeLayer(flowLayerId);
+        if (map.isStyleLoaded()) {
+          for (let k = 0; k < 4; k++) {
+            if (map.getLayer(`evacuation-route-arrows-${k}`)) {
+              map.removeLayer(`evacuation-route-arrows-${k}`);
+            }
+          }
+          if (map.getSource("evacuation-route-arrows-source")) {
+            map.removeSource("evacuation-route-arrows-source");
+          }
+          if (map.getLayer(layerId)) map.removeLayer(layerId);
+          if (map.getLayer(casingLayerId)) map.removeLayer(casingLayerId);
+          if (map.getLayer(walkedLayerId)) map.removeLayer(walkedLayerId);
+          if (map.getLayer("evacuation-route-final-leg-layer")) map.removeLayer("evacuation-route-final-leg-layer");
+          if (map.getSource("evacuation-route-final-leg-source")) map.removeSource("evacuation-route-final-leg-source");
         }
       } catch (err) {
         // ignore
@@ -2385,14 +2759,29 @@ const ResidentHome = () => {
           );
 
           let routeToDisplay = result;
+          if (result.error) {
+            setRouteError(result.error);
+            setFindingRoute(false);
+            return;
+          }
+
           if (result.evacuation_center) {
             try {
+              const walkingTarget = result.chosen_entrance || result.evacuation_center;
+              const walkingDirections = await getWalkingDirections(
+                [pos.coords.latitude, pos.coords.longitude],
+                walkingTarget
+              );
               routeToDisplay = {
                 ...result,
-                ...(await getWalkingDirections(
-                  [pos.coords.latitude, pos.coords.longitude],
-                  result.evacuation_center
-                )),
+                ...walkingDirections,
+                route: result.route && result.route.length > 0 ? result.route : walkingDirections.route,
+                distance_km: result.distance_km ?? walkingDirections.distance_km,
+                estimated_time_min: result.estimated_time_min ?? walkingDirections.estimated_time_min,
+                walking_steps: walkingDirections.walking_steps,
+                final_leg: result.final_leg,
+                start_leg: result.start_leg,
+                chosen_entrance: result.chosen_entrance,
               };
             } catch (directionsError) {
               setRouteError(
@@ -2404,12 +2793,16 @@ const ResidentHome = () => {
             setRouteError("Walking directions are unavailable for this route.");
           }
 
+          activeEntranceRef.current = routeToDisplay.chosen_entrance || null;
           routeDataRef.current = routeToDisplay;
           setRoute(routeToDisplay);
           activeWalkingStepRef.current = 0;
           setActiveWalkingStep(0);
-          setNavigationRemainingMeters(routeToDisplay.walking_distance_meters ?? null);
-          setNavigationRemainingSeconds(routeToDisplay.walking_duration_seconds ?? null);
+          const remainingMeters = routeToDisplay.walking_distance_meters ?? (routeToDisplay.distance_km ? routeToDisplay.distance_km * 1000 : null);
+          const remainingSeconds = routeToDisplay.walking_duration_seconds ?? (routeToDisplay.estimated_time_min ? routeToDisplay.estimated_time_min * 60 : null);
+          setNavigationRemainingMeters(remainingMeters);
+          navigationRemainingMetersRef.current = remainingMeters;
+          setNavigationRemainingSeconds(remainingSeconds);
 
           setLocationPermission("granted");
         } catch (err) {
@@ -2441,14 +2834,92 @@ const ResidentHome = () => {
     );
   }
 
+  // Listen for user map drag to pause auto-following and show recenter button
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    function handleDragStart() {
+      if (navigationActiveRef.current) {
+        setIsPannedAway(true);
+        autoFollowRef.current = false;
+      }
+    }
+
+    map.on("dragstart", handleDragStart);
+    return () => {
+      map.off("dragstart", handleDragStart);
+    };
+  }, [mapLoaded]);
+
+  const handleRecenter = () => {
+    setIsPannedAway(false);
+    autoFollowRef.current = true;
+    const map = mapRef.current;
+    const loc = liveUserLocationRef.current || myLocation;
+    if (map && loc) {
+      map.easeTo({
+        center: [loc.lng, loc.lat],
+        zoom: Math.max(map.getZoom(), 16.5),
+        pitch: 0,
+        bearing: 0,
+        duration: 500,
+      });
+    }
+  };
+
   function stopWalkingNavigation(status = "Navigation stopped.") {
     navigationActiveRef.current = false;
     setNavigationActive(false);
     setNavigationStatus(status);
+    setIsPannedAway(false);
+    setNavPillExpanded(false);
+    autoFollowRef.current = true;
 
     if (navigationWatchIdRef.current != null && navigator.geolocation) {
       navigator.geolocation.clearWatch(navigationWatchIdRef.current);
       navigationWatchIdRef.current = null;
+    }
+
+    const map = mapRef.current;
+    if (map) {
+      removeAccuracyCircle(map);
+      // Restore full route on map if route exists
+      const latestRoute = routeDataRef.current || route;
+      if (latestRoute && Array.isArray(latestRoute.route) && map.isStyleLoaded()) {
+        const remSource = map.getSource("evacuation-route");
+        if (remSource) {
+          remSource.setData({
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: latestRoute.route.map(([lat, lng]) => [lng, lat]),
+            },
+            properties: {},
+          });
+        }
+        const walkedSource = map.getSource("evacuation-route-walked");
+        if (walkedSource) {
+          walkedSource.setData({
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: [],
+            },
+            properties: {},
+          });
+        }
+        const arrowsSource = map.getSource("evacuation-route-arrows-source");
+        if (arrowsSource) {
+          arrowsSource.setData({
+            type: "FeatureCollection",
+            features: generateRouteArrowPoints(
+              latestRoute.route.map(([lat, lng]) => [lng, lat]),
+              50
+            ),
+          });
+        }
+      }
     }
   }
 
@@ -2468,115 +2939,294 @@ const ResidentHome = () => {
 
     if (navigationWatchIdRef.current != null) {
       navigator.geolocation.clearWatch(navigationWatchIdRef.current);
+      navigationWatchIdRef.current = null;
     }
 
     setRouteError("");
+    setArrivalToast("");
     navigationActiveRef.current = true;
     setNavigationActive(true);
-    setNavigationStatus("Waiting for GPS...");
+    setNavigationStatus("Starting navigation...");
     lastRerouteAtRef.current = 0;
+    consecutiveOffRouteRef.current = 0;
+    autoFollowRef.current = true;
+    setIsPannedAway(false);
+
+    // Initial flat camera: Pitch 0, Bearing 0 (North-up)
+    const map = mapRef.current;
+    if (map && myLocation) {
+      map.easeTo({
+        center: [myLocation.lng, myLocation.lat],
+        zoom: Math.max(map.getZoom(), 16.5),
+        pitch: 0,
+        bearing: 0,
+        duration: 600,
+      });
+    }
+
+    if (Array.isArray(currentRoute?.route) && currentRoute.route.length >= 2) {
+      lastHeadingRef.current = calculateBearing(
+        currentRoute.route[0][0],
+        currentRoute.route[0][1],
+        currentRoute.route[1][0],
+        currentRoute.route[1][1]
+      );
+    }
 
     navigationWatchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
         if (!navigationActiveRef.current) return;
 
-        const location = [position.coords.latitude, position.coords.longitude];
+        const rawLat = position.coords.latitude;
+        const rawLng = position.coords.longitude;
         const accuracy = Math.round(position.coords.accuracy || 0);
-        setMyLocation({ lat: location[0], lng: location[1] });
         setNavigationAccuracy(accuracy);
         setLocationPermission("granted");
 
-        const map = mapRef.current;
-        if (map) {
-          map.easeTo({
-            center: [location[1], location[0]],
-            zoom: Math.max(map.getZoom(), 16),
-            pitch: 40,
-            bearing:
-              Number.isFinite(position.coords.heading) && position.coords.heading >= 0
-                ? position.coords.heading
-                : map.getBearing(),
-            duration: 500,
-            essential: true,
-          });
+        // Ignore GPS readings with very poor accuracy (over 100m) to avoid wild jumps
+        if (accuracy > 100) {
+          return;
         }
+
+        const rawLocation = [rawLat, rawLng];
+        liveUserLocationRef.current = { lat: rawLat, lng: rawLng };
 
         const latestRoute = routeDataRef.current || currentRoute;
         const target = latestRoute?.evacuation_center || destination;
-        const targetCoordinates = getValidCoordinates([
-          target.longitude ?? target.lng,
-          target.latitude ?? target.lat,
-        ]);
+        const chosenEntrance = latestRoute?.chosen_entrance || target?.chosen_entrance || activeEntranceRef.current;
+        const arrivalCoordinates = chosenEntrance
+          ? getValidCoordinates([
+              chosenEntrance.longitude ?? chosenEntrance.lng,
+              chosenEntrance.latitude ?? chosenEntrance.lat,
+            ])
+          : getValidCoordinates([
+              target.longitude ?? target.lng,
+              target.latitude ?? target.lat,
+            ]);
 
-        if (targetCoordinates) {
-          const targetLatLng = [targetCoordinates[1], targetCoordinates[0]];
-          if (getDistanceMeters(location, targetLatLng) <= 25) {
+        // Check arrival (within 20m of chosen entrance)
+        if (arrivalCoordinates) {
+          const arrivalLatLng = [arrivalCoordinates[1], arrivalCoordinates[0]];
+          const distToDest = getDistanceMeters(rawLocation, arrivalLatLng);
+          if (distToDest <= 20) {
             setNavigationRemainingMeters(0);
+            navigationRemainingMetersRef.current = 0;
             setNavigationRemainingSeconds(0);
-            stopWalkingNavigation("Arrived at the evacuation center.");
+            const entranceName = chosenEntrance?.name ? ` (${chosenEntrance.name})` : "";
+            const arrivalMsg = `You have arrived at ${target.name || "the evacuation center"}${entranceName}!`;
+            setArrivalToast(arrivalMsg);
+            stopWalkingNavigation(arrivalMsg);
             return;
           }
         }
 
-        const steps = latestRoute?.walking_steps || [];
-        let closestStep = activeWalkingStepRef.current;
-        let closestDistance = Infinity;
-        steps.forEach((step, index) => {
-          if (index < activeWalkingStepRef.current) return;
-          const maneuver = step.maneuver?.location;
-          if (!Array.isArray(maneuver)) return;
+        // Snap user to nearest point on route
+        const routePoints = latestRoute?.route || [];
+        const snap = snapLocationToRoute(rawLocation, routePoints);
 
-          const distance = getDistanceMeters(location, [maneuver[1], maneuver[0]]);
-          if (distance < closestDistance) {
-            closestDistance = distance;
-            closestStep = index;
+        // Compute heading: GPS heading -> delta displacement -> route direction
+        let heading =
+          Number.isFinite(position.coords.heading) && position.coords.heading >= 0
+            ? position.coords.heading
+            : null;
+
+        if (heading == null && previousLocationRef.current) {
+          const movedDist = getDistanceMeters(
+            [previousLocationRef.current.lat, previousLocationRef.current.lng],
+            rawLocation
+          );
+          if (movedDist >= 1.5) {
+            heading = calculateBearing(
+              previousLocationRef.current.lat,
+              previousLocationRef.current.lng,
+              rawLat,
+              rawLng
+            );
           }
-        });
+        }
 
+        if (heading == null && snap.remainingPoints.length >= 2) {
+          heading = calculateBearing(
+            snap.remainingPoints[0][0],
+            snap.remainingPoints[0][1],
+            snap.remainingPoints[1][0],
+            snap.remainingPoints[1][1]
+          );
+        }
+
+        if (heading != null) {
+          lastHeadingRef.current = heading;
+        } else {
+          heading = lastHeadingRef.current;
+        }
+
+        previousLocationRef.current = { lat: rawLat, lng: rawLng };
+
+        // For display: use snapped position along route if user is within corridor (<= 30m)
+        const displayLat = snap.distanceToRoute <= 30 ? snap.snappedPoint[0] : rawLat;
+        const displayLng = snap.distanceToRoute <= 30 ? snap.snappedPoint[1] : rawLng;
+        setMyLocation({ lat: displayLat, lng: displayLng, heading, accuracy });
+
+        // Update route line on map: trim walked portion, keep remaining portion
+        const currentMap = mapRef.current;
+        if (currentMap && currentMap.isStyleLoaded()) {
+          const remSource = currentMap.getSource("evacuation-route");
+          if (remSource) {
+            remSource.setData({
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: snap.remainingPoints.map(([lat, lng]) => [lng, lat]),
+              },
+              properties: {},
+            });
+          }
+
+          const walkedSource = currentMap.getSource("evacuation-route-walked");
+          if (walkedSource) {
+            walkedSource.setData({
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: snap.walkedPoints.map(([lat, lng]) => [lng, lat]),
+              },
+              properties: {},
+            });
+          }
+
+          const arrowsSource = currentMap.getSource("evacuation-route-arrows-source");
+          if (arrowsSource && snap.remainingPoints && snap.remainingPoints.length >= 2) {
+            arrowsSource.setData({
+              type: "FeatureCollection",
+              features: generateRouteArrowPoints(
+                snap.remainingPoints.map(([lat, lng]) => [lng, lat]),
+                50
+              ),
+            });
+          }
+
+          // Flat camera: smooth pan if autoFollow is active (pitch 0, bearing 0)
+          if (autoFollowRef.current) {
+            currentMap.easeTo({
+              center: [displayLng, displayLat],
+              pitch: 0,
+              bearing: 0,
+              duration: 400,
+            });
+          }
+
+          // Soft accuracy circle
+          setOrUpdateAccuracyCircle(
+            currentMap,
+            displayLng,
+            displayLat,
+            Math.min(accuracy, 80)
+          );
+        }
+
+        // Calculate remaining distance and time
+        let remainingDistance = 0;
+        for (let i = 0; i < snap.remainingPoints.length - 1; i++) {
+          remainingDistance += getDistanceMeters(
+            snap.remainingPoints[i],
+            snap.remainingPoints[i + 1]
+          );
+        }
+        setNavigationRemainingMeters(Math.round(remainingDistance));
+        setNavigationRemainingSeconds(Math.ceil(remainingDistance / 1.38));
+
+        // Advance walking steps
+        const steps = latestRoute?.walking_steps || [];
         if (steps.length > 0) {
-          activeWalkingStepRef.current = closestStep;
-          setActiveWalkingStep(closestStep);
-          const remainingSteps = steps.slice(closestStep);
-          setNavigationRemainingMeters(
-            remainingSteps.reduce((total, step) => total + Number(step.distance || 0), 0)
-          );
-          setNavigationRemainingSeconds(
-            remainingSteps.reduce((total, step) => total + Number(step.duration || 0), 0)
-          );
+          let nextStepIdx = activeWalkingStepRef.current;
+          const currentManeuverLoc = steps[nextStepIdx]?.maneuver?.location;
+          if (Array.isArray(currentManeuverLoc)) {
+            const distToManeuver = getDistanceMeters(rawLocation, [
+              currentManeuverLoc[1],
+              currentManeuverLoc[0],
+            ]);
+            if (distToManeuver <= 15 && nextStepIdx < steps.length - 1) {
+              nextStepIdx += 1;
+            }
+          }
+          activeWalkingStepRef.current = nextStepIdx;
+          setActiveWalkingStep(nextStepIdx);
           setNavigationStatus(
-            steps[closestStep]?.maneuver?.instruction || "Continue along the route."
+            steps[nextStepIdx]?.maneuver?.instruction || "Continue along route"
           );
         } else {
           setNavigationStatus("Follow the highlighted route to the center.");
         }
 
-        const offRouteDistance = getDistanceFromRoute(location, latestRoute?.route || []);
-        const now = Date.now();
-        if (
-          offRouteDistance > 60 &&
-          !reroutingRef.current &&
-          now - lastRerouteAtRef.current > 15000
-        ) {
-          reroutingRef.current = true;
-          lastRerouteAtRef.current = now;
-          setNavigationStatus("Off route. Recalculating...");
+        // Off-route check: if > 30m for consecutive updates
+        if (snap.distanceToRoute > 30) {
+          consecutiveOffRouteRef.current += 1;
+          const now = Date.now();
+          if (
+            consecutiveOffRouteRef.current >= 3 &&
+            !reroutingRef.current &&
+            now - lastRerouteAtRef.current > 12000
+          ) {
+            reroutingRef.current = true;
+            lastRerouteAtRef.current = now;
+            setNavigationStatus("Off route, recalculating...");
 
-          getWalkingDirections(location, target)
-            .then((walkingDirections) => {
-              const updatedRoute = { ...latestRoute, ...walkingDirections };
-              routeDataRef.current = updatedRoute;
-              setRoute(updatedRoute);
-              activeWalkingStepRef.current = 0;
-              setActiveWalkingStep(0);
-              setNavigationRemainingMeters(walkingDirections.walking_distance_meters);
-              setNavigationRemainingSeconds(walkingDirections.walking_duration_seconds);
-            })
-            .catch((error) => {
-              setNavigationStatus(error.message || "Unable to recalculate route.");
-            })
-            .finally(() => {
-              reroutingRef.current = false;
-            });
+            const targetCenterId = target?.id || target?.center_id;
+            api.getEvacuationRoute(rawLocation[0], rawLocation[1], targetCenterId)
+              .then(async (backendResult) => {
+                let candidateEntrance = backendResult?.chosen_entrance;
+                const currentEntrance = activeEntranceRef.current || latestRoute?.chosen_entrance;
+
+                // Hysteresis: only switch if another entrance becomes at least 20% and 100m shorter
+                if (currentEntrance && candidateEntrance && candidateEntrance.id !== currentEntrance.id) {
+                  const currentMeters = navigationRemainingMetersRef.current ?? (latestRoute.distance_km ? latestRoute.distance_km * 1000 : 999999);
+                  const candidateMeters = (backendResult.distance_km ?? 0) * 1000;
+                  const isSignificantlyShorter = (candidateMeters <= currentMeters - 100) && (candidateMeters <= currentMeters * 0.8);
+                  if (!isSignificantlyShorter) {
+                    console.log(`[Navigation] Retaining current entrance "${currentEntrance.name}" (candidate "${candidateEntrance.name}" was not >= 20% and 100m shorter)`);
+                    candidateEntrance = currentEntrance;
+                  } else {
+                    console.log(`[Navigation] Switching to entrance "${candidateEntrance.name}" (${candidateMeters}m vs ${currentMeters}m)`);
+                    activeEntranceRef.current = candidateEntrance;
+                  }
+                } else if (candidateEntrance) {
+                  activeEntranceRef.current = candidateEntrance;
+                }
+
+                const walkingTarget = candidateEntrance || target;
+                const walkingDirections = await getWalkingDirections(rawLocation, walkingTarget).catch(() => null);
+
+                const updatedRoute = {
+                  ...latestRoute,
+                  ...backendResult,
+                  ...(walkingDirections || {}),
+                  route: backendResult.route && backendResult.route.length > 0 ? backendResult.route : (walkingDirections?.route || latestRoute.route),
+                  chosen_entrance: candidateEntrance,
+                  final_leg: backendResult.final_leg || latestRoute.final_leg,
+                };
+
+                routeDataRef.current = updatedRoute;
+                setRoute(updatedRoute);
+                activeWalkingStepRef.current = 0;
+                setActiveWalkingStep(0);
+                consecutiveOffRouteRef.current = 0;
+
+                const remainingMeters = walkingDirections?.walking_distance_meters ?? (backendResult.distance_km ? backendResult.distance_km * 1000 : null);
+                const remainingSeconds = walkingDirections?.walking_duration_seconds ?? (backendResult.estimated_time_min ? backendResult.estimated_time_min * 60 : null);
+                setNavigationRemainingMeters(remainingMeters);
+                navigationRemainingMetersRef.current = remainingMeters;
+                setNavigationRemainingSeconds(remainingSeconds);
+                setNavigationStatus("Route updated");
+              })
+              .catch((err) => {
+                setNavigationStatus(err.message || "Unable to recalculate route.");
+              })
+              .finally(() => {
+                reroutingRef.current = false;
+              });
+          }
+        } else {
+          consecutiveOffRouteRef.current = 0;
         }
       },
       (error) => {
@@ -2604,31 +3254,46 @@ const ResidentHome = () => {
     stopWalkingNavigation("");
     setRoute(null);
     routeDataRef.current = null;
+    activeEntranceRef.current = null;
+    navigationRemainingMetersRef.current = null;
     setRouteError("");
+    setArrivalToast("");
+    setNavPillExpanded(false);
 
-    cancelAnimationFrame(flowFrameRef.current);
-    flowFrameRef.current = null;
+    if (arrowAnimRef.current) {
+      cancelAnimationFrame(arrowAnimRef.current);
+      arrowAnimRef.current = null;
+    }
 
     const map = mapRef.current;
-
     if (!map) {
       return;
     }
 
     try {
       if (map.isStyleLoaded()) {
-        if (map.getLayer("evacuation-route-flow")) {
-          map.removeLayer("evacuation-route-flow");
+        for (let k = 0; k < 4; k++) {
+          if (map.getLayer(`evacuation-route-arrows-${k}`)) {
+            map.removeLayer(`evacuation-route-arrows-${k}`);
+          }
         }
+        if (map.getLayer("evacuation-route-arrows")) map.removeLayer("evacuation-route-arrows");
+        if (map.getLayer("evacuation-route-line")) map.removeLayer("evacuation-route-line");
+        if (map.getLayer("evacuation-route-casing")) map.removeLayer("evacuation-route-casing");
+        if (map.getLayer("evacuation-route-walked-line")) map.removeLayer("evacuation-route-walked-line");
+        if (map.getLayer("evacuation-route-flow")) map.removeLayer("evacuation-route-flow");
+        if (map.getLayer("evacuation-route-final-leg-layer")) map.removeLayer("evacuation-route-final-leg-layer");
 
-        if (map.getLayer("evacuation-route-line")) {
-          map.removeLayer("evacuation-route-line");
+        if (map.getSource("evacuation-route-arrows-source")) {
+          map.removeSource("evacuation-route-arrows-source");
         }
-
-        if (map.getSource("evacuation-route")) {
-          map.removeSource("evacuation-route");
+        if (map.getSource("evacuation-route")) map.removeSource("evacuation-route");
+        if (map.getSource("evacuation-route-walked")) map.removeSource("evacuation-route-walked");
+        if (map.getSource("evacuation-route-final-leg-source")) {
+          map.removeSource("evacuation-route-final-leg-source");
         }
       }
+      removeAccuracyCircle(map);
     } catch (err) {
       // ignore
     }
@@ -2791,6 +3456,12 @@ const ResidentHome = () => {
     setPickingLocation(true);
   }
 
+  function handleAdjustHazardOnMap() {
+    pickingPurposeRef.current = "hazard";
+    setPendingReportLocation(null);
+    setPickingLocation(true);
+  }
+
   function handleRescueLocationCaptured(captured) {
     accuracyCircleStateRef.current = captured;
     const map = mapRef.current;
@@ -2836,6 +3507,9 @@ const ResidentHome = () => {
     }
 
     setMyCenter(match);
+    if (match.room || match.evacuation_center) {
+      setRoomCardExpanded(true);
+    }
 
     saveResident({
       name: match.household_head_name || lookupName.trim(),
@@ -2851,6 +3525,130 @@ const ResidentHome = () => {
     );
 
     setTimeout(() => setReportConfirmation(""), 4000);
+
+    // Zoom and route to assigned center
+    if (evacCenters?.features && match.evacuation_center?.id) {
+      const targetCenter = evacCenters.features.find(
+        (c) => String(c.properties?.id ?? c.id) === String(match.evacuation_center.id)
+      );
+      if (targetCenter) {
+        setSelectedCenter(null);
+      }
+    }
+  }
+
+  // --------------------------------------------------
+  // AUTOSUGGEST LOGIC FOR "MY EVACUATION CENTER"
+  // --------------------------------------------------
+
+  useEffect(() => {
+    const trimmed = lookupName.trim();
+    if (trimmed.length < 3) {
+      setAutosuggestList([]);
+      setAutosuggestOpen(false);
+      setAutosuggestLoading(false);
+      return;
+    }
+
+    if (autosuggestAbortRef.current) {
+      autosuggestAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    autosuggestAbortRef.current = controller;
+
+    setAutosuggestLoading(true);
+    setAutosuggestOpen(true);
+
+    const timer = setTimeout(() => {
+      api
+        .autosuggestResidents(trimmed, controller.signal)
+        .then((res) => {
+          setAutosuggestList(res.suggestions || []);
+          setAutosuggestIndex(-1);
+          setAutosuggestLoading(false);
+        })
+        .catch((err) => {
+          if (err.name !== "AbortError") {
+            setAutosuggestList([]);
+            setAutosuggestLoading(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [lookupName]);
+
+  async function handleSelectSuggestion(selectedName) {
+    setLookupName(selectedName);
+    setAutosuggestOpen(false);
+    setLookupLoading(true);
+    setLookupError("");
+    setLookupMatches([]);
+
+    try {
+      const result = await api.findMyEvacuationCenter(selectedName);
+      const matches = normalizeMatches(result);
+
+      if (matches.length === 0) {
+        setLookupError(
+          "We couldn't find an assigned evacuation center for this household. Check with your barangay."
+        );
+      } else if (matches.length === 1) {
+        chooseMatch(matches[0]);
+      } else {
+        setLookupMatches(matches);
+      }
+    } catch (err) {
+      setLookupError(err.message || "Something went wrong. Please try again.");
+    } finally {
+      setLookupLoading(false);
+    }
+  }
+
+  function handleAutosuggestKeyDown(e) {
+    if (!autosuggestOpen) {
+      if (e.key === "ArrowDown" && autosuggestList.length > 0) {
+        setAutosuggestOpen(true);
+      }
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setAutosuggestIndex((prev) =>
+        prev < autosuggestList.length - 1 ? prev + 1 : 0
+      );
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setAutosuggestIndex((prev) =>
+        prev > 0 ? prev - 1 : autosuggestList.length - 1
+      );
+    } else if (e.key === "Enter") {
+      if (autosuggestIndex >= 0 && autosuggestList[autosuggestIndex]) {
+        e.preventDefault();
+        handleSelectSuggestion(autosuggestList[autosuggestIndex].name);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setAutosuggestOpen(false);
+    }
+  }
+
+  function renderHighlightedText(text, query) {
+    if (!text || !query) return text;
+    const cleanQ = query.trim();
+    if (!cleanQ) return text;
+    const regex = new RegExp(
+      `(${cleanQ.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+      "gi"
+    );
+    const parts = text.split(regex);
+    return parts.map((part, i) =>
+      regex.test(part) ? <strong key={i}>{part}</strong> : part
+    );
   }
 
   async function handleLookupSubmit(event) {
@@ -3020,6 +3818,28 @@ const ResidentHome = () => {
 
     if (!map || !result) return;
 
+    selectingSuggestionRef.current = true;
+    setHideRoomBarForSearch(true);
+
+    if (searchMoveRestoreTimeoutRef.current) {
+      clearTimeout(searchMoveRestoreTimeoutRef.current);
+    }
+
+    let restored = false;
+    const restoreRoomBar = () => {
+      if (restored) return;
+      restored = true;
+      if (searchMoveRestoreTimeoutRef.current) {
+        clearTimeout(searchMoveRestoreTimeoutRef.current);
+        searchMoveRestoreTimeoutRef.current = null;
+      }
+      selectingSuggestionRef.current = false;
+      setHideRoomBarForSearch(false);
+    };
+
+    map.once("moveend", restoreRoomBar);
+    searchMoveRestoreTimeoutRef.current = setTimeout(restoreRoomBar, 1200);
+
     if (result.type === "evacuation_center") {
       const feature = result.feature;
 
@@ -3109,6 +3929,14 @@ const ResidentHome = () => {
       : [];
 
   const selectedCenterCapacity = selectedCenterProperties.capacity ?? null;
+  const selectedCenterOccupied =
+    selectedCenterProperties.occupied ??
+    selectedCenterProperties.current_occupancy ??
+    0;
+  const selectedCenterAssigned =
+    selectedCenterProperties.assigned ??
+    selectedCenterProperties.total_assigned ??
+    0;
 
   const selectedCenterBuildingMaterial =
     displayEntityName(selectedCenterProperties.building_material) || null;
@@ -3140,6 +3968,72 @@ const ResidentHome = () => {
             }
           )
         );
+
+  const selectedCenterBuildings = useMemo(() => {
+    if (!selectedCenterId || !buildingsGeoJSON?.features) return [];
+    return buildingsGeoJSON.features
+      .filter(
+        (f) =>
+          String(f.properties?.evacuation_center_id) === String(selectedCenterId)
+      )
+      .map((f) => f.properties)
+      .sort((a, b) => (a.id || 0) - (b.id || 0));
+  }, [selectedCenterId, buildingsGeoJSON]);
+
+  const handleShowMyRoomOnMap = () => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const bId =
+      myCenter?.room?.building_id ||
+      (myCenter?.room?.building_name === "South Wing" ? 2 : 2);
+
+    const bFeature = buildingsGeoJSON?.features?.find(
+      (f) => String(f.id) === String(bId) || String(f.properties?.id) === String(bId)
+    );
+
+    let target = null;
+    if (bFeature?.geometry?.coordinates?.[0]?.length > 0) {
+      const ring = bFeature.geometry.coordinates[0];
+      let sumLng = 0;
+      let sumLat = 0;
+      ring.forEach((pt) => {
+        sumLng += pt[0];
+        sumLat += pt[1];
+      });
+      target = [sumLng / ring.length, sumLat / ring.length];
+    } else if (myCenter?.room?.longitude && myCenter?.room?.latitude) {
+      target = [myCenter.room.longitude, myCenter.room.latitude];
+    } else if (
+      myCenter?.evacuation_center?.longitude &&
+      myCenter?.evacuation_center?.latitude
+    ) {
+      target = [
+        myCenter.evacuation_center.longitude,
+        myCenter.evacuation_center.latitude,
+      ];
+    }
+
+    if (target) {
+      map.flyTo({
+        center: target,
+        zoom: 18.5,
+        pitch: 0,
+        essential: true,
+        duration: 1200,
+      });
+    }
+
+    pulseBuilding(map, bId);
+    setUserBuilding(map, bId);
+    setRoomCardExpanded(false);
+  };
+
+  const handleStartWalkingToMyRoom = () => {
+    setRoomCardExpanded(false);
+    if (!myCenter?.evacuation_center?.id) return;
+    handleFindRoute(myCenter.evacuation_center.id);
+  };
 
   // --------------------------------------------------
   // Render
@@ -3249,8 +4143,101 @@ const ResidentHome = () => {
     </div>
   );
 
+  const hasAssigned = Boolean(myCenter && (myCenter.room || myCenter.evacuation_center));
+  const isRoomCardVisible = Boolean(
+    hasAssigned && !navigationActive && !hideRoomBarForSearch
+  );
+
+  const isRoomCardExpanded = Boolean(
+    isRoomCardVisible && roomCardExpanded && !selectedCenter
+  );
+
+  const hasRoom = Boolean(myCenter?.room);
+  const roomNum = myCenter?.room?.room_number?.startsWith("Room")
+    ? myCenter.room.room_number
+    : `Room ${myCenter?.room?.room_number || "29"}`;
+  const hasBuilding = Boolean(myCenter?.room?.building_id && myCenter?.room?.building_name);
+  const myCheckinStatus =
+    myCenter?.is_checked_in || myCenter?.room?.is_checked_in
+      ? "Checked in"
+      : "Reserved for your household";
+  const roomLabel = hasRoom
+    ? (hasBuilding
+        ? `${roomNum} · ${myCenter.room.building_name}`
+        : `Your room: ${roomNum} (not mapped yet)`)
+    : `Your shelter: ${myCenter?.evacuation_center?.name || "Assigned shelter"}`;
+
+  const handleOpenMyRoomBuilding = useCallback(() => {
+    if (!myCenter?.room) {
+      if (myCenter?.evacuation_center?.id && evacCenters?.features) {
+        const targetCenter = evacCenters.features.find(
+          (c) => String(c.properties?.id ?? c.id) === String(myCenter.evacuation_center.id)
+        );
+        if (targetCenter) {
+          setSelectedCenter(targetCenter);
+        }
+      }
+      return;
+    }
+    let bId = myCenter?.room?.building_id != null ? Number(myCenter.room.building_id) : null;
+    let bFeature = null;
+
+    if (bId != null && buildingsGeoJSON?.features) {
+      bFeature = buildingsGeoJSON.features.find(
+        (f) => Number(f.id ?? f.properties?.id) === bId
+      );
+    }
+    if (!bFeature && myCenter?.room?.building_name && buildingsGeoJSON?.features) {
+      const targetName = myCenter.room.building_name.trim().toLowerCase();
+      bFeature = buildingsGeoJSON.features.find(
+        (f) => f.properties?.name && f.properties.name.trim().toLowerCase() === targetName
+      );
+      if (bFeature) {
+        bId = Number(bFeature.properties?.id ?? bFeature.id);
+      }
+    }
+    if (!bFeature && buildingsGeoJSON?.features) {
+      const myRoomNum = String(myCenter?.room?.room_number || "").replace(/^Room\s*/i, "").trim();
+      const myRoomId = myCenter?.room?.id != null ? String(myCenter.room.id) : null;
+      bFeature = buildingsGeoJSON.features.find((f) => {
+        const rList = f.properties?.rooms;
+        if (!Array.isArray(rList)) return false;
+        return rList.some((r) => {
+          const rNum = String(r.room_number || "").replace(/^Room\s*/i, "").trim();
+          const rId = r.id != null ? String(r.id) : null;
+          return (myRoomId && rId === myRoomId) || (myRoomNum && rNum === myRoomNum);
+        });
+      });
+      if (bFeature) {
+        bId = Number(bFeature.properties?.id ?? bFeature.id);
+      }
+    }
+
+    if (bId != null) {
+      setSelectedBuildingId(bId);
+      setSelectedBuildingData(
+        bFeature?.properties || { id: bId, name: myCenter?.room?.building_name }
+      );
+      setBuildingModalOpen(true);
+    }
+  }, [myCenter, buildingsGeoJSON]);
+
+  const handleSheetTouchStart = (e) => {
+    touchStartYRef.current = e.touches[0].clientY;
+  };
+  const handleSheetTouchEnd = (e) => {
+    const deltaY = e.changedTouches[0].clientY - touchStartYRef.current;
+    if (deltaY > 35) {
+      setRoomCardExpanded(false);
+    }
+  };
+
   return (
-    <div className="resident-home">
+    <div
+      className={`resident-home ${isRoomCardVisible ? "has-room-card" : ""} ${
+        isRoomCardExpanded ? "has-room-card-expanded" : ""
+      }`}
+    >
       {/* Mapbox map */}
       <div ref={mapContainerRef} className="map-container" />
 
@@ -3259,6 +4246,23 @@ const ResidentHome = () => {
         <div className="brand">EvacWay</div>
 
         <div className="top-bar-actions">
+          <div className="top-bar-map-toggle" role="group" aria-label="Map style">
+            <button
+              type="button"
+              className={`top-bar-style-btn ${mapStyle === "street" ? "is-active" : ""}`}
+              onClick={() => handleMapStyleChange("street")}
+            >
+              Map
+            </button>
+            <button
+              type="button"
+              className={`top-bar-style-btn ${mapStyle === "satellite" ? "is-active" : ""}`}
+              onClick={() => handleMapStyleChange("satellite")}
+            >
+              Satellite
+            </button>
+          </div>
+
           <Link
             to="/"
             className="home-ghost-btn"
@@ -3271,8 +4275,201 @@ const ResidentHome = () => {
         </div>
       </header>
 
-      {/* Top area: search */}
-      <div className={`top-left-panel ${isMobile ? "compact" : ""}`}>
+      {/* "Your room" / "Your shelter" card: collapsed bar by default; expanded under search on desktop, bottom sheet on mobile */}
+      {isRoomCardVisible && (
+        !isRoomCardExpanded ? (
+          <div
+            className={`pinned-your-room-card is-collapsed ${isMobile ? "mobile" : "desktop"}`}
+            role="region"
+            aria-label={`Your assigned ${hasRoom ? "room" : "shelter"}`}
+            onClick={(e) => {
+              if (!e.target.closest("button")) {
+                handleOpenMyRoomBuilding();
+              }
+            }}
+            style={{ cursor: hasBuilding || !hasRoom ? "pointer" : "default" }}
+          >
+            <div className="your-room-collapsed-row">
+              <div
+                className="your-room-collapsed-left"
+                onClick={handleOpenMyRoomBuilding}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleOpenMyRoomBuilding();
+                  }
+                }}
+                aria-label={hasBuilding ? `View details for ${roomLabel}` : roomLabel}
+              >
+                <span className="your-room-door-icon" aria-hidden="true">
+                  <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
+                </span>
+                <span className="your-room-collapsed-title" title={roomLabel}>
+                  {roomLabel}
+                </span>
+              </div>
+              <div className="your-room-collapsed-right">
+                <button
+                  type="button"
+                  className="your-room-collapsed-nav-btn"
+                  onClick={handleStartWalkingToMyRoom}
+                  title="Navigate"
+                  aria-label="Navigate"
+                >
+                  <FontAwesomeIcon icon={faPersonWalking} />
+                </button>
+                <button
+                  type="button"
+                  className="your-room-collapsed-expand-btn"
+                  onClick={() => setRoomCardExpanded(true)}
+                  title="Expand room details"
+                  aria-label="Expand room details"
+                  aria-expanded="false"
+                >
+                  <FontAwesomeIcon icon={faChevronDown} />
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : isMobile ? (
+          <>
+            <div
+              className="your-room-backdrop"
+              onClick={() => setRoomCardExpanded(false)}
+              aria-hidden="true"
+            />
+            <div
+              className="pinned-your-room-card is-expanded mobile-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Your assigned ${hasRoom ? "room" : "shelter"}`}
+              onTouchStart={handleSheetTouchStart}
+              onTouchEnd={handleSheetTouchEnd}
+            >
+              <div className="sheet-handle" aria-hidden="true" />
+              <div className="your-room-expanded-header">
+                <div className="your-room-expanded-title-row">
+                  <span className="your-room-door-icon" aria-hidden="true">
+                    <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
+                  </span>
+                  <span className="your-room-expanded-title">{roomLabel}</span>
+                </div>
+                <button
+                  type="button"
+                  className="your-room-collapsed-expand-btn"
+                  onClick={() => setRoomCardExpanded(false)}
+                  title="Collapse room details"
+                  aria-label="Collapse room details"
+                  aria-expanded="true"
+                >
+                  <FontAwesomeIcon icon={faChevronDown} />
+                </button>
+              </div>
+              <div className="your-room-expanded-content">
+                <div className="pinned-room-center-name">
+                  {myCenter.evacuation_center?.name || "Sogod Central School"}
+                </div>
+                <p className="pinned-room-details-line">
+                  <strong>{myCheckinStatus}</strong>
+                  {" · "}
+                  {hasRoom && myCenter.room ? (
+                    <>
+                      {myCenter.room.floor ? `Floor/area: ${myCenter.room.floor}. ` : ""}
+                      Enter via {myCenter.room.recommended_entrance || "Entrance 3"}.
+                    </>
+                  ) : (
+                    "Open space shelter · Report to reception/coordinator upon arrival."
+                  )}
+                </p>
+                <div className="pinned-room-actions">
+                  <button
+                    type="button"
+                    className="pinned-room-btn pinned-show-map-btn"
+                    onClick={handleShowMyRoomOnMap}
+                  >
+                    <FontAwesomeIcon icon={faMapPin} />
+                    <span>Show on map</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="pinned-room-btn pinned-navigate-btn"
+                    onClick={handleStartWalkingToMyRoom}
+                  >
+                    <FontAwesomeIcon icon={faPersonWalking} />
+                    <span>Start walking navigation</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div
+            className="pinned-your-room-card is-expanded desktop"
+            role="region"
+            aria-label={`Your assigned ${hasRoom ? "room" : "shelter"}`}
+          >
+            <div className="your-room-expanded-header">
+              <div className="your-room-expanded-title-row">
+                <span className="your-room-door-icon" aria-hidden="true">
+                  <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
+                </span>
+                <span className="your-room-expanded-title">{roomLabel}</span>
+              </div>
+              <button
+                type="button"
+                className="your-room-collapsed-expand-btn"
+                onClick={() => setRoomCardExpanded(false)}
+                title="Collapse room details"
+                aria-label="Collapse room details"
+                aria-expanded="true"
+              >
+                <FontAwesomeIcon icon={faChevronUp} />
+              </button>
+            </div>
+            <div className="your-room-expanded-content">
+              <div className="pinned-room-center-name">
+                {myCenter.evacuation_center?.name || "Sogod Central School"}
+              </div>
+              <p className="pinned-room-details-line">
+                <strong>{myCheckinStatus}</strong>
+                {" · "}
+                {hasRoom && myCenter.room ? (
+                  <>
+                    {myCenter.room.floor ? `Floor/area: ${myCenter.room.floor}. ` : ""}
+                    Enter via {myCenter.room.recommended_entrance || "Entrance 3"}.
+                  </>
+                ) : (
+                  "Open space shelter · Report to reception/coordinator upon arrival."
+                )}
+              </p>
+              <div className="pinned-room-actions">
+                <button
+                  type="button"
+                  className="pinned-room-btn pinned-show-map-btn"
+                  onClick={handleShowMyRoomOnMap}
+                >
+                  <FontAwesomeIcon icon={faMapPin} />
+                  <span>Show on map</span>
+                </button>
+                <button
+                  type="button"
+                  className="pinned-room-btn pinned-navigate-btn"
+                  onClick={handleStartWalkingToMyRoom}
+                >
+                  <FontAwesomeIcon icon={faPersonWalking} />
+                  <span>Start walking navigation</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      )}
+
+      {/* Top area: search (hidden during route preview & navigation so it does not block the card/bar) */}
+      {!navigationActive && !route && (
+        <div className={`top-left-panel ${isMobile ? "compact" : ""}`}>
         <div className="resident-search-box">
           <FontAwesomeIcon
             icon={faMagnifyingGlass}
@@ -3285,13 +4482,29 @@ const ResidentHome = () => {
             enterKeyHint="search"
             value={searchText}
             onChange={(e) => {
-              setSearchText(e.target.value);
-              setShowSearchResults(true);
+              const val = e.target.value;
+              setSearchText(val);
+              if (val.length > 0) {
+                setHideRoomBarForSearch(true);
+                setShowSearchResults(true);
+              } else {
+                setHideRoomBarForSearch(false);
+                setShowSearchResults(false);
+              }
             }}
             onFocus={() => {
-              if (searchResults.length > 0) {
+              setHideRoomBarForSearch(true);
+              if (searchResults.length > 0 || searchText.trim().length >= 2) {
                 setShowSearchResults(true);
               }
+            }}
+            onBlur={() => {
+              setTimeout(() => {
+                if (!selectingSuggestionRef.current) {
+                  setHideRoomBarForSearch(false);
+                  setShowSearchResults(false);
+                }
+              }, 150);
             }}
             placeholder="Search a place or barangay"
             className="resident-search-input"
@@ -3310,6 +4523,7 @@ const ResidentHome = () => {
                 setSearchText("");
                 setSearchResults([]);
                 setShowSearchResults(false);
+                setHideRoomBarForSearch(false);
               }}
               aria-label="Clear search"
             >
@@ -3324,6 +4538,9 @@ const ResidentHome = () => {
               <button
                 key={`${result.type}-${result.name}-${index}`}
                 className="resident-search-result"
+                onMouseDown={() => {
+                  selectingSuggestionRef.current = true;
+                }}
                 onClick={() => zoomToSearchResult(result)}
               >
                 <FontAwesomeIcon
@@ -3349,6 +4566,7 @@ const ResidentHome = () => {
             </div>
           )}
       </div>
+      )}
 
       {/* Right control stack: "My location", "Street / Satellite", and "Help" */}
       <div
@@ -3480,7 +4698,9 @@ const ResidentHome = () => {
                 )}
                 {selectedCenterCapacity != null && (
                   <span className="center-meta-item">
-                    Capacity: <strong>{selectedCenterCapacity} people</strong>
+                    <strong>{selectedCenterOccupied}</strong> of{" "}
+                    <strong>{selectedCenterCapacity}</strong> here ·{" "}
+                    <strong>{selectedCenterAssigned}</strong> assigned
                   </span>
                 )}
                 {selectedCenterBarangays.length > 0 && (
@@ -3503,11 +4723,19 @@ const ResidentHome = () => {
             </button>
           </div>
 
-          {selectedCenterIsMine && myCenter?.room?.room_number && (
+          {selectedCenterIsMine && (
             <div className="cd-your-room">
               <FontAwesomeIcon icon={faCircleCheck} />
               <span>
-                Your assigned room: <strong>{myCenter.room.room_number}</strong>
+                {myCenter?.room?.room_number ? (
+                  <>
+                    Your assigned room: <strong>{myCenter.room.room_number}</strong> · {myCheckinStatus}
+                  </>
+                ) : (
+                  <>
+                    Your assigned shelter (1 space) · {myCheckinStatus}
+                  </>
+                )}
               </span>
             </div>
           )}
@@ -3527,60 +4755,212 @@ const ResidentHome = () => {
             </button>
           </div>
 
-          {selectedCenterRooms.length > 0 && (
-            <div className="center-card-rooms-preview">
-              <div className="rooms-preview-header">
-                <span>Rooms ({selectedCenterRooms.length})</span>
-              </div>
-              <div className="rooms-preview-list">
-                {selectedCenterRooms.map((room, index) => {
-                  const isMineRoom =
-                    myCenter?.room?.id != null &&
-                    String(myCenter.room.id) === String(room.id);
-                  const isMapped =
-                    room.latitude != null && room.longitude != null;
-                  return (
-                    <button
-                      type="button"
-                      key={room.id ?? `${room.room_number}-${index}`}
-                      className={`room-preview-chip ${isMineRoom ? "is-mine" : ""}`}
-                      onClick={() => handleRoomRowClick(room)}
-                      disabled={!isMapped}
-                      title={
-                        isMapped
-                          ? `Zoom to room ${room.room_number}`
-                          : "Location not yet mapped"
-                      }
+          {/* BUILDINGS LIST (for campus) OR OPEN SHELTER SPACE (for single venue / private property) */}
+          {(() => {
+            const cType =
+              selectedCenter.properties?.center_type ||
+              selectedCenter.center_type ||
+              "campus";
+            const isSingleVenueOrHouse = cType !== "campus";
+
+            if (isSingleVenueOrHouse) {
+              const cap = Number(selectedCenterCapacity || 0);
+              const occ = Number(selectedCenterOccupied || 0);
+              const spaceLeft = Math.max(0, cap - occ);
+
+              return (
+                <div className="center-card-buildings-section">
+                  <div className="center-card-buildings-header">
+                    <span>Shelter Space</span>
+                    <span className="buildings-header-sub">
+                      {cType === "private_property"
+                        ? "Private Property"
+                        : "Single Open Space"}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      padding: "12px 14px",
+                      background: "#f8fafc",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                      fontSize: 13,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                      }}
                     >
-                      <FontAwesomeIcon icon={faDoorOpen} />
-                      <span>{room.room_number || "Room"}</span>
-                      {room.capacity != null && (
-                        <small>({room.capacity})</small>
-                      )}
-                    </button>
-                  );
-                })}
+                      <span style={{ color: "#64748b" }}>Capacity:</span>
+                      <strong style={{ color: "#0f172a" }}>{cap} people</strong>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <span style={{ color: "#64748b" }}>Space remaining:</span>
+                      <strong
+                        style={{
+                          color: spaceLeft > 0 ? "#16a34a" : "#dc2626",
+                        }}
+                      >
+                        {spaceLeft} space{spaceLeft === 1 ? "" : "s"} left
+                      </strong>
+                    </div>
+                    {selectedCenter.properties?.building_material && (
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <span style={{ color: "#64748b" }}>
+                          Building material:
+                        </span>
+                        <span style={{ color: "#0f172a" }}>
+                          {selectedCenter.properties.building_material}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div className="center-card-buildings-section">
+                <div className="center-card-buildings-header">
+                  <span>Buildings ({selectedCenterBuildings.length})</span>
+                  <span className="buildings-header-sub">
+                    Tap building to view rooms
+                  </span>
+                </div>
+                {selectedCenterBuildings.length > 0 ? (
+                  <div className="center-card-buildings-list" role="list">
+                    {selectedCenterBuildings.map((b) => {
+                      const bOcc = b.occupied || 0;
+                      const bAssigned = b.assigned ?? 0;
+                      const bCap = b.capacity || 0;
+                      const bPct =
+                        bCap > 0
+                          ? Math.min(100, Math.round((bOcc / bCap) * 100))
+                          : 0;
+                      const bAssignedPct =
+                        bCap > 0
+                          ? Math.min(100, Math.round((bAssigned / bCap) * 100))
+                          : 0;
+                      const bIsFull = bCap > 0 && bOcc >= bCap;
+                      const bIsFullyAssigned = bCap > 0 && bAssigned >= bCap;
+                      const bColor =
+                        bCap === 0
+                          ? "#94a3b8"
+                          : bOcc >= bCap
+                          ? "#dc2626"
+                          : bPct >= 70
+                          ? "#d97706"
+                          : "#16a34a";
+
+                      const isUserBuilding =
+                        myCenter?.room?.building_id != null &&
+                        String(myCenter.room.building_id) === String(b.id);
+
+                      return (
+                        <button
+                          type="button"
+                          key={b.id}
+                          className={`center-building-row-btn ${
+                            isUserBuilding ? "is-user-building" : ""
+                          }`}
+                          onClick={() => {
+                            setSelectedBuildingId(b.id);
+                            setSelectedBuildingData(b);
+                            setBuildingModalOpen(true);
+                            closeCenterDetails();
+                          }}
+                          role="listitem"
+                          aria-label={`${b.name || "Building"}, ${b.room_count || 0} rooms, ${bOcc} of ${bCap} here, ${bAssigned} assigned`}
+                        >
+                          <div className="center-building-row-top">
+                            <div className="center-building-name-wrap">
+                              <strong>{b.name || `Building #${b.id}`}</strong>
+                              {isUserBuilding && (
+                                <span className="bldg-badge-yours">
+                                  Your building
+                                </span>
+                              )}
+                              {bIsFull && (
+                                <span className="center-bldg-badge is-full">
+                                  Full
+                                </span>
+                              )}
+                              {bIsFullyAssigned && (
+                                <span className="center-bldg-badge is-fully-assigned">
+                                  Fully assigned
+                                </span>
+                              )}
+                            </div>
+                            <span className="center-building-rooms-count">
+                              {b.room_count || 0}{" "}
+                              {b.room_count === 1 ? "room" : "rooms"}
+                            </span>
+                          </div>
+
+                          <div className="center-building-row-mid">
+                            <span className="center-building-occ-text">
+                              <strong>{bOcc}</strong> of {bCap} here ·{" "}
+                              {bAssigned} assigned
+                            </span>
+                            <span
+                              className="center-building-pct-text"
+                              style={{ color: bColor }}
+                            >
+                              {bPct}%
+                            </span>
+                          </div>
+
+                          {/* Small 4px occupancy bar */}
+                          <div
+                            className="center-building-bar-track"
+                            aria-hidden="true"
+                          >
+                            {bAssignedPct > 0 && (
+                              <div
+                                className="center-building-bar-assigned"
+                                style={{ width: `${bAssignedPct}%` }}
+                              />
+                            )}
+                            <div
+                              className="center-building-bar-fill"
+                              style={{
+                                width: `${bPct}%`,
+                                backgroundColor: bColor,
+                              }}
+                            />
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="center-buildings-empty">
+                    <span>No buildings mapped for this center yet.</span>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
-      {/* Floating rescue action during active navigation */}
-      {navigationActive && (
-        <button
-          type="button"
-          onClick={() => setRescueAlertOpen(true)}
-          className="rescue-floating-action"
-          aria-label="I need rescue"
-        >
-          <FontAwesomeIcon icon={faTriangleExclamation} /> I need rescue
-        </button>
-      )}
-
-      {/* Bottom Action Bar */}
-      {!navigationActive && (
-        <div className={`bottom-actions-container ${isMobile ? "mobile" : ""}`}>
+      {/* Bottom Action Bar (always visible & clickable) */}
+      <div className={`bottom-actions-container ${isMobile ? "mobile" : ""}`}>
           {isMobile ? (
             /* Phones/tablets: compact single-row dock */
             <div className="mobile-action-dock">
@@ -3591,7 +4971,7 @@ const ResidentHome = () => {
                   className="action-btn-primary mobile-route-btn"
                 >
                   <FontAwesomeIcon icon={faLocationCrosshairs} />
-                  <span>Go to nearest safe place</span>
+                  <span>Nearest safe place</span>
                 </button>
               ) : (
                 <button
@@ -3603,10 +4983,10 @@ const ResidentHome = () => {
                   <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
                   <span>
                     {findingRoute
-                      ? "Finding route..."
+                      ? "Finding..."
                       : myCenter
-                        ? "Go to my center"
-                        : "Go to nearest safe place"}
+                        ? "My center"
+                        : "Nearest safe place"}
                   </span>
                 </button>
               )}
@@ -3697,7 +5077,6 @@ const ResidentHome = () => {
             </div>
           )}
         </div>
-      )}
 
       {/* Phones/tablets: More bottom sheet */}
       {moreMenuOpen && isMobile && (
@@ -3770,88 +5149,181 @@ const ResidentHome = () => {
         </>
       )}
 
-      {/* Route panel */}
-      {route && (
-        <div className={`route-panel ${navigationActive ? "is-navigating" : ""}`}>
-          <button
-            onClick={handleClearRoute}
-            className="route-panel-close"
-            aria-label="Clear route"
+      {/* Active walking navigation: compact pill on mobile (expands on tap) or top bar */}
+      {navigationActive && (
+        isMobile && !navPillExpanded ? (
+          <div
+            className="nav-compact-pill"
+            role="button"
+            tabIndex={0}
+            onClick={() => setNavPillExpanded(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setNavPillExpanded(true);
+              }
+            }}
+            aria-expanded="false"
+            aria-label="Walking navigation guidance. Tap to expand details."
           >
-            <FontAwesomeIcon icon={faXmark} />
-          </button>
-
-          <div className="route-panel-title">
-            <FontAwesomeIcon icon={faRoute} />
-
-            {displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
-          </div>
-
-          {routeIsMine && myCenter?.room?.room_number && (
-            <div className="route-panel-room">
-              Your room: {myCenter.room.room_number}
-            </div>
-          )}
-
-          <div className="route-panel-distance">
-            {navigationActive && navigationRemainingMeters != null
-              ? `${(navigationRemainingMeters / 1000).toFixed(1)} km remaining · ${Math.ceil(
-                (navigationRemainingSeconds || 0) / 60
-              )} min`
-              : `${Number(route.distance_km || 0).toFixed(1)} km by walking`}
-          </div>
-
-          <div className="route-modes">
-            <div className="route-mode route-mode-walking">
-              <FontAwesomeIcon icon={faPersonWalking} />
-              <span>
-                {route.estimated_time_min ??
-                  estimateTravelTimes(route.distance_km || 0).walking} min
-              </span>
-            </div>
-          </div>
-
-          <div className="route-guidance">
-            <div className="route-turn-arrow" aria-hidden="true">
+            <div className="nav-pill-icon" aria-hidden="true">
               <FontAwesomeIcon
                 icon={faArrowUp}
                 style={{
-                  transform: `rotate(${getManeuverRotation(
-                    currentWalkingManeuver?.modifier
-                  )}deg)`,
+                  transform: `rotate(${getManeuverRotation(currentWalkingManeuver?.modifier)}deg)`,
                 }}
               />
             </div>
-            <div className="route-guidance-copy">
-              <span>{navigationActive ? "NEXT INSTRUCTION" : "WALKING DIRECTIONS"}</span>
-              <strong>
-                {currentWalkingManeuver?.instruction ||
-                  (navigationActive
-                    ? navigationStatus || "Follow the highlighted route."
-                    : "Start navigation to get live turn-by-turn guidance.")}
-              </strong>
-              {navigationActive && navigationAccuracy != null && (
-                <small>GPS accuracy approximately {navigationAccuracy} m</small>
-              )}
-            </div>
+            <span className="nav-pill-distance">
+              {currentWalkingManeuver?.distance != null
+                ? `${Math.round(currentWalkingManeuver.distance)} m`
+                : navigationRemainingMeters != null
+                  ? `${Math.round(navigationRemainingMeters)} m`
+                  : "Next turn"}
+            </span>
+            <FontAwesomeIcon icon={faChevronDown} className="nav-pill-chevron" aria-hidden="true" />
           </div>
+        ) : (
+          <div className="nav-active-top-bar" role="region" aria-label="Walking navigation">
+            <div className="nav-bar-icon-wrap" aria-hidden="true">
+              <FontAwesomeIcon
+                icon={faArrowUp}
+                style={{
+                  transform: `rotate(${getManeuverRotation(currentWalkingManeuver?.modifier)}deg)`,
+                }}
+              />
+            </div>
+            <div className="nav-bar-content">
+              <div className="nav-bar-instruction">
+                {currentWalkingManeuver?.instruction ||
+                  (navigationStatus?.includes("Off route")
+                    ? navigationStatus
+                    : "Follow highlighted route")}
+              </div>
+              <div className="nav-bar-subline">
+                {navigationStatus && navigationStatus.includes("Off route") ? (
+                  <span className="nav-bar-offroute">{navigationStatus}</span>
+                ) : navigationRemainingMeters != null ? (
+                  <span>
+                    {navigationRemainingMeters >= 1000
+                      ? `${(navigationRemainingMeters / 1000).toFixed(1)} km`
+                      : `${Math.round(navigationRemainingMeters)} m`}{" "}
+                    · {Math.max(1, Math.ceil((navigationRemainingSeconds || 0) / 60))} min remaining
+                    {(route?.chosen_entrance?.name || route?.evacuation_center?.chosen_entrance?.name) && (
+                      <> · via {route?.chosen_entrance?.name || route?.evacuation_center?.chosen_entrance?.name}</>
+                    )}
+                  </span>
+                ) : (
+                  <span>
+                    {Number(route?.distance_km || 0).toFixed(1)} km ·{" "}
+                    {route?.estimated_time_min || 1} min remaining
+                    {(route?.chosen_entrance?.name || route?.evacuation_center?.chosen_entrance?.name) && (
+                      <> · via {route?.chosen_entrance?.name || route?.evacuation_center?.chosen_entrance?.name}</>
+                    )}
+                  </span>
+                )}
+              </div>
+            </div>
+            {isMobile && (
+              <button
+                type="button"
+                className="nav-bar-collapse-btn"
+                onClick={() => setNavPillExpanded(false)}
+                aria-label="Collapse navigation details"
+                title="Collapse"
+              >
+                <FontAwesomeIcon icon={faChevronUp} />
+              </button>
+            )}
+            <button
+              type="button"
+              className="nav-bar-stop-btn"
+              onClick={() => stopWalkingNavigation()}
+              aria-label="Stop navigation"
+              title="Stop navigation"
+            >
+              <FontAwesomeIcon icon={faXmark} />
+              <span>Stop</span>
+            </button>
+          </div>
+        )
+      )}
 
-          {navigationStatus && (
-            <div className="route-navigation-status">{navigationStatus}</div>
-          )}
-
+      {/* Route preview: desktop card (top) or mobile bottom sheet (above bottom dock) */}
+      {route && !navigationActive && (
+        <div
+          className={`route-preview-card ${isMobile ? "mobile-bottom-sheet" : ""}`}
+          role="region"
+          aria-label="Route preview"
+        >
+          {isMobile && <div className="sheet-handle" aria-hidden="true" />}
+          <div className="route-preview-main">
+            <div className="route-preview-info">
+              <div className="route-preview-title">
+                <FontAwesomeIcon icon={faRoute} className="route-preview-title-icon" />
+                <span className="route-preview-dest">
+                  {displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
+                </span>
+                {(route.chosen_entrance?.name || route.evacuation_center?.chosen_entrance?.name) && (
+                  <span className="route-preview-entrance-tag" title="Target entrance">
+                    {route.chosen_entrance?.name || route.evacuation_center?.chosen_entrance?.name}
+                  </span>
+                )}
+                {routeIsMine && myCenter?.room?.room_number && (
+                  <span className="route-preview-room-tag">Room {myCenter.room.room_number}</span>
+                )}
+              </div>
+              <div className="route-preview-meta">
+                <span className="route-preview-dist">
+                  {Number(route.distance_km || 0).toFixed(1)} km
+                </span>
+                <span className="route-preview-dot">·</span>
+                <span className="route-preview-time">
+                  <FontAwesomeIcon icon={faPersonWalking} />{" "}
+                  {route.estimated_time_min ??
+                    estimateTravelTimes(route.distance_km || 0).walking} min walking
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleClearRoute}
+              className="route-preview-close"
+              aria-label="Clear route"
+              title="Clear route"
+            >
+              <FontAwesomeIcon icon={faXmark} />
+            </button>
+          </div>
           <button
             type="button"
-            className={`walking-navigation-button ${navigationActive ? "is-active" : ""}`}
-            onClick={
-              navigationActive
-                ? () => stopWalkingNavigation()
-                : handleStartWalkingNavigation
-            }
+            className="route-preview-start-btn"
+            onClick={handleStartWalkingNavigation}
           >
-            <FontAwesomeIcon icon={navigationActive ? faXmark : faPersonWalking} />
-            {navigationActive ? "Stop navigation" : "Start walking navigation"}
+            <FontAwesomeIcon icon={faPersonWalking} />
+            <span>Start walking navigation</span>
           </button>
+        </div>
+      )}
+
+      {/* Recenter button when user panned away during active navigation */}
+      {navigationActive && isPannedAway && (
+        <button
+          type="button"
+          className="nav-recenter-btn"
+          onClick={handleRecenter}
+          aria-label="Recenter map"
+        >
+          <FontAwesomeIcon icon={faLocationCrosshairs} />
+          <span>Recenter</span>
+        </button>
+      )}
+
+      {/* Arrival toast message */}
+      {arrivalToast && (
+        <div className="nav-arrival-toast" role="alert">
+          <FontAwesomeIcon icon={faCircleCheck} className="nav-arrival-icon" />
+          <span>{arrivalToast}</span>
         </div>
       )}
 
@@ -3954,16 +5426,90 @@ const ResidentHome = () => {
                   Full name
                 </label>
 
-                <input
-                  id="mc-name"
-                  type="text"
-                  className="mc-input"
-                  value={lookupName}
-                  onChange={(e) => setLookupName(e.target.value)}
-                  placeholder="e.g. Juan Dela Cruz"
-                  autoComplete="name"
-                  autoFocus
-                />
+                <div className="mc-autosuggest-wrap">
+                  <input
+                    id="mc-name"
+                    type="text"
+                    className="mc-input"
+                    value={lookupName}
+                    onChange={(e) => {
+                      setLookupName(e.target.value);
+                      setLookupError("");
+                    }}
+                    onKeyDown={handleAutosuggestKeyDown}
+                    placeholder="e.g. Juan Dela Cruz"
+                    autoComplete="off"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={autosuggestOpen}
+                    aria-controls="mc-autosuggest-listbox"
+                    aria-activedescendant={
+                      autosuggestIndex >= 0
+                        ? `mc-suggest-item-${autosuggestIndex}`
+                        : undefined
+                    }
+                    autoFocus
+                  />
+
+                  {/* Accessible screen reader announcement */}
+                  <div className="sr-only" aria-live="polite">
+                    {autosuggestOpen && autosuggestList.length > 0
+                      ? `${autosuggestList.length} suggestions available.`
+                      : ""}
+                  </div>
+
+                  {/* Autosuggest Dropdown */}
+                  {autosuggestOpen && (
+                    <div
+                      id="mc-autosuggest-listbox"
+                      className="mc-autosuggest-dropdown"
+                      role="listbox"
+                      aria-label="Name suggestions"
+                    >
+                      {autosuggestLoading ? (
+                        <div className="mc-autosuggest-loading" role="status">
+                          <FontAwesomeIcon
+                            icon={faSpinner}
+                            spin
+                            className="mc-autosuggest-spinner"
+                          />
+                          <span>Searching households...</span>
+                        </div>
+                      ) : autosuggestList.length === 0 ? (
+                        <div className="mc-autosuggest-empty">
+                          <span>No matches found</span>
+                        </div>
+                      ) : (
+                        autosuggestList.map((item, idx) => {
+                          const isSelected = idx === autosuggestIndex;
+                          return (
+                            <button
+                              type="button"
+                              key={`${item.name}-${item.barangay}-${idx}`}
+                              id={`mc-suggest-item-${idx}`}
+                              role="option"
+                              aria-selected={isSelected}
+                              className={`mc-autosuggest-item ${
+                                isSelected ? "is-active" : ""
+                              }`}
+                              onClick={() => handleSelectSuggestion(item.name)}
+                              onMouseEnter={() => setAutosuggestIndex(idx)}
+                            >
+                              <span className="mc-autosuggest-name">
+                                {renderHighlightedText(item.name, lookupName)}
+                              </span>
+                              {item.barangay && (
+                                <span className="mc-autosuggest-sub">
+                                  Barangay {item.barangay}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 {lookupError && <div className="mc-error">{lookupError}</div>}
 
@@ -4035,9 +5581,52 @@ const ResidentHome = () => {
           onClose={handleCloseReportModal}
           onSubmitted={handleReportSubmitted}
           onLocationChange={handleReportLocationChange}
-          onAdjustOnMap={() => { }}
+          onAdjustOnMap={handleAdjustHazardOnMap}
         />
       )}
+
+      {/* Collapsible Building Occupancy Legend (bottom-left) */}
+      <div className={`rh-building-legend ${legendCollapsed ? "is-collapsed" : ""}`}>
+        <button
+          type="button"
+          className="rh-legend-toggle-btn"
+          onClick={() => setLegendCollapsed((prev) => !prev)}
+          aria-label={legendCollapsed ? "Expand building legend" : "Collapse building legend"}
+        >
+          <span className="rh-legend-title">Building Occupancy</span>
+          <FontAwesomeIcon icon={legendCollapsed ? faChevronUp : faChevronDown} />
+        </button>
+        {!legendCollapsed && (
+          <div className="rh-legend-content">
+            <div className="rh-legend-row">
+              <span className="rh-legend-swatch" style={{ background: "#16a34a" }} />
+              <span>Available (&lt;70%)</span>
+            </div>
+            <div className="rh-legend-row">
+              <span className="rh-legend-swatch" style={{ background: "#d97706" }} />
+              <span>Filling (70–99%)</span>
+            </div>
+            <div className="rh-legend-row">
+              <span className="rh-legend-swatch" style={{ background: "#dc2626" }} />
+              <span>Full</span>
+            </div>
+            <div className="rh-legend-row">
+              <span className="rh-legend-swatch" style={{ background: "#94a3b8" }} />
+              <span>No data</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Building Details Modal (independent of center card) */}
+      <BuildingDetailsModal
+        isOpen={buildingModalOpen}
+        buildingId={selectedBuildingId}
+        initialBuildingData={selectedBuildingData}
+        onClose={() => setBuildingModalOpen(false)}
+        userHousehold={myCenter}
+        isStaff={false}
+      />
 
     </div>
   );

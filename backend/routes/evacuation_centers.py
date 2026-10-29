@@ -250,6 +250,90 @@ def _center_metrics(center):
     }
 
 
+# =========================================================
+# CENTER TYPE CHANGE VALIDATION
+# =========================================================
+VALID_CENTER_TYPES = {'campus', 'single_venue', 'private_property'}
+
+def validate_center_type_change(center, new_type, current_type=None):
+    """
+    Validate if a center can change to new_type.
+    Returns (allowed: bool, reason: str or None, blocked_types: dict)
+    """
+    if current_type is None:
+        current_type = center.center_type or "campus"
+
+    # Compute blocked types with reasons
+    blocked_types = {}
+
+    # Count buildings
+    building_count = EvacuationCenterBuilding.query.filter_by(evacuation_center_id=center.id).count()
+
+    # Count rooms (active and inactive)
+    room_count = EvacuationCenterRoom.query.filter_by(evacuation_center_id=center.id).count()
+    active_room_count = EvacuationCenterRoom.query.filter_by(
+        evacuation_center_id=center.id, is_active=True
+    ).count()
+
+    # Count households assigned through rooms (campus/private_property)
+    room_assigned_families = db.session.query(func.count(func.distinct(Family.id))) \
+        .join(Resident, Resident.family_id == Family.id) \
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id) \
+        .join(EvacuationCenterRoom, EvacuationCenterRoom.id == EvacuationAssignment.room_id) \
+        .filter(EvacuationCenterRoom.evacuation_center_id == center.id) \
+        .scalar() or 0
+
+    # Count households assigned directly to venue (single_venue)
+    venue_assigned_families = db.session.query(func.count(func.distinct(Family.id))) \
+        .join(Resident, Resident.family_id == Family.id) \
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id) \
+        .filter(EvacuationAssignment.evacuation_center_id == center.id) \
+        .filter(EvacuationAssignment.room_id.is_(None)) \
+        .scalar() or 0
+
+    # Rules for each target type
+    for t in VALID_CENTER_TYPES:
+        reason = None
+        if t == 'campus':
+            # Always allowed
+            pass
+        elif t == 'private_property':
+            if building_count > 0:
+                reason = f"This center still has {building_count} building(s). Remove them first."
+        elif t == 'single_venue':
+            if room_count > 0:
+                reason = f"This center still has {room_count} room(s) ({active_room_count} active). Remove them first."
+            elif building_count > 0:
+                reason = f"This center still has {building_count} building(s). Remove them first."
+            elif room_assigned_families > 0:
+                reason = f"This center has {room_assigned_families} household(s) assigned through rooms. Move or unassign them first."
+            elif (center.capacity or 0) < 1:
+                reason = "Single venue centers require a capacity of at least 1."
+
+        if reason:
+            blocked_types[t] = {"allowed": False, "reason": reason}
+        else:
+            blocked_types[t] = {"allowed": True, "reason": None}
+
+    # Current type is always allowed
+    blocked_types[current_type] = {"allowed": True, "reason": None}
+
+    # Check if new_type is allowed
+    if new_type in blocked_types:
+        return blocked_types[new_type]["allowed"], blocked_types[new_type]["reason"], blocked_types
+
+    return False, "Invalid center type", blocked_types
+
+
+def get_allowed_center_types(center):
+    """
+    Get allowed center types with reasons for a center.
+    Returns dict of type -> {allowed: bool, reason: str or None}
+    """
+    _, _, blocked = validate_center_type_change(center, center.center_type or "campus")
+    return blocked
+
+
 def center_to_feature(center):
     geometry = None
 
@@ -628,9 +712,11 @@ def create_evacuation_center():
 
     user_id = get_jwt_identity()
 
-    raw_center_type = str(data.get('center_type') or 'campus').strip().lower()
+    raw_center_type = str(data.get('center_type') or '').strip().lower()
     valid_types = {'campus', 'single_venue', 'private_property'}
-    center_type = raw_center_type if raw_center_type in valid_types else 'campus'
+    if not raw_center_type or raw_center_type not in valid_types:
+        return jsonify({"error": "center_type is required and must be one of: campus, single_venue, private_property"}), 400
+    center_type = raw_center_type
     owner_name = str(data.get('owner_name') or '').strip() or None
 
     center = EvacuationCenter(
@@ -720,9 +806,21 @@ def update_evacuation_center(center_id):
             setattr(center, field, data[field])
 
     if 'center_type' in data:
-        raw_type = str(data.get('center_type') or 'campus').strip().lower()
-        if raw_type in {'campus', 'single_venue', 'private_property'}:
-            center.center_type = raw_type
+        raw_type = str(data.get('center_type') or '').strip().lower()
+        if raw_type not in VALID_CENTER_TYPES:
+            return jsonify({"error": "Invalid center type"}), 400
+
+        # Validate the type change
+        current_type = center.center_type or "campus"
+        if raw_type != current_type:
+            allowed, reason, blocked = validate_center_type_change(center, raw_type, current_type)
+            if not allowed:
+                return jsonify({
+                    "error": f"Cannot change center type to '{raw_type}': {reason}",
+                    "blocked_types": blocked
+                }), 400
+
+        center.center_type = raw_type
 
     polygon_data = data.get('polygon')
     if polygon_data is None and isinstance(data.get('geometry'), dict):
@@ -755,6 +853,15 @@ def update_evacuation_center(center_id):
     db.session.commit()
 
     return jsonify(center_to_feature(center))
+
+
+@centers_bp.route('/api/evacuation-centers/<int:center_id>/allowed-center-types', methods=['GET'])
+@role_required('admin', 'lgu_personnel')
+def get_allowed_center_types(center_id):
+    """Get allowed center types with reasons for a center."""
+    center = EvacuationCenter.query.get_or_404(center_id)
+    allowed = get_allowed_center_types(center)
+    return jsonify(allowed)
 
 
 @centers_bp.route('/api/evacuation-centers/<int:center_id>/toggle-active', methods=['PATCH'])

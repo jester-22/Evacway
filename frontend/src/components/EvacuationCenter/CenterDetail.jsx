@@ -597,9 +597,17 @@ export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, o
 }
 export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding, onAddRoom, onEditRoom, onViewRoomMap, onLinkRoom, onDeleteRoom }) {
   const isSingleVenue = center?.center_type === 'single_venue'
+  const isPrivateProperty = center?.center_type === 'private_property'
 
-  // Group rooms by building_id (compare as strings), rooms without building_id go to "Unassigned"
+  // For private_property, don't group by building - just show all rooms
+  // For campus, group rooms by building_id
   const groups = useMemo(() => {
+    if (isPrivateProperty) {
+      // Private property: single group with all rooms, no buildings
+      return [{ building: null, rooms: rooms }];
+    }
+
+    // Campus: group by building
     const buildingMap = new Map();
     buildings.forEach((b) => buildingMap.set(String(b.id), { building: b, rooms: [] }));
     buildingMap.set('unassigned', { building: null, rooms: [] });
@@ -620,14 +628,14 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
         const nameB = b[1].building?.name || '';
         return nameA.localeCompare(nameB);
       });
-  }, [buildings, rooms]);
+  }, [buildings, rooms, isPrivateProperty]);
 
   return (
     <div className="ec-structure">
       <div className="ec-structure-header">
         <h2>Center Structure</h2>
         <div className="ec-structure-actions">
-          {!isSingleVenue && onAddBuilding && (
+          {!isSingleVenue && !isPrivateProperty && onAddBuilding && (
             <button type="button" className="ds-btn ds-btn--secondary" onClick={onAddBuilding}>
               <FontAwesomeIcon icon={faBuilding} size="xs" style={{ marginRight: 'var(--space-1)' }} />
               Add building
@@ -645,8 +653,87 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
         <EmptyState
           icon={faBuilding}
           title="Single venue"
-          text="This center is a single venue (chapel, plaza, covered court). No buildings or rooms are required."
+          text="This center is a single venue (chapel, plaza, covered court). No buildings or rooms are required. Families are assigned directly to the venue."
         />
+      ) : isPrivateProperty ? (
+        <div className="ec-structure-groups">
+          {groups.map(({ rooms: groupRooms }) => (
+            <div key="private-property-rooms" className="ec-structure-group">
+              <div className="ec-structure-building">
+                <h3>Rooms</h3>
+                <p className="ec-building-notes">Private property center — rooms are not organized by building.</p>
+              </div>
+              {groupRooms.length === 0 ? (
+                <div className="ec-empty-state">
+                  <p className="ec-empty-note">No rooms yet.</p>
+                  {onAddRoom && (
+                    <button type="button" className="ds-btn ds-btn--primary" style={{ marginTop: 'var(--space-3)' }} onClick={onAddRoom}>
+                      <FontAwesomeIcon icon={faPlus} size="xs" style={{ marginRight: 'var(--space-1)' }} />
+                      Add first room
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <table className="ds-table ec-structure-table ds-table--stack">
+                  <thead>
+                    <tr>
+                      <th scope="col" style={{ width: '34%', textAlign: 'left' }}>Room</th>
+                      <th scope="col" style={{ width: '14%', textAlign: 'right' }}>Capacity</th>
+                      <th scope="col" style={{ width: '14%', textAlign: 'right' }}>Assigned</th>
+                      <th scope="col" style={{ width: '16%', textAlign: 'right' }}>Checked in</th>
+                      <th scope="col" style={{ width: '22%', textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupRooms.map((room) => (
+                      <tr key={room.id} className="ec-room-row">
+                        <td data-label="Room">{room.room_number || 'Room #' + (room.id || '')}</td>
+                        <td className="ec-num" data-label="Capacity">{room.capacity}</td>
+                        <td className="ec-num" data-label="Assigned">{room.assigned}</td>
+                        <td className="ec-num" data-label="Checked in">{room.occupied}</td>
+                        <td data-label="Actions">
+                          <div className="ec-room-actions">
+                            {onEditRoom && (
+                              <button
+                                type="button"
+                                className="ds-btn ds-btn--ghost ds-btn--icon"
+                                onClick={() => onEditRoom(room)}
+                                title="Edit room"
+                              >
+                                <FontAwesomeIcon icon={faPen} size="xs" />
+                              </button>
+                            )}
+                            {onViewRoomMap && room.latitude != null && room.longitude != null && (
+                              <button
+                                type="button"
+                                className="ds-btn ds-btn--ghost ds-btn--icon"
+                                onClick={() => onViewRoomMap(room)}
+                                title="View on map"
+                              >
+                                <FontAwesomeIcon icon={faMapPin} size="xs" />
+                              </button>
+                            )}
+                            {/* No Link to building for private_property */}
+                            {onDeleteRoom && (
+                              <button
+                                type="button"
+                                className="ds-btn ds-btn--ghost ds-btn--icon ds-btn--danger"
+                                onClick={() => onDeleteRoom(room)}
+                                title="Delete room"
+                              >
+                                <FontAwesomeIcon icon={faTrash} size="xs" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ))}
+        </div>
       ) : rooms.length === 0 && buildings.length === 0 ? (
         <EmptyState icon={faBuilding} title="No rooms yet" text="Add a building, then add rooms to it." />
       ) : (

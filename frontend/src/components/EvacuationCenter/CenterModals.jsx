@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleNotch, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { faCircleNotch, faXmark, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { stripDigits } from './utils';
 import { centerNeedsMapping } from './utils';
 import { formatRoomLabel } from '../../utils/formatRoomLabel';
@@ -60,22 +60,138 @@ export function ConfirmCenterDialog({ open = false, title = 'Confirm', message =
   );
 }
 
-export function CenterFormModal({ mode = 'add', centerForm, onChange, barangays = [], saving = false, onSubmit, onClose, onBeforeDeselect }) {
+// Center type constants
+const CENTER_TYPES = [
+  { value: 'campus', label: 'Campus', description: 'Multi-building campus with rooms organized by building' },
+  { value: 'private_property', label: 'Private Property', description: 'Single property with rooms (no buildings required)' },
+  { value: 'single_venue', label: 'Single Venue', description: 'One large venue, no rooms, direct family assignment' },
+];
+
+export function CenterFormModal({ mode = 'add', centerForm, onChange, barangays = [], saving = false, onSubmit, onClose, onBeforeDeselect, allowedCenterTypes = null }) {
   const title = mode === 'add' ? 'Add Evacuation Center' : 'Edit Evacuation Center';
   const subtitle = mode === 'add' ? 'Create a new evacuation center' : 'Edit evacuation center details';
   const [fieldErrors, setFieldErrors] = useState({});
+
+  const isPrivateProperty = centerForm.center_type === 'private_property';
+  const isSingleVenue = centerForm.center_type === 'single_venue';
+  const isCampus = centerForm.center_type === 'campus' || !centerForm.center_type;
+
   function clearFieldError(field) { setFieldErrors((prev) => { const next = { ...prev }; delete next[field]; return next; }); }
   function setFieldError(field, message) { setFieldErrors((prev) => ({ ...prev, [field]: message })); }
-  function handleSubmit(e) { e.preventDefault(); let valid = true; if (!centerForm.name || !centerForm.name.trim()) { setFieldError('name', 'Evacuation center name is required.'); valid = false; } else { clearFieldError('name'); } if (!centerForm.barangay_ids || centerForm.barangay_ids.length === 0) { setFieldError('barangays', 'Select at least one barangay served by this center.'); valid = false; } else { clearFieldError('barangays'); } if (!valid) return; onSubmit(e); }
+  function handleSubmit(e) { e.preventDefault(); let valid = true; if (!centerForm.name || !centerForm.name.trim()) { setFieldError('name', 'Evacuation center name is required.'); valid = false; } else { clearFieldError('name'); } if (!centerForm.barangay_ids || centerForm.barangay_ids.length === 0) { setFieldError('barangays', 'Select at least one barangay served by this center.'); valid = false; } else { clearFieldError('barangays'); } if (isPrivateProperty && (!centerForm.max_rooms || Number(centerForm.max_rooms) < 1)) { setFieldError('max_rooms', 'Max rooms is required for Private Property centers (minimum 1).'); valid = false; } else { clearFieldError('max_rooms'); } if (isSingleVenue && (!centerForm.capacity || Number(centerForm.capacity) < 1)) { setFieldError('capacity', 'Capacity is required for Single Venue centers (minimum 1).'); valid = false; } else { clearFieldError('capacity'); } if (!valid) return; onSubmit(e); }
+
+  // Determine which center types are available for selection
+  const availableCenterTypes = allowedCenterTypes
+    ? CENTER_TYPES.filter(t => allowedCenterTypes[t.value]?.allowed)
+    : CENTER_TYPES;
+
+  const currentTypeAllowed = centerForm.center_type && allowedCenterTypes && allowedCenterTypes[centerForm.center_type]?.allowed;
+
   return (
     <ModalShell open title={title} subtitle={subtitle} onClose={onClose} formId="center-form" loading={saving} primaryLabel={saving ? 'Saving...' : mode === 'add' ? 'Create Center' : 'Save Changes'}>
       <form id="center-form" onSubmit={handleSubmit} noValidate>
         <div className="form-group"><label htmlFor="center-name">Center Name <span>*</span></label><input id="center-name" type="text" className={fieldErrors.name ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. Sogod Central Gymnasium" value={centerForm.name} onChange={(e) => { clearFieldError('name'); onChange({ ...centerForm, name: stripDigits(e.target.value) }); }} />{fieldErrors.name && <p className="field-error">{fieldErrors.name}</p>}</div>
+
+        {/* Center Type Selector */}
+        <div className="form-group">
+          <label htmlFor="center-type">Center Type <span>*</span></label>
+          <select
+            id="center-type"
+            className={fieldErrors.center_type ? 'form-input is-invalid' : 'form-input'}
+            value={centerForm.center_type || 'campus'}
+            onChange={(e) => {
+              clearFieldError('center_type');
+              const newType = e.target.value;
+              onChange({ ...centerForm, center_type: newType });
+
+              // Reset type-specific fields when type changes
+              if (newType === 'private_property') {
+                onChange({ ...centerForm, center_type: newType, capacity: null });
+              } else if (newType === 'single_venue') {
+                onChange({ ...centerForm, center_type: newType, max_rooms: null });
+              } else {
+                onChange({ ...centerForm, center_type: newType, max_rooms: null });
+              }
+            }}
+            disabled={mode === 'edit' && allowedCenterTypes && !currentTypeAllowed}
+          >
+            {availableCenterTypes.map((type) => (
+              <option key={type.value} value={type.value}>
+                {type.label}
+              </option>
+            ))}
+          </select>
+          {allowedCenterTypes && mode === 'edit' && !currentTypeAllowed && (
+            <p className="field-error">
+              Current center type cannot be changed. {allowedCenterTypes[centerForm.center_type]?.reason}
+            </p>
+          )}
+          {fieldErrors.center_type && <p className="field-error">{fieldErrors.center_type}</p>}
+          <p className="field-hint">
+            {CENTER_TYPES.find(t => t.value === centerForm.center_type)?.description || 'Select a center type to see description.'}
+          </p>
+        </div>
+
         <div className="form-group"><BarangaysServedPicker barangays={barangays} selectedIds={centerForm.barangay_ids} onChange={(selectedIds) => onChange((prev) => ({ ...prev, barangay_ids: selectedIds }))} onBeforeDeselect={onBeforeDeselect} required disabled={saving} />{fieldErrors.barangays && <p className="field-error">{fieldErrors.barangays}</p>}</div>
-        <div className="form-group"><label htmlFor="center-capacity">Total Capacity <span>(Max evacuees)</span></label><input id="center-capacity" type="number" min="0" className={fieldErrors.capacity ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 250" value={centerForm.capacity} onChange={(e) => { clearFieldError('capacity'); onChange({ ...centerForm, capacity: e.target.value }); }} />{fieldErrors.capacity && <p className="field-error">{fieldErrors.capacity}</p>}</div>
+
+        {/* Capacity field - required for single_venue, optional for others */}
+        <div className="form-group">
+          <label htmlFor="center-capacity">
+            Total Capacity <span>(Max evacuees)</span>
+            {isSingleVenue && <span className="required-indicator">*</span>}
+          </label>
+          <input
+            id="center-capacity"
+            type="number"
+            min="0"
+            className={fieldErrors.capacity ? 'form-input is-invalid' : 'form-input'}
+            placeholder={isSingleVenue ? "e.g. 250 (required for Single Venue)" : "e.g. 250"}
+            value={centerForm.capacity}
+            onChange={(e) => { clearFieldError('capacity'); onChange({ ...centerForm, capacity: e.target.value || null }); }}
+            required={isSingleVenue}
+          />
+          {isSingleVenue && <p className="field-hint">Required for Single Venue centers. This is the total capacity of the venue.</p>}
+          {isPrivateProperty && <p className="field-hint">Optional for Private Property. Total capacity is derived from rooms.</p>}
+          {isCampus && <p className="field-hint">Optional for Campus. Total capacity is derived from rooms.</p>}
+          {fieldErrors.capacity && <p className="field-error">{fieldErrors.capacity}</p>}
+        </div>
+
+        {/* Max Rooms field - required for private_property */}
+        {isPrivateProperty && (
+          <div className="form-group">
+            <label htmlFor="center-max-rooms">Max Rooms <span>*</span></label>
+            <input
+              id="center-max-rooms"
+              type="number"
+              min="1"
+              className={fieldErrors.max_rooms ? 'form-input is-invalid' : 'form-input'}
+              placeholder="e.g. 20"
+              value={centerForm.max_rooms}
+              onChange={(e) => { clearFieldError('max_rooms'); onChange({ ...centerForm, max_rooms: e.target.value || null }); }}
+              required
+            />
+            <p className="field-hint">Maximum number of rooms this private property can have. Rooms don't need buildings.</p>
+            {fieldErrors.max_rooms && <p className="field-error">{fieldErrors.max_rooms}</p>}
+          </div>
+        )}
+
         <div className="form-group"><label htmlFor="center-building-material">Building Material</label><input id="center-building-material" type="text" className={fieldErrors.building_material ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. Reinforced Concrete" value={centerForm.building_material} onChange={(e) => { clearFieldError('building_material'); onChange({ ...centerForm, building_material: e.target.value }); }} />{fieldErrors.building_material && <p className="field-error">{fieldErrors.building_material}</p>}</div>
         <div className="form-group"><label htmlFor="center-contact">Contact Number</label><input id="center-contact" type="text" maxLength={20} className={fieldErrors.contact_number ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 0917-123-4567" value={centerForm.contact_number} onChange={(e) => { clearFieldError('contact_number'); onChange({ ...centerForm, contact_number: e.target.value }); }} />{fieldErrors.contact_number && <p className="field-error">{fieldErrors.contact_number}</p>}</div>
         <div className="form-group"><label htmlFor="center-accessibility">Accessibility Notes</label><textarea id="center-accessibility" className={fieldErrors.accessibility_notes ? 'form-textarea is-invalid' : 'form-textarea'} placeholder="Ramps available, emergency generator installed..." value={centerForm.accessibility_notes} onChange={(e) => { clearFieldError('accessibility_notes'); onChange({ ...centerForm, accessibility_notes: e.target.value }); }} />{fieldErrors.accessibility_notes && <p className="field-error">{fieldErrors.accessibility_notes}</p>}</div>
+
+        {/* Owner name field - useful for private_property */}
+        <div className="form-group">
+          <label htmlFor="center-owner">Property Owner / Operator</label>
+          <input
+            id="center-owner"
+            type="text"
+            className={fieldErrors.owner_name ? 'form-input is-invalid' : 'form-input'}
+            placeholder="e.g. LGU Sogod, Private Owner Name"
+            value={centerForm.owner_name}
+            onChange={(e) => { clearFieldError('owner_name'); onChange({ ...centerForm, owner_name: e.target.value }); }}
+          />
+          {fieldErrors.owner_name && <p className="field-error">{fieldErrors.owner_name}</p>}
+        </div>
       </form>
     </ModalShell>
   );
@@ -117,11 +233,14 @@ export function AddBuildingModal({ open = false, buildingForm, onChange, saving 
   const [fieldErrors, setFieldErrors] = useState({});
   function clearFieldError(field) { setFieldErrors((prev) => { const next = { ...prev }; delete next[field]; return next; }); }
   function setFieldError(field, message) { setFieldErrors((prev) => ({ ...prev, [field]: message })); }
-  function handleSubmit(e) { e.preventDefault(); let valid = true; if (!buildingForm.name || !buildingForm.name.trim()) { setFieldError('name', 'Building name is required.'); valid = false; } else { clearFieldError('name'); } if (!valid) return; onSubmit(e); }
+  function handleSubmit(e) { e.preventDefault(); let valid = true; if (!buildingForm.name || !buildingForm.name.trim()) { setFieldError('name', 'Building name is required.'); valid = false; } else { clearFieldError('name'); } if (buildingForm.max_rooms !== null && buildingForm.max_rooms !== '' && Number(buildingForm.max_rooms) < 1) { setFieldError('max_rooms', 'Max rooms must be at least 1.'); valid = false; } else { clearFieldError('max_rooms'); } if (buildingForm.floors !== null && buildingForm.floors !== '' && Number(buildingForm.floors) < 1) { setFieldError('floors', 'Floors must be at least 1.'); valid = false; } else { clearFieldError('floors'); } if (!valid) return; onSubmit(e); }
   return (
     <ModalShell open={open} title="Add Building" subtitle="Add a new building to this evacuation center" onClose={onClose} formId="building-form" loading={saving} primaryLabel={saving ? 'Saving...' : 'Add Building'}>
       <form id="building-form" onSubmit={handleSubmit} noValidate>
         <div className="form-group"><label htmlFor="building-name">Building Name <span>*</span></label><input id="building-name" type="text" className={fieldErrors.name ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. Main Building" value={buildingForm.name} onChange={(e) => { clearFieldError('name'); onChange({ ...buildingForm, name: e.target.value }); }} />{fieldErrors.name && <p className="field-error">{fieldErrors.name}</p>}</div>
+        <div className="form-group"><label htmlFor="building-max-rooms">Max Rooms</label><input id="building-max-rooms" type="number" min="1" className={fieldErrors.max_rooms ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 10 (optional)" value={buildingForm.max_rooms} onChange={(e) => { clearFieldError('max_rooms'); onChange({ ...buildingForm, max_rooms: e.target.value ? Number(e.target.value) : null }); }} />{fieldErrors.max_rooms && <p className="field-error">{fieldErrors.max_rooms}</p>}<p className="field-hint">Maximum number of rooms this building can have (optional)</p></div>
+        <div className="form-group"><label htmlFor="building-floors">Floors</label><input id="building-floors" type="number" min="1" className={fieldErrors.floors ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 3 (optional)" value={buildingForm.floors} onChange={(e) => { clearFieldError('floors'); onChange({ ...buildingForm, floors: e.target.value ? Number(e.target.value) : null }); }} />{fieldErrors.floors && <p className="field-error">{fieldErrors.floors}</p>}<p className="field-hint">Number of floors in this building (optional)</p></div>
+        <div className="form-group"><label htmlFor="building-status">Status</label><select id="building-status" className={fieldErrors.status ? 'form-input is-invalid' : 'form-input'} value={buildingForm.status || 'active'} onChange={(e) => { clearFieldError('status'); onChange({ ...buildingForm, status: e.target.value }); }}><option value="active">Active</option><option value="inactive">Inactive</option><option value="under_construction">Under Construction</option><option value="maintenance">Maintenance</option></select>{fieldErrors.status && <p className="field-error">{fieldErrors.status}</p>}<p className="field-hint">Current status of the building</p></div>
         <div className="form-group"><label htmlFor="building-notes">Notes</label><textarea id="building-notes" className={fieldErrors.notes ? 'form-textarea is-invalid' : 'form-textarea'} placeholder="Optional notes about this building..." value={buildingForm.notes} onChange={(e) => { clearFieldError('notes'); onChange({ ...buildingForm, notes: e.target.value }); }} />{fieldErrors.notes && <p className="field-error">{fieldErrors.notes}</p>}</div>
       </form>
     </ModalShell>
@@ -129,24 +248,55 @@ export function AddBuildingModal({ open = false, buildingForm, onChange, saving 
 }
 
 export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, availableFamilies = [], loadingAvailableFamilies = false, selectedFamilyIdToAssign = '', assigningFamily = false, onClose, onFamilyChange, onConfirm }) {
-  if (!open || !selectedRoom) return null;
+  const isSingleVenue = selectedCenter?.center_type === 'single_venue'
+
+  // For single_venue, we don't need a room - just the center
+  if (!open || (!selectedRoom && !isSingleVenue)) return null;
+
   const selectedFamily = availableFamilies.find((f) => String(f.id) === String(selectedFamilyIdToAssign)) || null;
   const memCount = selectedFamily ? selectedFamily.member_count || selectedFamily.family_members || 1 : 0;
-  const remaining = selectedRoom.available ?? (selectedRoom.capacity - (selectedRoom.occupied || 0));
-  const isOverCapacity = selectedFamily && memCount > remaining;
-  const title = 'Assign Household to ' + formatRoomLabel(selectedRoom.room_number);
+
+  // For single_venue, use center capacity
+  const isOverCapacity = selectedFamily && memCount > (isSingleVenue
+    ? Math.max((selectedCenter.capacity || 0) - (selectedCenter.occupied || selectedCenter.current_occupancy || 0), 0)
+    : (selectedRoom?.available ?? (selectedRoom?.capacity - (selectedRoom?.occupied || 0)))
+  );
+
+  const title = isSingleVenue
+    ? 'Assign Household to ' + (selectedCenter?.name || 'the venue')
+    : 'Assign Household to ' + formatRoomLabel(selectedRoom?.room_number);
   const subtitle = selectedCenter?.name || '';
+
+  // Calculate remaining capacity
+  const remaining = isSingleVenue
+    ? Math.max((selectedCenter.capacity || 0) - (selectedCenter.occupied || selectedCenter.current_occupancy || 0), 0)
+    : (selectedRoom?.available ?? (selectedRoom?.capacity - (selectedRoom?.occupied || 0)));
+
   return (
     <ModalShell open={open} title={title} subtitle={subtitle} onClose={onClose} onPrimary={onConfirm} loading={assigningFamily} primaryLabel={assigningFamily ? 'Assigning...' : 'Confirm Assignment'} primaryDisabled={!selectedFamilyIdToAssign || assigningFamily}>
       <p className="intro">Select an unassigned registered household. EvacWay verifies capacity before allocating.</p>
       <div className="form-group"><label htmlFor="assign-household">Select Unassigned Household</label><select id="assign-household" className="form-select" value={selectedFamilyIdToAssign} onChange={(e) => onFamilyChange(e.target.value)} disabled={loadingAvailableFamilies}><option value="">{loadingAvailableFamilies ? 'Loading unassigned households...' : availableFamilies.length === 0 ? 'No unassigned households available' : 'Choose household...'}</option>{availableFamilies.map((f) => (<option key={f.id} value={f.id}>{displayEntityName(f.household_head_name || f.head_name)} ({f.family_code}) · {f.member_count || f.family_members || 1} members · {f.barangay || 'No barangay'}</option>))}</select></div>
-      <div className="form-group"><label>Room</label><p className="room-value">{formatRoomLabel(selectedRoom.room_number)}</p></div>
+      {isSingleVenue ? (
+        <div className="form-group"><label>Venue</label><p className="room-value">{selectedCenter?.name}</p></div>
+      ) : (
+        <div className="form-group"><label>Room</label><p className="room-value">{formatRoomLabel(selectedRoom?.room_number)}</p></div>
+      )}
       <div className="capacity-summary">
-        <div className="capacity-row"><span className="capacity-label">Room capacity</span><span className="capacity-value">{selectedRoom.capacity} people</span></div>
-        <div className="capacity-row"><span className="capacity-label">Currently assigned</span><span className="capacity-value">{selectedRoom.occupied || 0} people</span></div>
-        <div className="capacity-row"><span className="capacity-label">Remaining capacity</span><span className="capacity-value" style={{ color: isOverCapacity ? 'var(--ew-danger-text)' : 'var(--ew-safe-text)' }}>{remaining} spaces left</span></div>
+        {isSingleVenue ? (
+          <>
+            <div className="capacity-row"><span className="capacity-label">Venue capacity</span><span className="capacity-value">{selectedCenter?.capacity || 0} people</span></div>
+            <div className="capacity-row"><span className="capacity-label">Currently assigned</span><span className="capacity-value">{selectedCenter?.occupied || selectedCenter?.current_occupancy || 0} people</span></div>
+            <div className="capacity-row"><span className="capacity-label">Remaining capacity</span><span className="capacity-value" style={{ color: isOverCapacity ? 'var(--ew-danger-text)' : 'var(--ew-safe-text)' }}>{remaining} spaces left</span></div>
+          </>
+        ) : (
+          <>
+            <div className="capacity-row"><span className="capacity-label">Room capacity</span><span className="capacity-value">{selectedRoom?.capacity} people</span></div>
+            <div className="capacity-row"><span className="capacity-label">Currently assigned</span><span className="capacity-value">{selectedRoom?.occupied || 0} people</span></div>
+            <div className="capacity-row"><span className="capacity-label">Remaining capacity</span><span className="capacity-value" style={{ color: isOverCapacity ? 'var(--ew-danger-text)' : 'var(--ew-safe-text)' }}>{remaining} spaces left</span></div>
+          </>
+        )}
         {selectedFamily && (<div className="capacity-row"><span className="capacity-label">Household to assign</span><span className="capacity-value">{memCount} members</span></div>)}
-        {isOverCapacity && selectedFamily && (<p className="capacity-warning"><FontAwesomeIcon icon={faXmark} /> Warning: this household has {memCount} members but only {remaining} space left. Assigning would exceed room capacity.</p>)}
+        {isOverCapacity && selectedFamily && (<p className="capacity-warning"><FontAwesomeIcon icon={faTriangleExclamation} /> Warning: this household has {memCount} members but only {remaining} space left. Assigning would exceed capacity.</p>)}
       </div>
     </ModalShell>
   );

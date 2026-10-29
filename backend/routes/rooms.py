@@ -183,7 +183,13 @@ def create_room(center_id):
     # Optional building_id
     parsed_building_id = None
     raw_building_id = data.get('building_id')
-    if raw_building_id is not None and str(raw_building_id).strip() != "":
+
+    # Enforce building_id rules based on center_type
+    center_type = center.center_type or 'campus'
+    if center_type == 'campus':
+        # Campus: building_id is REQUIRED
+        if raw_building_id is None or str(raw_building_id).strip() == "":
+            return jsonify({"error": "building_id is required for campus type centers"}), 400
         try:
             b_id = int(raw_building_id)
         except (TypeError, ValueError):
@@ -191,7 +197,36 @@ def create_room(center_id):
         building = db.session.get(EvacuationCenterBuilding, b_id)
         if not building or building.evacuation_center_id != center_id:
             return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
+
+        # Check building status - cannot add rooms to closed/under_repair buildings
+        if building.status != 'open':
+            return jsonify({"error": f"Cannot add rooms to a building with status '{building.status}'. Only 'open' buildings can have rooms added."}), 400
+
+        # Check building max_rooms limit
+        if building.max_rooms is not None:
+            active_rooms_in_building = EvacuationCenterRoom.query.filter_by(
+                building_id=building.id, is_active=True
+            ).count()
+            if active_rooms_in_building >= building.max_rooms:
+                return jsonify({"error": f"Building has reached its maximum room limit of {building.max_rooms}"}), 400
+
         parsed_building_id = building.id
+    elif center_type in ('private_property', 'single_venue'):
+        # private_property and single_venue: building_id MUST BE NULL
+        if raw_building_id is not None and str(raw_building_id).strip() != "":
+            return jsonify({"error": f"building_id must not be provided for {center_type} type centers"}), 400
+        parsed_building_id = None
+    else:
+        # Fallback for any unknown type - treat as campus (require building)
+        if raw_building_id is not None and str(raw_building_id).strip() != "":
+            try:
+                b_id = int(raw_building_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid building_id"}), 400
+            building = db.session.get(EvacuationCenterBuilding, b_id)
+            if not building or building.evacuation_center_id != center_id:
+                return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
+            parsed_building_id = building.id
 
     room = EvacuationCenterRoom(
         evacuation_center_id=center_id,
@@ -281,9 +316,12 @@ def update_room(room_id):
 
     if 'building_id' in data:
         raw_building_id = data.get('building_id')
-        if raw_building_id is None or str(raw_building_id).strip() == "":
-            room.building_id = None
-        else:
+        center_type = room.evacuation_center.center_type or 'campus'
+
+        if center_type == 'campus':
+            # Campus: building_id is REQUIRED (cannot be set to null)
+            if raw_building_id is None or str(raw_building_id).strip() == "":
+                return jsonify({"error": "building_id is required for campus type centers"}), 400
             try:
                 b_id = int(raw_building_id)
             except (TypeError, ValueError):
@@ -291,7 +329,38 @@ def update_room(room_id):
             building = db.session.get(EvacuationCenterBuilding, b_id)
             if not building or building.evacuation_center_id != room.evacuation_center_id:
                 return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
+
+            # Check building status
+            if building.status != 'open':
+                return jsonify({"error": f"Cannot assign room to a building with status '{building.status}'. Only 'open' buildings can have rooms."}), 400
+
+            # Check building max_rooms limit
+            if building.max_rooms is not None:
+                active_rooms_in_building = EvacuationCenterRoom.query.filter_by(
+                    building_id=building.id, is_active=True
+                ).count()
+                if active_rooms_in_building >= building.max_rooms:
+                    return jsonify({"error": f"Building has reached its maximum room limit of {building.max_rooms}"}), 400
+
             room.building_id = building.id
+        elif center_type in ('private_property', 'single_venue'):
+            # private_property and single_venue: building_id MUST BE NULL
+            if raw_building_id is not None and str(raw_building_id).strip() != "":
+                return jsonify({"error": f"building_id must not be provided for {center_type} type centers"}), 400
+            room.building_id = None
+        else:
+            # Fallback
+            if raw_building_id is None or str(raw_building_id).strip() == "":
+                room.building_id = None
+            else:
+                try:
+                    b_id = int(raw_building_id)
+                except (TypeError, ValueError):
+                    return jsonify({"error": "Invalid building_id"}), 400
+                building = db.session.get(EvacuationCenterBuilding, b_id)
+                if not building or building.evacuation_center_id != room.evacuation_center_id:
+                    return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
+                room.building_id = building.id
 
     if 'latitude' in data and 'longitude' in data:
         lat = data.get('latitude')

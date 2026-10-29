@@ -2386,6 +2386,21 @@ def assign_family(family_id):
     if not center.is_active:
         return jsonify({"error": "Cannot assign to an inactive evacuation center"}), 400
 
+    # Enforce center_type rules for room_id
+    center_type = center.center_type or 'campus'
+    if center_type in ('campus', 'private_property'):
+        # campus and private_property: room_id is REQUIRED
+        if not room_id:
+            return jsonify({"error": f"Room ID is required for {center_type} type centers"}), 400
+    elif center_type == 'single_venue':
+        # single_venue: room_id is OPTIONAL (direct assignment to center)
+        # room_id can be None for direct venue assignment
+        pass
+    else:
+        # Fallback: require room_id
+        if not room_id:
+            return jsonify({"error": "Room ID is required"}), 400
+
     room = None
     if room_id:
         room = EvacuationCenterRoom.query.get(room_id)
@@ -2395,6 +2410,11 @@ def assign_family(family_id):
             return jsonify({"error": "Cannot assign to an inactive room"}), 400
         if room.evacuation_center_id != center.id:
             return jsonify({"error": "Room does not belong to the selected evacuation center"}), 400
+
+        # Check building status for campus type
+        if center_type == 'campus' and room.building:
+            if room.building.status != 'open':
+                return jsonify({"error": f"Cannot assign to a room in a building with status '{room.building.status}'. Only 'open' buildings can receive new assignments."}), 400
 
     # A family must not have multiple active assignments
     existing_assignment = (
@@ -2421,6 +2441,7 @@ def assign_family(family_id):
                 "needed": needed_spaces
             }), 400
     else:
+        # Direct venue assignment (single_venue)
         current_center_assigned = (
             db.session.query(func.count(EvacuationAssignment.id))
             .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
@@ -2504,6 +2525,25 @@ def move_family(family_id):
         target_center = EvacuationCenter.query.get(new_center_id)
         if not target_center or not target_center.is_active:
             return jsonify({"error": "Target evacuation center is inactive or not found"}), 400
+
+    # Enforce center_type rules for room_id
+    target_center_type = target_center.center_type or 'campus'
+    if target_center_type in ('campus', 'private_property'):
+        # campus and private_property: room_id is REQUIRED
+        if not new_room:
+            return jsonify({"error": f"Room ID is required for {target_center_type} type centers"}), 400
+    elif target_center_type == 'single_venue':
+        # single_venue: room_id is OPTIONAL (direct assignment to center)
+        pass
+    else:
+        # Fallback: require room_id
+        if not new_room:
+            return jsonify({"error": "Room ID is required"}), 400
+
+    # Check building status for campus type
+    if target_center_type == 'campus' and new_room and new_room.building:
+        if new_room.building.status != 'open':
+            return jsonify({"error": f"Cannot move to a room in a building with status '{new_room.building.status}'. Only 'open' buildings can receive new assignments."}), 400
 
     current_assignments = (
         db.session.query(EvacuationAssignment)

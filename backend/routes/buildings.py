@@ -239,11 +239,44 @@ def create_building(center_id):
     if not center:
         return jsonify({"error": "Evacuation center not found"}), 404
 
+    # Only campus type centers can have buildings
+    if center.center_type != 'campus':
+        return jsonify({"error": f"Buildings can only be created for 'campus' type centers. This center is '{center.center_type}'."}), 400
+
     data = request.get_json() or {}
     name = (data.get('name') or '').strip() or None
     raw_coords = data.get('coordinates')
     geojson_geom = data.get('geometry')
     room_ids = data.get('room_ids') or []
+
+    # New fields
+    max_rooms = data.get('max_rooms')
+    if max_rooms is not None and str(max_rooms).strip() != "":
+        try:
+            max_rooms = int(max_rooms)
+            if max_rooms < 1:
+                return jsonify({"error": "max_rooms must be 1 or greater"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "max_rooms must be a number"}), 400
+    else:
+        max_rooms = None
+
+    floors = data.get('floors')
+    if floors is not None and str(floors).strip() != "":
+        try:
+            floors = int(floors)
+            if floors < 1:
+                return jsonify({"error": "floors must be 1 or greater"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "floors must be a number"}), 400
+    else:
+        floors = None
+
+    status = data.get('status', 'open')
+    if status not in ('open', 'closed', 'under_repair'):
+        return jsonify({"error": "status must be one of: open, closed, under_repair"}), 400
+
+    notes = data.get('notes')
 
     if geojson_geom and isinstance(geojson_geom, dict):
         try:
@@ -271,7 +304,11 @@ def create_building(center_id):
     new_building = EvacuationCenterBuilding(
         evacuation_center_id=center_id,
         name=name,
-        geom=from_shape(poly_shape, srid=4326)
+        geom=from_shape(poly_shape, srid=4326),
+        max_rooms=max_rooms,
+        floors=floors,
+        status=status,
+        notes=notes
     )
     db.session.add(new_building)
     db.session.flush()
@@ -360,6 +397,55 @@ def update_building(building_id):
                 EvacuationCenterRoom.building_id == building.id
             ).update({EvacuationCenterRoom.building_id: None}, synchronize_session=False)
 
+    # Update max_rooms with validation
+    if 'max_rooms' in data:
+        max_rooms = data.get('max_rooms')
+        if max_rooms is not None and str(max_rooms).strip() != "":
+            try:
+                max_rooms = int(max_rooms)
+                if max_rooms < 1:
+                    return jsonify({"error": "max_rooms must be 1 or greater"}), 400
+            except (ValueError, TypeError):
+                return jsonify({"error": "max_rooms must be a number"}), 400
+        else:
+            max_rooms = None
+
+        # Check if lowering max_rooms below active rooms count
+        active_rooms_count = EvacuationCenterRoom.query.filter_by(
+            building_id=building.id, is_active=True
+        ).count()
+        if max_rooms is not None and max_rooms < active_rooms_count:
+            return jsonify({
+                "error": f"Cannot set max_rooms to {max_rooms}: this building has {active_rooms_count} active room(s). Deactivate or delete rooms first."
+            }), 400
+
+        building.max_rooms = max_rooms
+
+    # Update floors with validation
+    if 'floors' in data:
+        floors = data.get('floors')
+        if floors is not None and str(floors).strip() != "":
+            try:
+                floors = int(floors)
+                if floors < 1:
+                    return jsonify({"error": "floors must be 1 or greater"}), 400
+            except (ValueError, TypeError):
+                return jsonify({"error": "floors must be a number"}), 400
+        else:
+            floors = None
+        building.floors = floors
+
+    # Update status with validation
+    if 'status' in data:
+        status = data.get('status')
+        if status not in ('open', 'closed', 'under_repair'):
+            return jsonify({"error": "status must be one of: open, closed, under_repair"}), 400
+        building.status = status
+
+    # Update notes
+    if 'notes' in data:
+        building.notes = data.get('notes')
+
     db.session.commit()
 
     return jsonify({
@@ -379,18 +465,32 @@ def delete_building(building_id):
     if not building:
         return jsonify({"error": "Building not found"}), 404
 
-    # Unlink all rooms
-    EvacuationCenterRoom.query.filter_by(building_id=building.id).update(
-        {EvacuationCenterRoom.building_id: None},
-        synchronize_session=False
-    )
+    # Check if building has any rooms (active or inactive)
+    room_count = EvacuationCenterRoom.query.filter_by(building_id=building.id).count()
+    if room_count > 0:
+        return jsonify({
+            "error": f"Cannot delete building: it still has {room_count} room(s). Remove or reassign them first."
+        }), 400
+
+    # Check if any households are assigned through rooms in this building
+    assigned_families = db.session.query(func.count(func.distinct(Family.id))) \
+        .join(Resident, Resident.family_id == Family.id) \
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id) \
+        .join(EvacuationCenterRoom, EvacuationCenterRoom.id == EvacuationAssignment.room_id) \
+        .filter(EvacuationCenterRoom.building_id == building.id) \
+        .scalar() or 0
+
+    if assigned_families > 0:
+        return jsonify({
+            "error": f"Cannot delete building: {assigned_families} household(s) are assigned to rooms in this building. Move or unassign them first."
+        }), 400
 
     db.session.delete(building)
     db.session.commit()
 
     return jsonify({
         "success": True,
-        "message": "Building deleted and rooms unlinked successfully"
+        "message": "Building deleted successfully"
     })
 
 

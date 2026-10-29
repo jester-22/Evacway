@@ -1,12 +1,15 @@
 
 /**
  * ReadinessChecklist - Shows readiness items for a center
- * For single_venue centers, "Rooms added" is NOT required (shows as N/A or hidden)
+ * For single_venue centers, "Rooms added" and "Buildings" are NOT required
+ * For private_property centers, "Rooms added" IS required but "Buildings" is NOT
+ * For campus centers, both "Rooms added" and "Buildings" are required
  */
 export default function ReadinessChecklist({
   center,
   onPlaceOnMap,
   onAddRooms,
+  onAddBuilding,
   onSetEntrance,
   onEditContact,
   onEditAccessibility,
@@ -14,10 +17,21 @@ export default function ReadinessChecklist({
   if (!center) return null
 
   const isSingleVenue = center.center_type === 'single_venue'
+  const isPrivateProperty = center.center_type === 'private_property'
+  const isCampus = center.center_type === 'campus' || !center.center_type
 
-  // For single_venue: no rooms/buildings required
-  // For private_property (house/single building): rooms required but no separate building step
-  // For campus (multi-building): buildings and rooms required
+  // Determine room/building readiness based on center type
+  const hasRooms = Number(center.room_count || 0) > 0
+  const hasBuildings = Number(center.building_count || 0) > 0
+
+  // For single_venue: neither rooms nor buildings required
+  // For private_property: rooms required, buildings NOT required
+  // For campus: both rooms and buildings required
+  const roomsRequired = !isSingleVenue
+  const buildingsRequired = isCampus
+
+  const roomsOk = roomsRequired ? hasRooms : true
+  const buildingsOk = buildingsRequired ? hasBuildings : true
 
   const items = [
     {
@@ -30,13 +44,24 @@ export default function ReadinessChecklist({
     {
       key: 'rooms',
       label: 'Rooms defined',
-      // For single_venue, this is N/A (not required)
-      // For private_property and campus, check building_count or roomsDefined
-      ok: isSingleVenue ? true : Boolean(center.building_count || center.roomsDefined),
-      fix: isSingleVenue ? undefined : onAddRooms,
+      ok: roomsOk,
+      fix: roomsRequired && !roomsOk ? onAddRooms : undefined,
       hint: isSingleVenue
         ? 'Not required for single venue centers.'
-        : 'Add at least one room so households can be assigned.',
+        : isPrivateProperty
+          ? 'Add at least one room for household assignments.'
+          : 'Add at least one room so households can be assigned.',
+    },
+    {
+      key: 'buildings',
+      label: 'Buildings defined',
+      ok: buildingsOk,
+      fix: buildingsRequired && !buildingsOk ? onAddBuilding : undefined,
+      hint: isSingleVenue
+        ? 'Not required for single venue centers.'
+        : isPrivateProperty
+          ? 'Not required for private property centers.'
+          : 'Add at least one building to organize rooms.',
     },
     {
       key: 'entrance',

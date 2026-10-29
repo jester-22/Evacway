@@ -164,6 +164,9 @@ export const api = {
       method: "DELETE",
     }),
 
+  getAllowedCenterTypes: (centerId) =>
+    request(`/api/evacuation-centers/${centerId}/allowed-center-types`),
+
   patch: (path, body) =>
     request(path.startsWith("/api") ? path : `/api${path}`, {
       method: "PATCH",

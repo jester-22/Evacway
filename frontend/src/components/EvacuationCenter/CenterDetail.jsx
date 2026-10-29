@@ -601,7 +601,13 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
 
   // For private_property, don't group by building - just show all rooms
   // For campus, group rooms by building_id
+  // For single_venue, return empty array (handled by early return in render)
   const groups = useMemo(() => {
+    // Single venue: no rooms/buildings structure
+    if (isSingleVenue) {
+      return [];
+    }
+
     if (isPrivateProperty) {
       // Private property: single group with all rooms, no buildings
       return [{ building: null, rooms: rooms }];
@@ -627,8 +633,9 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
         const nameA = a[1].building?.name || '';
         const nameB = b[1].building?.name || '';
         return nameA.localeCompare(nameB);
-      });
-  }, [buildings, rooms, isPrivateProperty]);
+      })
+      .map(([, v]) => v);
+  }, [isSingleVenue, isPrivateProperty, rooms, buildings]);
 
   return (
     <div className="ec-structure">

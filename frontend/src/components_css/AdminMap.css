@@ -1278,6 +1278,36 @@
   flex-shrink: 0;
 }
 
+/* Mobile bottom sheet badge for unmapped centers */
+.admin-map-sheet-drag-handle {
+  position: relative;
+}
+
+.admin-map-sheet-badge {
+  position: absolute;
+  top: 2px;
+  right: 12px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--ew-danger);
+  color: var(--ew-bg-surface);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  border-radius: 999px;
+  text-align: center;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--ew-danger) 40%, transparent);
+  animation: admin-map-badge-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-map-sheet-badge {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 .admin-map-panel-header.is-mobile-sheet-header {
   padding: 4px 16px 12px;
   gap: 8px;
@@ -2536,6 +2566,37 @@
   font-weight: 600;
   color: #0f172a;
   line-height: 1;
+}
+
+/* Rail badge for unmapped centers */
+.admin-map-rail-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--ew-danger);
+  color: var(--ew-bg-surface);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  border-radius: 999px;
+  text-align: center;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--ew-danger) 40%, transparent);
+  animation: admin-map-badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes admin-map-badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-map-rail-badge {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 /* Panel View Container */
@@ -4496,6 +4557,116 @@
 .admin-map-panel-menu-btn:hover {
   background: #f1f5f9;
   color: #0f172a;
+}
+
+/* Building Edit Mode Toolbar */
+.admin-map-edit-building-toolbar {
+  background: var(--ew-bg-surface, #ffffff);
+  border: 1px solid var(--ew-border-strong, #cbd5e1);
+  border-radius: var(--radius-lg, 12px);
+  padding: 12px 16px;
+  box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(15, 23, 42, 0.10));
+  margin-bottom: 12px;
+}
+
+.admin-map-edit-toolbar-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ew-ink-muted, #64748b);
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: var(--ew-brand-light, #eff6ff);
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--ew-brand-border, #bfdbfe);
+}
+
+.admin-map-edit-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-map-edit-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--ew-border-strong, #cbd5e1);
+  background: var(--ew-bg-surface, #ffffff);
+  color: var(--ew-ink, #1e293b);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 150ms ease;
+  white-space: nowrap;
+}
+
+.admin-map-edit-toolbar-btn:hover:not(:disabled) {
+  background: var(--ew-bg-hover, #f1f5f9);
+  border-color: var(--ew-border-strong, #94a3b8);
+}
+
+.admin-map-edit-toolbar-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.admin-map-edit-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.admin-map-edit-toolbar-btn.is-primary {
+  background: var(--ew-brand-primary, #2563eb);
+  border-color: var(--ew-brand-primary, #2563eb);
+  color: var(--ew-bg-surface, #ffffff);
+  margin-left: auto;
+}
+
+.admin-map-edit-toolbar-btn.is-primary:hover:not(:disabled) {
+  background: var(--ew-brand-hover, #1d4ed8);
+  border-color: var(--ew-brand-hover, #1d4ed8);
+}
+
+.admin-map-edit-toolbar-btn.is-danger {
+  color: var(--ew-danger, #dc2626);
+  border-color: var(--ew-danger-border, #fecaca);
+  background: var(--ew-danger-bg, #fef2f2);
+}
+
+.admin-map-edit-toolbar-btn.is-danger:hover:not(:disabled) {
+  background: var(--ew-danger-bg, #fef2f2);
+  border-color: var(--ew-danger-border-hover, #fca5a5);
+}
+
+.admin-map-edit-toolbar-btn svg {
+  flex-shrink: 0;
+}
+
+/* Building edit toolbar error message */
+.admin-map-edit-toolbar-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--ew-danger-bg, #fef2f2);
+  border: 1px solid var(--ew-danger-border, #fecaca);
+  border-radius: var(--radius-md, 8px);
+  color: #dc2626;
+  font-size: 12.5px;
+  font-weight: 500;
+  margin-bottom: 10px;
+  animation: admin-map-error-fade-in 0.2s ease;
+}
+
+@keyframes admin-map-error-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 

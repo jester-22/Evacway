@@ -50,6 +50,7 @@ import {
   setEntrancesGeoJSON,
 } from "../../utils/mapBuildingLayers";
 import { polygonToPoints } from "../CenterPlacementFlow/CenterPlacementFlow";
+import { createVertexHandleMarkers, updateVertexHandleMarkers } from "../../utils/mapVertexHandles";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -413,8 +414,19 @@ function DashboardMap({
   onCloseShape,
   onOutsideOutlineClick,
   onMapBackgroundClick,
+  hiddenCenterId = null,
+  hiddenBuildingId = null,
   onBasemapBuildingClick,
   onDoubleTapFinish,
+  // Entrance edit mode props
+  onEntranceDrag = null,
+  // Building edit mode props
+  editingBuildingId = null,
+  editingBuildingPoints = null,
+  onEditingBuildingPointsChange = null,
+  // Center edit polygon props
+  editablePolygon = null,
+  onEditablePolygonChange = null,
 }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -465,6 +477,18 @@ function DashboardMap({
   const drawModeRef = useRef(drawMode);
   drawModeRef.current = drawMode;
   const roomCursorMarkerRef = useRef(null);
+
+
+
+  // Callback refs so a parent re-render never rebuilds the drawing preview
+  const onMapClickRef = useRef(onMapClick);
+  const onCloseShapeRef = useRef(onCloseShape);
+  const onOutsideOutlineClickRef = useRef(onOutsideOutlineClick);
+  const onDoubleTapFinishRef = useRef(onDoubleTapFinish);
+  onMapClickRef.current = onMapClick;
+  onCloseShapeRef.current = onCloseShape;
+  onOutsideOutlineClickRef.current = onOutsideOutlineClick;
+  onDoubleTapFinishRef.current = onDoubleTapFinish;
   const fittedRoomBoundsRef = useRef(false);
   const lastFocusRequestedAtRef = useRef(null);
 
@@ -1071,10 +1095,217 @@ function DashboardMap({
     if (buildingsGeoJSON) {
       try {
         initBuildingLayers(map, onBuildingClick);
-        setBuildingsGeoJSON(map, buildingsGeoJSON);
+        // Filter out the building being edited so it doesn't show in the static layer
+        const filteredGeoJSON = editingBuildingId
+          ? {
+              ...buildingsGeoJSON,
+              features: (buildingsGeoJSON.features || []).filter(
+                (f) => Number(f.properties?.id ?? f.id) !== Number(editingBuildingId)
+              ),
+            }
+          : buildingsGeoJSON;
+        setBuildingsGeoJSON(map, filteredGeoJSON);
         setSelectedBuilding(map, selectedBuildingId);
       } catch (e) {
         // ignore
+      }
+    }
+
+    // Building edit mode: vertex handles for the polygon being edited
+    if (editingBuildingId && editingBuildingPoints && editingBuildingPoints.length >= 3 && onEditingBuildingPointsChange) {
+      try {
+        // Clean up existing vertex handles
+        if (map.__buildingVertexHandles) {
+          map.__buildingVertexHandles.removeAll();
+          map.__buildingVertexHandles = null;
+        }
+
+        // Create vertex handles
+        const handles = createVertexHandleMarkers(map, editingBuildingPoints, {
+          onVertexDrag: (index, point, isFinal) => {
+            const newPoints = [...editingBuildingPoints];
+            newPoints[index] = point;
+            onEditingBuildingPointsChange(newPoints, isFinal);
+          },
+          onVertexDelete: (index) => {
+            if (editingBuildingPoints.length > 3) {
+              const newPoints = editingBuildingPoints.filter((_, i) => i !== index);
+              onEditingBuildingPointsChange(newPoints, true);
+            }
+          },
+          onMidpointDrag: (index, point, isFinal) => {
+            const newPoints = [...editingBuildingPoints];
+            // Insert new vertex after the current index
+            newPoints.splice(index + 1, 0, point);
+            onEditingBuildingPointsChange(newPoints, isFinal);
+          },
+          showMidpoints: true,
+          minVertices: 3,
+        });
+
+        map.__buildingVertexHandles = handles;
+
+        // Also create/edit the editable polygon layer for the building being edited
+        const editableCoords = [editingBuildingPoints.map((p) => [p.lng, p.lat])];
+        const editableData = {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: { editing: true },
+              geometry: {
+                type: "Polygon",
+                coordinates: editableCoords,
+              },
+            },
+          ],
+        };
+
+        if (!map.getSource("editing-building-footprint")) {
+          map.addSource("editing-building-footprint", {
+            type: "geojson",
+            data: editableData,
+          });
+          map.addLayer({
+            id: "editing-building-fill",
+            type: "fill",
+            source: "editing-building-footprint",
+            slot: "top",
+            paint: {
+              "fill-color": "#2563eb",
+              "fill-opacity": 0.15,
+            },
+          });
+          map.addLayer({
+            id: "editing-building-line",
+            type: "line",
+            source: "editing-building-footprint",
+            slot: "top",
+            paint: {
+              "line-color": "#1d4ed8",
+              "line-width": 3,
+              "line-dasharray": [4, 4],
+            },
+          });
+        } else {
+          map.getSource("editing-building-footprint").setData(editableData);
+        }
+      } catch (e) {
+        // ignore
+      }
+    } else {
+      // Clean up vertex handles and editable layer when not editing
+      if (map.__buildingVertexHandles) {
+        map.__buildingVertexHandles.removeAll();
+        map.__buildingVertexHandles = null;
+      }
+      if (map.getLayer("editing-building-line")) {
+        map.removeLayer("editing-building-line");
+      }
+      if (map.getLayer("editing-building-fill")) {
+        map.removeLayer("editing-building-fill");
+      }
+      if (map.getSource("editing-building-footprint")) {
+        map.removeSource("editing-building-footprint");
+      }
+    }
+
+    // Center edit polygon mode: vertex handles for the center footprint being edited
+    if (editablePolygon && editablePolygon.length >= 3 && onEditablePolygonChange) {
+      try {
+        // Clean up existing vertex handles
+        if (map.__centerVertexHandles) {
+          map.__centerVertexHandles.removeAll();
+          map.__centerVertexHandles = null;
+        }
+
+        // Create vertex handles
+        const handles = createVertexHandleMarkers(map, editablePolygon, {
+          onVertexDrag: (index, point, isFinal) => {
+            const newPoints = [...editablePolygon];
+            newPoints[index] = point;
+            onEditablePolygonChange(newPoints, isFinal);
+          },
+          onVertexDelete: (index) => {
+            if (editablePolygon.length > 3) {
+              const newPoints = editablePolygon.filter((_, i) => i !== index);
+              onEditablePolygonChange(newPoints, true);
+            }
+          },
+          onMidpointDrag: (index, point, isFinal) => {
+            const newPoints = [...editablePolygon];
+            // Insert new vertex after the current index
+            newPoints.splice(index + 1, 0, point);
+            onEditablePolygonChange(newPoints, isFinal);
+          },
+          showMidpoints: true,
+          minVertices: 3,
+        });
+
+        map.__centerVertexHandles = handles;
+
+        // Also create/edit the editable polygon layer for the center being edited
+        const editableCoords = [editablePolygon.map((p) => [p.lng, p.lat])];
+        const editableData = {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: { editing: true },
+              geometry: {
+                type: "Polygon",
+                coordinates: editableCoords,
+              },
+            },
+          ],
+        };
+
+        if (!map.getSource("editing-center-footprint")) {
+          map.addSource("editing-center-footprint", {
+            type: "geojson",
+            data: editableData,
+          });
+          map.addLayer({
+            id: "editing-center-fill",
+            type: "fill",
+            source: "editing-center-footprint",
+            slot: "top",
+            paint: {
+              "fill-color": "#2563eb",
+              "fill-opacity": 0.15,
+            },
+          });
+          map.addLayer({
+            id: "editing-center-line",
+            type: "line",
+            source: "editing-center-footprint",
+            slot: "top",
+            paint: {
+              "line-color": "#1d4ed8",
+              "line-width": 3,
+              "line-dasharray": [4, 4],
+            },
+          });
+        } else {
+          map.getSource("editing-center-footprint").setData(editableData);
+        }
+      } catch (e) {
+        // ignore
+      }
+    } else {
+      // Clean up vertex handles and editable layer when not editing
+      if (map.__centerVertexHandles) {
+        map.__centerVertexHandles.removeAll();
+        map.__centerVertexHandles = null;
+      }
+      if (map.getLayer("editing-center-line")) {
+        map.removeLayer("editing-center-line");
+      }
+      if (map.getLayer("editing-center-fill")) {
+        map.removeLayer("editing-center-fill");
+      }
+      if (map.getSource("editing-center-footprint")) {
+        map.removeSource("editing-center-footprint");
       }
     }
 
@@ -1708,7 +1939,7 @@ function DashboardMap({
 
         const name = feature.properties?.road_name || "Unnamed road";
 
-        createPopup(name, `<span style="color:#dc2626;">🚫 Closed</span>`)
+        createPopup(name, `<span style="color:#dc2626;">ðŸš« Closed</span>`)
           .setLngLat(e.lngLat)
           .addTo(map);
       };
@@ -1866,7 +2097,7 @@ function DashboardMap({
           "text-field": [
             "concat",
             ["case", ["==", ["get", "hazard_type"], "flood"], "Flood zone", "Landslide zone"],
-            " · ",
+            " Â· ",
             ["to-string", ["get", "risk_level"]],
           ],
           "text-font": ["Open Sans Semibold", "Arial Unicode MS Regular"],
@@ -2352,7 +2583,7 @@ function DashboardMap({
    * Helper: extract room number for compact badge (e.g. "Room 17" -> "17")
    */
   function getRoomBadgeText(roomNumber) {
-    if (!roomNumber) return "•";
+    if (!roomNumber) return "â€¢";
     const str = String(roomNumber).trim();
     const cleaned = str.replace(/^room\s*/i, "").trim();
     return cleaned || str;
@@ -2482,164 +2713,147 @@ function DashboardMap({
     };
   }, [mapLoaded, drawMode, pendingRoomLocation, styleVersion]);
 
-  /*
-   * Pending footprint (only displayed when drawMode === "footprint" or "entrance")
+    /*
+   * Draw-preview: GeoJSON source + layers for live footprint/outline drawing.
+   * Replaces DOM-marker preview. One source "draw-preview" with line, fill and circle layers.
    */
+  const drawPreviewRef = useRef({ sourceAdded: false, layersAdded: false });
+
+  function ensureDrawPreviewLayers(map) {
+    if (!map || !map.getStyle()) return false;
+    try {
+      if (!map.getSource("draw-preview")) {
+        map.addSource("draw-preview", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        drawPreviewRef.current.sourceAdded = true;
+      }
+      if (!map.getLayer("draw-preview-line")) {
+        map.addLayer({ id: "draw-preview-line", type: "line", source: "draw-preview", slot: "top",
+          filter: ["==", ["get", "kind"], "line"],
+          paint: { "line-color": "#1d4ed8", "line-width": 3 } });
+      }
+      if (!map.getLayer("draw-preview-fill")) {
+        map.addLayer({ id: "draw-preview-fill", type: "fill", source: "draw-preview", slot: "top",
+          filter: ["==", ["get", "kind"], "fill"],
+          paint: { "fill-color": "#2563eb", "fill-opacity": 0.15 } });
+      }
+      if (!map.getLayer("draw-preview-circle")) {
+        map.addLayer({ id: "draw-preview-circle", type: "circle", source: "draw-preview", slot: "top",
+          filter: ["==", ["get", "kind"], "point"],
+          paint: {
+            "circle-radius": ["case", ["==", ["get", "isFirst"], true], 8, 6],
+            "circle-color": ["case", ["==", ["get", "isFirst"], true], "#2563eb", "#ffffff"],
+            "circle-stroke-color": "#2563eb",
+            "circle-stroke-width": 2,
+          } });
+        drawPreviewRef.current.layersAdded = true;
+      }
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function rebuildDrawPreview(map, points) {
+    if (!map || !map.getStyle()) return;
+    if (!ensureDrawPreviewLayers(map)) return;
+    const features = [];
+    if (points && points.length > 0) {
+      features.push({
+        type: "Feature", properties: { kind: "line" },
+        geometry: { type: "LineString",
+          coordinates: points.map((p) => [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)]) },
+      });
+      if (points.length >= 3) {
+        const ring = points.map((p) => [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)]);
+        ring.push(ring[0]);
+        features.push({ type: "Feature", properties: { kind: "fill" },
+          geometry: { type: "Polygon", coordinates: [ring] } });
+      }
+      points.forEach((p, i) => {
+        features.push({ type: "Feature", properties: { kind: "point", isFirst: i === 0 },
+          geometry: { type: "Point",
+            coordinates: [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)] } });
+      });
+    }
+    try {
+      const source = map.getSource("draw-preview");
+      if (source) source.setData({ type: "FeatureCollection", features });
+    } catch (e) {}
+  }
+
+  function removeDrawPreview(map) {
+    if (!map || !map.getStyle()) return;
+    try {
+      if (map.getLayer("draw-preview-circle")) map.removeLayer("draw-preview-circle");
+      if (map.getLayer("draw-preview-fill")) map.removeLayer("draw-preview-fill");
+      if (map.getLayer("draw-preview-line")) map.removeLayer("draw-preview-line");
+      if (map.getSource("draw-preview")) map.removeSource("draw-preview");
+    } catch (e) {}
+    drawPreviewRef.current.sourceAdded = false;
+    drawPreviewRef.current.layersAdded = false;
+  }
+
   useEffect(() => {
     const map = mapRef.current;
-
-    if (!map || !mapLoaded || !map.style || !map.isStyleLoaded()) return;
-
-    const isActive =
-      (drawMode === "footprint" ||
-        drawMode === "entrance" ||
-        drawMode === "room") &&
-      pendingFootprint &&
-      pendingFootprint.length > 0;
-
-    const polygonCoordinates = isActive
-      ? [pendingFootprint.map((point) => [point.lng, point.lat])]
-      : [];
-
-    const footprintData = {
-      type: "FeatureCollection",
-      features:
-        polygonCoordinates.length > 0
-          ? [
-              {
-                type: "Feature",
-                properties: {},
-                geometry: {
-                  type: "Polygon",
-                  coordinates: polygonCoordinates,
-                },
-              },
-            ]
-          : [],
-    };
-
-    try {
-      const isRoomMode = drawMode === "room";
-      const source = map.getSource("pending-footprint");
-
-      if (source) {
-        source.setData(footprintData);
-        if (map.getLayer("pending-footprint-fill")) {
-          map.setPaintProperty(
-            "pending-footprint-fill",
-            "fill-opacity",
-            isRoomMode ? 0.13 : 0.08
-          );
-          map.setPaintProperty(
-            "pending-footprint-fill",
-            "fill-color",
-            "#2563eb"
-          );
-        }
-        if (map.getLayer("pending-footprint-line")) {
-          map.setPaintProperty(
-            "pending-footprint-line",
-            "line-width",
-            isRoomMode ? 3 : 2.5
-          );
-          map.setPaintProperty(
-            "pending-footprint-line",
-            "line-color",
-            "#1d4ed8"
-          );
-        }
-      } else {
-        map.addSource("pending-footprint", {
-          type: "geojson",
-          data: footprintData,
-        });
-
-        map.addLayer({
-          id: "pending-footprint-fill",
-          type: "fill",
-          source: "pending-footprint",
-          slot: "top",
-          paint: {
-            "fill-color": "#2563eb",
-            "fill-opacity": isRoomMode ? 0.13 : 0.08,
-          },
-        });
-
-        map.addLayer({
-          id: "pending-footprint-line",
-          type: "line",
-          source: "pending-footprint",
-          slot: "top",
-          paint: {
-            "line-color": "#1d4ed8",
-            "line-width": isRoomMode ? 3 : 2.5,
-          },
-        });
-      }
-    } catch (e) {
-      // Map style not ready or map destroyed
-    }
-
-    const oldMarkers = map.__evacwayFootprintMarkers || [];
-    oldMarkers.forEach((marker) => {
-      marker.remove();
+    if (!map || !mapLoaded) return;
+    const isActive = drawMode === "footprint" && pendingFootprint && pendingFootprint.length > 0;
+    map.once("styledata", () => {
+      drawPreviewRef.current.sourceAdded = false;
+      drawPreviewRef.current.layersAdded = false;
+      removeDrawPreview(map);
+      ensureDrawPreviewLayers(map);
+      rebuildDrawPreview(map, isActive ? pendingFootprint : []);
     });
-    map.__evacwayFootprintMarkers = [];
+    if (!ensureDrawPreviewLayers(map)) {
+      const onIdle = () => {
+        ensureDrawPreviewLayers(map);
+        rebuildDrawPreview(map, isActive ? pendingFootprint : []);
+      };
+      map.once("idle", onIdle);
+      map.once("style.load", onIdle);
+    }
+    rebuildDrawPreview(map, isActive ? pendingFootprint : []);
+    return () => {
+      try { map.off("styledata", () => {}); } catch {}
+      removeDrawPreview(map);
+    };
+  // Apply/remove layer filters for hidden center/building during redraw
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getStyle()) return;
 
-    if (isActive && drawMode !== "room") {
-      const newMarkers = [];
-      pendingFootprint.forEach((point, index) => {
-        const lng = Number(point?.lng ?? point?.longitude);
-        const lat = Number(point?.lat ?? point?.latitude);
-        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
-
-        const isFirst = index === 0;
-        const element = document.createElement("div");
-        element.className = `cpf-vertex-marker ${isFirst ? "cpf-first-vertex" : ""}`;
-
-        if (isFirst) {
-          element.setAttribute("aria-label", "First vertex - click to close shape");
-          if (pendingFootprint.length >= 3) {
-            element.title = "Click to close shape";
-            element.addEventListener("click", (e) => {
-              e.stopPropagation();
-              if (onCloseShape) onCloseShape();
-            });
-          }
-        }
-
-        const marker = new mapboxgl.Marker({
-          element,
-          anchor: "center",
-        })
-          .setLngLat([lng, lat])
-          .addTo(map);
-
-        newMarkers.push(marker);
-      });
-
-      map.__evacwayFootprintMarkers = newMarkers;
+    // Center filter
+    const centerFill = map.getLayer("evac-centers-fill");
+    const centerLine = map.getLayer("evac-centers-line");
+    if (hiddenCenterId) {
+      if (centerFill) map.setFilter("evac-centers-fill", ["!=", ["get", "id"], String(hiddenCenterId)]);
+      if (centerLine) map.setFilter("evac-centers-line", ["!=", ["get", "id"], String(hiddenCenterId)]);
+    } else {
+      if (centerFill) map.setFilter("evac-centers-fill", null);
+      if (centerLine) map.setFilter("evac-centers-line", null);
     }
 
-    return () => {
-      try {
-        const markers = map.__evacwayFootprintMarkers || [];
-        markers.forEach((m) => m.remove());
-        map.__evacwayFootprintMarkers = [];
-        if (mapRef.current === map && map.style && typeof map.getSource === "function") {
-          const s = map.getSource("pending-footprint");
-          if (s) {
-            s.setData({ type: "FeatureCollection", features: [] });
-          }
-        }
-      } catch (e) {
-        // Safe ignore during unmount / destruction
-      }
-    };
-  }, [mapLoaded, drawMode, pendingFootprint, styleVersion, onCloseShape]);
+    // Building filter
+    const bldFill = map.getLayer("evacway-buildings-fill");
+    const bldOutline = map.getLayer("evacway-buildings-outline");
+    const bldHalo = map.getLayer("evacway-buildings-outline-halo");
+    const bldSymbol = map.getLayer("evacway-buildings-symbol");
+    if (hiddenBuildingId) {
+      if (bldFill) map.setFilter("evacway-buildings-fill", ["!=", ["get", "id"], String(hiddenBuildingId)]);
+      if (bldOutline) map.setFilter("evacway-buildings-outline", ["!=", ["get", "id"], String(hiddenBuildingId)]);
+      if (bldHalo) map.setFilter("evacway-buildings-outline-halo", ["!=", ["get", "id"], String(hiddenBuildingId)]);
+      if (bldSymbol) map.setFilter("evacway-buildings-symbol", ["!=", ["get", "id"], String(hiddenBuildingId)]);
+    } else {
+      if (bldFill) map.setFilter("evacway-buildings-fill", null);
+      if (bldOutline) map.setFilter("evacway-buildings-outline", null);
+      if (bldHalo) map.setFilter("evacway-buildings-outline-halo", null);
+      if (bldSymbol) map.setFilter("evacway-buildings-symbol", null);
+    }
+  }, [hiddenCenterId, hiddenBuildingId]);
+
+  }, [mapLoaded, drawMode, pendingFootprint, styleVersion]);
 
   /*
-   * Pending entrances (only displayed when drawMode === "entrance")
+   * Pending entrances (only displayed when drawMode === "entrance" or "confirm")
+   * In edit mode (editingCenter), markers are draggable to adjust entrance positions.
    */
   useEffect(() => {
     const map = mapRef.current;
@@ -2657,7 +2871,10 @@ function DashboardMap({
       pendingEntrances &&
       pendingEntrances.length > 0;
 
-    if (isActive) {
+    // In edit mode, we show entrances even in "footprint" step so they can be dragged
+    const isEditMode = editingCenter && onEntranceDrag;
+
+    if (isActive || isEditMode) {
       const newMarkers = [];
       pendingEntrances.forEach((point, index) => {
         const lng = Number(point?.lng ?? point?.longitude);
@@ -2669,13 +2886,45 @@ function DashboardMap({
         element.title = `Entrance ${index + 1}`;
         element.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V6a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v14"/><path d="M2 20h20"/><path d="M14 12v.01"/></svg>`;
 
-        const marker = new mapboxgl.Marker({
+        // In edit mode, make markers draggable
+        const markerOptions = {
           element,
           anchor: "center",
-        })
+        };
+
+        if (isEditMode) {
+          markerOptions.draggable = true;
+        }
+
+        const marker = new mapboxgl.Marker(markerOptions)
           .setLngLat([lng, lat])
           .setPopup(createPopup(`Entrance ${index + 1}`, "Building entrance"))
           .addTo(map);
+
+        if (isEditMode) {
+          marker.on("dragstart", () => {
+            element.style.cursor = "grabbing";
+            element.style.transform = "scale(1.2)";
+            element.style.boxShadow = "0 4px 16px rgba(15, 23, 42, 0.4)";
+          });
+
+          marker.on("drag", () => {
+            const lngLat = marker.getLngLat();
+            if (onEntranceDrag) {
+              onEntranceDrag(index, { lat: lngLat.lat, lng: lngLat.lng });
+            }
+          });
+
+          marker.on("dragend", () => {
+            element.style.cursor = "grab";
+            element.style.transform = "scale(1)";
+            element.style.boxShadow = "0 2px 8px rgba(15, 23, 42, 0.35)";
+            const lngLat = marker.getLngLat();
+            if (onEntranceDrag) {
+              onEntranceDrag(index, { lat: lngLat.lat, lng: lngLat.lng }, true);
+            }
+          });
+        }
 
         element.__marker = marker;
         element.dataset.lng = lng;
@@ -2696,7 +2945,7 @@ function DashboardMap({
         // Safe ignore
       }
     };
-  }, [mapLoaded, drawMode, pendingEntrances, styleVersion]);
+  }, [mapLoaded, drawMode, pendingEntrances, styleVersion, editingCenter, onEntranceDrag]);
 
   /*
    * Drawing / map click & cursor tracking
@@ -2778,7 +3027,7 @@ function DashboardMap({
         }
         return;
       }
-      if (!onMapClick) return;
+      if (!onMapClickRef.current) return;
       if (mappingTool === "pan") return; // In Pan mode taps place nothing
 
       if (drawMode === "footprint" && onBasemapBuildingClick) {
@@ -2822,16 +3071,28 @@ function DashboardMap({
         roomCursorMarkerRef.current.getElement().style.display = "none";
       }
 
-      onMapClick({
+      // First-corner close: click within 12px of first corner closes the shape
+      if (drawMode === "footprint" && pendingFootprint && pendingFootprint.length >= 3) {
+        const first = pendingFootprint[0];
+        const firstPx = map.project([Number(first.lng ?? first.longitude), Number(first.lat ?? first.latitude)]);
+        const dx = event.point.x - firstPx.x;
+        const dy = event.point.y - firstPx.y;
+        if (Math.sqrt(dx * dx + dy * dy) <= 12) {
+          if (onCloseShapeRef.current) onCloseShapeRef.current();
+          return;
+        }
+      }
+
+      onMapClickRef.current({
         lat: event.lngLat.lat,
         lng: event.lngLat.lng,
       });
     };
 
     const handleDblClick = (event) => {
-      if (drawMode === "footprint" && onDoubleTapFinish) {
+      if (drawMode === "footprint" && onDoubleTapFinishRef.current) {
         event.preventDefault();
-        onDoubleTapFinish();
+        onDoubleTapFinishRef.current();
       }
     };
 
@@ -2879,12 +3140,10 @@ function DashboardMap({
   }, [
     mapLoaded,
     drawMode,
-    onMapClick,
     mappingTool,
     pendingFootprint,
     onOutsideOutlineClick,
     onBasemapBuildingClick,
-    onDoubleTapFinish,
   ]);
 
   /*
@@ -3816,7 +4075,7 @@ function DashboardMap({
                         <strong>{room.room_number || "Room"}</strong>
                         <small>
                           {isRoomAssigned ? "Assigned" : "Unassigned"}
-                          {room.capacity != null ? ` · Cap ${room.capacity}` : ""}
+                          {room.capacity != null ? ` Â· Cap ${room.capacity}` : ""}
                         </small>
                       </span>
 

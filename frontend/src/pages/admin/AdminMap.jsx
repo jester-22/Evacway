@@ -61,6 +61,7 @@ import DashboardMap, {
   isCenterMapped,
   getOccupancyStatus,
   getCenterCoordinates,
+  isPointInOrNearPolygon,
 } from "../../components/DashboardMap/DashboardMap";
 import CenterPlacementFlow, { polygonToPoints } from "../../components/CenterPlacementFlow/CenterPlacementFlow";
 import RoomDetailsModal from "../../components/EvacuationCenter/RoomDetailsModal";
@@ -101,6 +102,47 @@ function getPolygonCentroid(geometry) {
     noPin: true,
     requestedAt: Date.now(),
   };
+}
+
+/**
+ * Checks whether a point is inside a polygon using ray-casting algorithm.
+ * Returns true if point is inside or on the boundary.
+ */
+function isPointInPolygon(point, polygonPoints) {
+  if (!polygonPoints || polygonPoints.length < 3) return true;
+
+  const x = Number(point?.lng ?? point?.longitude);
+  const y = Number(point?.lat ?? point?.latitude);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+
+  // Ray-casting for point-in-polygon
+  let inside = false;
+  for (let i = 0, j = polygonPoints.length - 1; i < polygonPoints.length; j = i++) {
+    const xi = Number(polygonPoints[i].lng ?? polygonPoints[i].longitude);
+    const yi = Number(polygonPoints[i].lat ?? polygonPoints[i].latitude);
+    const xj = Number(polygonPoints[j].lng ?? polygonPoints[j].longitude);
+    const yj = Number(polygonPoints[j].lat ?? polygonPoints[j].latitude);
+
+    const intersect =
+      yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Validates that all building vertices are inside the center boundary.
+ * Returns { valid: boolean, invalidPoints: Array<{index, point}> }
+ */
+function validateBuildingInsideCenter(buildingPoints, centerPoints) {
+  if (!centerPoints || centerPoints.length < 3) return { valid: true, invalidPoints: [] };
+  const invalidPoints = [];
+  buildingPoints.forEach((point, index) => {
+    if (!isPointInOrNearPolygon(point, centerPoints, 15)) {
+      invalidPoints.push({ index, point });
+    }
+  });
+  return { valid: invalidPoints.length === 0, invalidPoints };
 }
 
 const MOBILE_BREAKPOINT = 768;
@@ -405,6 +447,16 @@ export default function AdminMap() {
   const [roomRangeInput, setRoomRangeInput] = useState("");
   const [isSavingBuilding, setIsSavingBuilding] = useState(false);
   const [panelHeaderMenuOpen, setPanelHeaderMenuOpen] = useState(false);
+
+  // Building edit mode toolbar state
+  const [buildingEditOriginalPoints, setBuildingEditOriginalPoints] = useState([]);
+  const [buildingEditUndoStack, setBuildingEditUndoStack] = useState([]);
+  const [buildingEditBoundaryError, setBuildingEditBoundaryError] = useState(null);
+
+  // Center redraw state
+  const [redrawingCenterId, setRedrawingCenterId] = useState(null);
+  const [centerEditOriginalPoints, setCenterEditOriginalPoints] = useState([]);
+  const [centerEditOriginalEntrances, setCenterEditOriginalEntrances] = useState([]);
 
   // Close overflow menu when clicking outside
   useEffect(() => {
@@ -787,13 +839,110 @@ export default function AdminMap() {
   const handleCancelDrawingBuilding = () => {
     setIsAddingBuilding(false);
     setIsDrawingBuilding(false);
+    // Restore building layer filter (un-hide the saved outline) if we were redrawing
+    if (redrawingBuildingId) {
+      
+      
+      
+      
+    }
     setRedrawingBuildingId(null);
     setAddBuildingStep(null);
     setNewBuildingName("");
     setNewBuildingRoomIds([]);
     setNewBuildingPoints([]);
+    setBuildingEditOriginalPoints([]);
+    setBuildingEditUndoStack([]);
     setPanelHeaderMenuOpen(false);
   };
+
+  // Save building outline in edit mode (redrawingBuildingId is set)
+  const handleSaveBuildingOutline = useCallback(async () => {
+    if (!redrawingBuildingId || newBuildingPoints.length < 3) return;
+
+    // Validate building is inside center boundary
+    const centerPoints = selectedCenter?.geometry ? polygonToPoints(selectedCenter.geometry) : [];
+    const { valid, invalidPoints } = validateBuildingInsideCenter(newBuildingPoints, centerPoints);
+
+    if (!valid) {
+      setBuildingEditBoundaryError(
+        `Keep the building inside the center boundary. ${invalidPoints.length} vertex${invalidPoints.length !== 1 ? 'es' : ''} outside.`
+      );
+      return;
+    }
+    setBuildingEditBoundaryError(null);
+
+    const coords = newBuildingPoints.map((p) => [Number(p.lng), Number(p.lat)]);
+    const first = coords[0];
+    const last = coords[coords.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) {
+      coords.push([first[0], first[1]]);
+    }
+
+    setIsSavingBuilding(true);
+    try {
+      await api.updateBuilding(redrawingBuildingId, { coordinates: coords });
+      await invalidateEvacuationQueries(queryClient);
+      await refetchBuildings();
+      // Set selectedCenter from refetched centers list by id (never from response copy)
+      const bldId = redrawingBuildingId;
+      setIsDrawingBuilding(false);
+      setRedrawingBuildingId(null);
+      setNewBuildingPoints([]);
+      setBuildingEditOriginalPoints([]);
+      setBuildingEditUndoStack([]);
+      setBuildingEditBoundaryError(null);
+      // Set selectedCenter from refetched centers list by id (never from response copy)
+      const selCenterId = selectedCenter?.id ?? selectedCenter?.properties?.id;
+      if (selCenterId && centers?.features) {
+        const match = centers.features.find((c) => {
+          const cid = c.properties?.id ?? c.id;
+          return String(cid) === String(selCenterId);
+        });
+        if (match) setSelectedCenter(match);
+      }
+    } catch (err) {
+      console.error("Failed to save building outline:", err);
+      alert(err.message || "Failed to save building outline.");
+    } finally {
+      setIsSavingBuilding(false);
+    }
+  }, [redrawingBuildingId, newBuildingPoints, selectedCenter, queryClient, refetchBuildings]);
+
+  // Undo last vertex change
+  const handleUndoBuildingEdit = useCallback(() => {
+    if (buildingEditUndoStack.length > 0) {
+      const previousPoints = buildingEditUndoStack[buildingEditUndoStack.length - 1];
+      setNewBuildingPoints(previousPoints);
+      setBuildingEditUndoStack((prev) => prev.slice(0, -1));
+    }
+  }, [buildingEditUndoStack]);
+
+  // Reset to original saved outline
+  const handleResetBuildingEdit = useCallback(() => {
+    if (buildingEditOriginalPoints.length > 0) {
+      setNewBuildingPoints(buildingEditOriginalPoints);
+      setBuildingEditUndoStack([]);
+    }
+  }, [buildingEditOriginalPoints]);
+
+  // Redraw from scratch - clear all points
+  const handleRedrawBuildingEdit = useCallback(() => {
+    // Push current state to undo stack before clearing
+    if (newBuildingPoints.length > 0) {
+      setBuildingEditUndoStack((prev) => [...prev, newBuildingPoints]);
+    }
+    setNewBuildingPoints([]);
+  }, [newBuildingPoints]);
+
+  // Handler for building vertex handle changes during edit mode
+  const handleEditingBuildingPointsChange = useCallback((newPoints, isFinal) => {
+    // Push to undo stack when drag is finalized
+    if (isFinal) {
+      setBuildingEditUndoStack((prev) => [...prev, newBuildingPoints]);
+    }
+    setNewBuildingPoints(newPoints);
+  }, []);
 
   const unassignedRooms = useMemo(() => {
     return selectedCenterRooms.filter(
@@ -1055,11 +1204,19 @@ export default function AdminMap() {
     }
 
     if (initialMode === "redraw") {
+      const bOrigPoints = polygonToPoints(matchedBuilding.geometry);
+      setBuildingEditOriginalPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
+      setBuildingEditUndoStack([]);
       setPanelSubView("map_rooms");
       setMapRoomsTab("buildings");
       setRedrawingBuildingId(bId);
       setIsDrawingBuilding(true);
       setNewBuildingPoints([]);
+      // Hide the saved building outline during redraw
+      
+      
+      
+      
     } else {
       setBuildingModalOpen(true);
     }
@@ -1199,9 +1356,18 @@ export default function AdminMap() {
   function startPlacementFlow(center) {
     if (!center) return;
     const props = center.properties || center;
+    const centerId = props.id || center.id;
     setEditingCenter(center);
     setSelectedCenter(center);
-    setFootprintPoints(polygonToPoints(center.geometry));
+    setFootprintPoints([]);
+    setCenterEditOriginalPoints(polygonToPoints(center.geometry));
+
+    // Hide the saved center outline during redraw
+    if (centerEditOriginalPoints.length >= 3) {
+      setRedrawingCenterId(centerId);
+      
+      
+    }
 
     const rawEntrances = Array.isArray(props.entrances) ? props.entrances : [];
     const normalizedEntrances = rawEntrances
@@ -1331,11 +1497,48 @@ export default function AdminMap() {
     setMappingStep("footprint");
     setEditingCenter(null);
     setFootprintPoints([]);
-    setEntrancePoints([]);
+    // Restore original entrances if they were filtered during step transition
+    if (centerEditOriginalEntrances.length > 0) {
+      setEntrancePoints(centerEditOriginalEntrances);
+      setCenterEditOriginalEntrances([]);
+    } else {
+      setEntrancePoints([]);
+    }
     setMappingTool("draw");
     setSavingMap(false);
     setPlacementToast(null);
+    // Restore center outline if we were redrawing
+    if (redrawingCenterId) {
+      
+      
+      setRedrawingCenterId(null);
+      setCenterEditOriginalPoints([]);
+    }
   }
+
+  // Handle step change with entrance filtering when moving from footprint to entrance
+  const handleStepChange = useCallback((nextStep) => {
+    if (nextStep === "entrance" && mappingStep === "footprint") {
+      const savedEntrances = entrancePoints;
+      setCenterEditOriginalEntrances(savedEntrances);
+      const footprint = footprintPoints;
+      let removedCount = 0;
+      const filtered = savedEntrances.filter((ent) => {
+        const isInside = isPointInOrNearPolygon(
+          { lng: ent.lng ?? ent.longitude, lat: ent.lat ?? ent.latitude },
+          footprint,
+          15
+        );
+        if (!isInside) removedCount++;
+        return isInside;
+      });
+      setEntrancePoints(filtered);
+      if (removedCount > 0) {
+        showPlacementToast(removedCount + " entrance(s) removed: outside the new outline.");
+      }
+    }
+    setMappingStep(nextStep);
+  }, [mappingStep, footprintPoints, entrancePoints, showPlacementToast]);
 
   // Save placement flow (outline + entrances)
   async function handleSaveMapPlacement() {
@@ -1396,11 +1599,22 @@ export default function AdminMap() {
     const updatedName =
       editingCenter.properties?.name || editingCenter.name || "Center";
 
-    const savedCenter = savedCenterFeature || editingCenter;
+    if (redrawingCenterId) {
+      setRedrawingCenterId(null);
+      setCenterEditOriginalPoints([]);
+    }
+
     setIsMapping(false);
     setEditingCenter(null);
-    setSelectedCenter(savedCenter);
     setPanelCollapsed(false);
+    // Set selectedCenter from refetched centers list by id (never from response copy)
+    if (centers?.features) {
+      const match = centers.features.find((c) => {
+        const cid = c.properties?.id ?? c.id;
+        return String(cid) === String(centerId);
+      });
+      if (match) setSelectedCenter(match);
+    }
     setFootprintPoints([]);
     setEntrancePoints([]);
     setMappingStep("footprint");
@@ -2237,9 +2451,12 @@ export default function AdminMap() {
                     className="admin-bld-redraw-btn"
                     onClick={() => {
                       setIsDrawingBuilding(true);
+                      const bOrigPoints = polygonToPoints(selectedBuildingDetail?.geometry);
+                      setBuildingEditOriginalPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
+                      setBuildingEditUndoStack([]);
                       setRedrawingBuildingId(bDetailId);
                       setNewBuildingPoints([]);
-                      showPlacementToast(`Click points on map to redraw "${bDetailProps.name}" outline.`);
+                      
                     }}
                   >
                     <FontAwesomeIcon icon={faArrowsRotate} />
@@ -2844,30 +3061,75 @@ export default function AdminMap() {
                 <>
                   {/* Redrawing Outline Alert if redrawing an existing building */}
                   {isDrawingBuilding && redrawingBuildingId && (
-                    <div className="admin-map-add-building-box" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
-                      <div className="admin-map-add-building-title" style={{ color: "#1e40af" }}>
-                        <FontAwesomeIcon icon={faDrawPolygon} style={{ marginRight: "6px" }} />
-                        Redrawing Building Outline
+                    <div className="admin-map-edit-building-toolbar">
+                      <div className="admin-map-edit-toolbar-hint">
+                        <FontAwesomeIcon icon={faHand} style={{ marginRight: "6px", color: "var(--ew-brand-primary)" }} />
+                        <span>{newBuildingPoints.length === 0 ? "Click each corner of the new outline." : "Drag corners to reshape. Drag small dots to add corners."}</span>
                       </div>
-                      <div style={{ fontSize: "13px", color: "#3b82f6", margin: "4px 0 8px" }}>
-                        Click polygon points on the map. Points placed: <strong>{newBuildingPoints.length}</strong> (minimum 3 required).
-                      </div>
-                      <div className="admin-map-add-actions-row">
+                      {buildingEditBoundaryError && (
+                        <div className="admin-map-edit-toolbar-error">
+                          <FontAwesomeIcon icon={faTriangleExclamation} style={{ marginRight: "6px" }} />
+                          <span>{buildingEditBoundaryError}</span>
+                        </div>
+                      )}
+                      <div className="admin-map-edit-toolbar-actions">
                         <button
                           type="button"
-                          className="admin-map-building-action-btn is-primary"
-                          onClick={handleSaveBuildingOutline}
-                          disabled={newBuildingPoints.length < 3}
+                          className="admin-map-edit-toolbar-btn"
+                          onClick={handleUndoBuildingEdit}
+                          disabled={buildingEditUndoStack.length === 0 || isSavingBuilding}
+                          title="Undo last change"
                         >
-                          <FontAwesomeIcon icon={faCheck} />
-                          <span>Save Outline ({newBuildingPoints.length} pts)</span>
+                          <FontAwesomeIcon icon={faRotateLeft} />
+                          <span>Undo</span>
                         </button>
                         <button
                           type="button"
-                          className="admin-map-building-action-btn"
-                          onClick={handleCancelDrawingBuilding}
+                          className="admin-map-edit-toolbar-btn"
+                          onClick={handleResetBuildingEdit}
+                          disabled={buildingEditOriginalPoints.length === 0 || isSavingBuilding}
+                          title="Reset to saved outline"
                         >
+                          <FontAwesomeIcon icon={faArrowsRotate} />
+                          <span>Reset</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-map-edit-toolbar-btn"
+                          onClick={handleRedrawBuildingEdit}
+                          disabled={newBuildingPoints.length === 0 || isSavingBuilding}
+                          title="Redraw from scratch"
+                        >
+                          <FontAwesomeIcon icon={faTrashCan} />
+                          <span>Redraw</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-map-edit-toolbar-btn is-danger"
+                          onClick={handleCancelDrawingBuilding}
+                          disabled={isSavingBuilding}
+                          title="Cancel editing"
+                        >
+                          <FontAwesomeIcon icon={faXmark} />
                           <span>Cancel</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-map-edit-toolbar-btn is-primary"
+                          onClick={handleSaveBuildingOutline}
+                          disabled={newBuildingPoints.length < 3 || isSavingBuilding}
+                        >
+                          {isSavingBuilding ? (
+                            <>
+                              <FontAwesomeIcon icon={faSpinner} spin />
+                              <span>Saving...</span>
+                            </>
+                          ) : (
+                            <>
+                              <FontAwesomeIcon icon={faCheck} />
+                              <span>Save ({newBuildingPoints.length} pts)</span>
+                            </>
+                          )}
                         </button>
                       </div>
                     </div>
@@ -3032,10 +3294,16 @@ export default function AdminMap() {
                                 className="admin-bld-menu-item"
                                 onClick={() => {
                                   setActiveOverflowMenuId(null);
+                                  const bOrigPoints = polygonToPoints(b.geometry);
+                                  setBuildingEditOriginalPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
+                                  setBuildingEditUndoStack([]);
                                   setIsDrawingBuilding(true);
                                   setRedrawingBuildingId(bId);
                                   setNewBuildingPoints([]);
-                                  showPlacementToast(`Click points on map to redraw "${bName}" outline.`);
+        
+        
+        
+        
                                 }}
                               >
                                 <FontAwesomeIcon icon={faArrowsRotate} />
@@ -3866,24 +4134,24 @@ export default function AdminMap() {
                         if (bMapped) {
                           // Edit existing building polygon
                           const points = polygonToPoints(b.geometry);
-                          setNewBuildingPoints(points);
+                          // Store original points for Restore functionality
+                          setBuildingEditOriginalPoints(points);
+                          // Clear undo stack
+                          setBuildingEditUndoStack([]);
+                          // Start with ZERO points - never preload saved corners
+                          setNewBuildingPoints([]);
+                          setRedrawingBuildingId(bId);
+                          setIsDrawingBuilding(true);
+                          
+                          handleCloseCenterModal();
+                        } else {
+                          // Map existing unmapped building polygon (updates existing building, never creates new)
+                          setNewBuildingPoints([]);
+                          setBuildingEditOriginalPoints([]);
+                          setBuildingEditUndoStack([]);
                           setRedrawingBuildingId(bId);
                           setIsDrawingBuilding(true);
                           handleCloseCenterModal();
-                          showPlacementToast(`Click points on map to redraw "${bName}" outline.`);
-                        } else {
-                          // Map new building polygon
-                          setNewBuildingPoints([]);
-                          setRedrawingBuildingId(null);
-                          setIsAddingBuilding(true);
-                          setIsDrawingBuilding(true);
-                          setAddBuildingStep("draw");
-                          setNewBuildingName(`${bName} (mapped)`);
-                          setNewBuildingRoomIds([]);
-                          setRoomSearchQuery("");
-                          setRoomRangeInput("");
-                          handleCloseCenterModal();
-                          showPlacementToast(`Draw ${bName} outline inside the center boundary.`);
                         }
                       };
 
@@ -4052,7 +4320,6 @@ export default function AdminMap() {
         logout={logout}
         isMobile={isMobile}
         onSelectNotification={handleNotificationSelect}
-        unmappedCentersCount={unmappedCentersCount}
       />
 
       <div className="dashboard-content">
@@ -4073,7 +4340,7 @@ export default function AdminMap() {
               <CenterPlacementFlow
                 center={editingCenter}
                 step={mappingStep}
-                onStepChange={setMappingStep}
+                onStepChange={handleStepChange}
                 footprintPoints={footprintPoints}
                 onFootprintPointsChange={setFootprintPoints}
                 entrancePoints={entrancePoints}
@@ -4131,6 +4398,16 @@ export default function AdminMap() {
                       setEntrancePoints((pts) => [...pts, latlng]);
                     }
                   }}
+                  onEntranceDrag={(index, point, isFinal) => {
+                    if (!isFinal) {
+                      // Update during drag for live preview
+                      setEntrancePoints((pts) =>
+                        pts.map((p, i) => (i === index ? point : p))
+                      );
+                    }
+                  }}
+                  hiddenCenterId={redrawingCenterId || undefined}
+                  hiddenBuildingId={redrawingBuildingId || undefined}
                 />
               </CenterPlacementFlow>
             ) : (
@@ -4158,6 +4435,8 @@ export default function AdminMap() {
                 hideInternalPanel={true}
                 hideSearch={true}
                 hideZoomControls={false}
+                hiddenCenterId={redrawingCenterId || undefined}
+                hiddenBuildingId={redrawingBuildingId || undefined}
                 drawMode={isDrawingBuilding ? "footprint" : isPlacingRoom ? "room" : "none"}
                 pendingFootprint={
                   isDrawingBuilding
@@ -4166,6 +4445,10 @@ export default function AdminMap() {
                     ? polygonToPoints(selectedCenter.geometry)
                     : []
                 }
+                // Building edit mode props
+                editingBuildingId={isDrawingBuilding && redrawingBuildingId ? redrawingBuildingId : null}
+                editingBuildingPoints={isDrawingBuilding && redrawingBuildingId ? newBuildingPoints : null}
+                onEditingBuildingPointsChange={isDrawingBuilding && redrawingBuildingId ? handleEditingBuildingPointsChange : null}
                 onOutsideOutlineClick={() => {
                   showPlacementToast(
                     "Click inside or near the outline."
@@ -4181,7 +4464,8 @@ export default function AdminMap() {
                 onMapClick={(latlng) => {
                   if (isPlacingRoom) {
                     handleMapClickForRoom(latlng);
-                  } else if (isDrawingBuilding) {
+                  } else if (isDrawingBuilding && (!redrawingBuildingId || newBuildingPoints.length === 0 || buildingEditOriginalPoints.length === 0)) {
+                    // Add points on click in "add new building" mode or when mapping an unmapped building
                     setNewBuildingPoints((pts) => [...pts, latlng]);
                   }
                 }}
@@ -4337,6 +4621,11 @@ export default function AdminMap() {
               <span className="admin-map-rail-count">
                 {allCentersList.length}
               </span>
+              {unmappedCentersCount > 0 && (
+                <span className="admin-map-rail-badge" aria-label={`${unmappedCentersCount} unmapped center${unmappedCentersCount !== 1 ? 's' : ''}`}>
+                  {unmappedCentersCount}
+                </span>
+              )}
             </button>
           )}
 
@@ -4364,6 +4653,11 @@ export default function AdminMap() {
                 aria-label={`Centers panel height: ${mobileSheetSnap}. Tap to change height.`}
               >
                 <span className="admin-map-sheet-handle-bar" aria-hidden="true" />
+                {unmappedCentersCount > 0 && (
+                  <span className="admin-map-sheet-badge" aria-label={`${unmappedCentersCount} unmapped center${unmappedCentersCount !== 1 ? 's' : ''}`}>
+                    {unmappedCentersCount}
+                  </span>
+                )}
               </button>
 
               {selectedCenter && panelSubView === "map_rooms" ? (

@@ -105,7 +105,7 @@ export function calculatePolygonAreaM2(points) {
 
 /**
  * Reusable full-screen placement workspace for Evacuation Centers.
- * Handles Step 1 (Building Outline), Step 2 (Entrances), and Step 3 (Confirm).
+ * Handles Step 1 (Building Outline), Step 2 (Entrances), Step 3 (Confirm), and Edit Polygon.
  */
 export default function CenterPlacementFlow({
   center,
@@ -124,6 +124,9 @@ export default function CenterPlacementFlow({
   onZoomIn,
   toastMessage = null,
   children,
+  // Edit polygon mode props
+  editPolygonPoints = null,
+  onEditPolygonPointsChange = null,
 }) {
   const centerProps = center?.properties || center || {};
   const centerName = centerProps.name || centerProps.center_name || "Evacuation Center";
@@ -212,16 +215,17 @@ export default function CenterPlacementFlow({
   // Compute step validity
   const isStep1Valid = footprintPoints.length >= 3;
   const isStep2Valid = entrancePoints.length >= 1;
+  const isEditValid = editPolygonPoints && editPolygonPoints.length >= 3;
 
   // Handle cancel action: if points exist, confirm first
   const handleCancelRequest = useCallback(() => {
-    const hasPoints = footprintPoints.length > 0 || entrancePoints.length > 0;
+    const hasPoints = footprintPoints.length > 0 || entrancePoints.length > 0 || (editPolygonPoints && editPolygonPoints.length > 0);
     if (hasPoints) {
       setShowDiscardModal(true);
     } else if (onCancel) {
       onCancel();
     }
-  }, [footprintPoints.length, entrancePoints.length, onCancel]);
+  }, [footprintPoints.length, entrancePoints.length, editPolygonPoints, onCancel]);
 
   // Handle primary button click (Next or Save center)
   const handlePrimaryClick = useCallback(() => {
@@ -233,12 +237,16 @@ export default function CenterPlacementFlow({
       if (isStep2Valid && onStepChange) {
         onStepChange("confirm");
       }
+    } else if (step === "edit") {
+      if (isEditValid && !saving && onSave) {
+        onSave();
+      }
     } else if (step === "confirm") {
       if (!saving && onSave) {
         onSave();
       }
     }
-  }, [step, isStep1Valid, isStep2Valid, saving, onStepChange, onSave]);
+  }, [step, isStep1Valid, isStep2Valid, isEditValid, saving, onStepChange, onSave]);
 
   // Handle Undo
   const handleUndo = useCallback(() => {
@@ -246,8 +254,10 @@ export default function CenterPlacementFlow({
       onFootprintPointsChange(footprintPoints.slice(0, -1));
     } else if (step === "entrance" && entrancePoints.length > 0 && onEntrancePointsChange) {
       onEntrancePointsChange(entrancePoints.slice(0, -1));
+    } else if (step === "edit" && editPolygonPoints && editPolygonPoints.length > 0 && onEditPolygonPointsChange) {
+      onEditPolygonPointsChange(editPolygonPoints.slice(0, -1));
     }
-  }, [step, footprintPoints, entrancePoints, onFootprintPointsChange, onEntrancePointsChange]);
+  }, [step, footprintPoints, entrancePoints, editPolygonPoints, onFootprintPointsChange, onEntrancePointsChange, onEditPolygonPointsChange]);
 
   // Handle Clear
   const handleClear = useCallback(() => {
@@ -255,8 +265,10 @@ export default function CenterPlacementFlow({
       onFootprintPointsChange([]);
     } else if (step === "entrance" && entrancePoints.length > 0 && onEntrancePointsChange) {
       onEntrancePointsChange([]);
+    } else if (step === "edit" && editPolygonPoints && editPolygonPoints.length > 0 && onEditPolygonPointsChange) {
+      onEditPolygonPointsChange([]);
     }
-  }, [step, footprintPoints.length, entrancePoints.length, onFootprintPointsChange, onEntrancePointsChange]);
+  }, [step, footprintPoints.length, entrancePoints.length, editPolygonPoints, onFootprintPointsChange, onEntrancePointsChange, onEditPolygonPointsChange]);
 
   // Keyboard Shortcuts:
   // Escape asks "Discard this placement?" when any point exists
@@ -337,10 +349,17 @@ export default function CenterPlacementFlow({
     [footprintPoints]
   );
 
+  // Calculate edit polygon area
+  const editPolygonArea = useMemo(
+    () => (editPolygonPoints && editPolygonPoints.length >= 3 ? calculatePolygonAreaM2(editPolygonPoints) : 0),
+    [editPolygonPoints]
+  );
+
   // Live text for toolbar
   const liveText = useMemo(() => {
     const pts = footprintPoints.length;
     const ents = entrancePoints.length;
+    const editPts = editPolygonPoints ? editPolygonPoints.length : 0;
     if (step === "footprint") {
       const pLabel = `${pts} ${pts === 1 ? "point" : "points"}`;
       return pts >= 3
@@ -350,20 +369,28 @@ export default function CenterPlacementFlow({
     if (step === "entrance") {
       return `${ents} ${ents === 1 ? "entrance" : "entrances"}`;
     }
+    if (step === "edit") {
+      const pLabel = `${editPts} ${editPts === 1 ? "point" : "points"}`;
+      return editPts >= 3
+        ? `${pLabel} • Footprint about ${editPolygonArea.toLocaleString()} m²`
+        : pLabel;
+    }
     // confirm step
     return `${pts} points • ${ents} ${ents === 1 ? "entrance" : "entrances"} • Footprint about ${footprintArea.toLocaleString()} m²`;
-  }, [step, footprintPoints.length, entrancePoints.length, footprintArea]);
+  }, [step, footprintPoints.length, entrancePoints.length, footprintArea, editPolygonPoints, editPolygonArea]);
 
   // Can undo / clear
   const canUndo =
     (step === "footprint" && footprintPoints.length > 0) ||
-    (step === "entrance" && entrancePoints.length > 0);
+    (step === "entrance" && entrancePoints.length > 0) ||
+    (step === "edit" && editPolygonPoints && editPolygonPoints.length > 0);
   const canClear =
     (step === "footprint" && footprintPoints.length > 0) ||
-    (step === "entrance" && entrancePoints.length > 0);
+    (step === "entrance" && entrancePoints.length > 0) ||
+    (step === "edit" && editPolygonPoints && editPolygonPoints.length > 0);
 
   // Stepper state numbers
-  const stepIndex = step === "footprint" ? 1 : step === "entrance" ? 2 : 3;
+  const stepIndex = step === "footprint" ? 1 : step === "entrance" ? 2 : step === "edit" ? 3 : 4;
 
   if (typeof document === "undefined") return null;
 
@@ -403,7 +430,7 @@ export default function CenterPlacementFlow({
           </div>
         </div>
 
-        {/* 3-Step Stepper */}
+        {/* 4-Step Stepper (Outline, Entrances, Edit, Confirm) */}
         <div className="cpf-stepper-wrap" role="navigation" aria-label="Placement progress">
           <ol className="cpf-stepper">
             {/* Step 1: Outline */}
@@ -458,25 +485,51 @@ export default function CenterPlacementFlow({
 
             <li className="cpf-step-divider" aria-hidden="true" />
 
-            {/* Step 3: Confirm */}
+            {/* Step 3: Edit Polygon */}
             <li className="cpf-step-wrapper">
               <button
                 type="button"
                 className={`cpf-step-item ${
-                  stepIndex === 3 ? "is-current" : "is-upcoming"
+                  stepIndex === 3
+                    ? "is-current"
+                    : stepIndex > 3
+                    ? "is-finished is-clickable"
+                    : "is-upcoming"
+                }`}
+                onClick={() => {
+                  if (stepIndex > 3 && onStepChange) onStepChange("edit");
+                }}
+                disabled={stepIndex <= 3}
+                title="Step 3: Edit Polygon"
+              >
+                <span className="cpf-step-num">
+                  {stepIndex > 3 ? <FontAwesomeIcon icon={faCheck} /> : "3"}
+                </span>
+                <span className="cpf-step-label">Edit</span>
+              </button>
+            </li>
+
+            <li className="cpf-step-divider" aria-hidden="true" />
+
+            {/* Step 4: Confirm */}
+            <li className="cpf-step-wrapper">
+              <button
+                type="button"
+                className={`cpf-step-item ${
+                  stepIndex === 4 ? "is-current" : "is-upcoming"
                 }`}
                 disabled={true}
-                title="Step 3: Confirm"
+                title="Step 4: Confirm"
               >
-                <span className="cpf-step-num">3</span>
+                <span className="cpf-step-num">4</span>
                 <span className="cpf-step-label">Confirm</span>
               </button>
             </li>
           </ol>
 
-          {/* Under 640px: show only "Step X of 3" */}
-          <div className="cpf-stepper-compact" aria-label={`Step ${stepIndex} of 3`}>
-            Step {stepIndex} of 3
+          {/* Under 640px: show only "Step X of 4" */}
+          <div className="cpf-stepper-compact" aria-label={`Step ${stepIndex} of 4`}>
+            Step {stepIndex} of 4
           </div>
         </div>
 
@@ -489,6 +542,7 @@ export default function CenterPlacementFlow({
             disabled={
               (step === "footprint" && !isStep1Valid) ||
               (step === "entrance" && !isStep2Valid) ||
+              (step === "edit" && !isEditValid) ||
               saving
             }
             title={
@@ -496,6 +550,8 @@ export default function CenterPlacementFlow({
                 ? "Add at least 3 points to create an outline"
                 : step === "entrance" && !isStep2Valid
                 ? "Add at least 1 entrance on the outline"
+                : step === "edit" && !isEditValid
+                ? "Adjust the polygon to have at least 3 points"
                 : step === "confirm"
                 ? "Save evacuation center outline and entrances"
                 : "Proceed to next step (Enter)"
@@ -506,7 +562,7 @@ export default function CenterPlacementFlow({
                 <FontAwesomeIcon icon={faSpinner} spin />
                 <span>Saving...</span>
               </>
-            ) : step === "confirm" ? (
+            ) : step === "confirm" || step === "edit" ? (
               <span>Save center</span>
             ) : (
               <span>Next</span>
@@ -557,7 +613,9 @@ export default function CenterPlacementFlow({
                   ? "Step 1: Outline"
                   : step === "entrance"
                   ? "Step 2: Entrances"
-                  : "Step 3: Confirm"}
+                  : step === "edit"
+                  ? "Step 3: Edit Polygon"
+                  : "Step 4: Confirm"}
               </span>
               <button
                 type="button"
@@ -574,6 +632,8 @@ export default function CenterPlacementFlow({
                 "Click each corner of the building. Click the first point to close the shape."}
               {step === "entrance" &&
                 "Click on the outline where people enter. Add one or more entrances."}
+              {step === "edit" &&
+                "Drag vertices to adjust the center footprint. Click midpoints to add vertices. Double-click a vertex to delete it."}
               {step === "confirm" &&
                 "Review the outline and entrances, then save the center."}
             </p>

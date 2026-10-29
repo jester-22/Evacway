@@ -1,10 +1,10 @@
 import { useState, useMemo, useCallback } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
-  faPlus, faRotate, faHouseFlag, faBan, faMapPin, faPen, faBuilding,
-  faCircleCheck, faTriangleExclamation, faCircleStop, faLocationDot,
-  faFilter, faXmark, faThLarge, faTable,
-  faSearch, faCircleXmark,
+  faPlus, faRotate, faBuilding, faCircleCheck, faTriangleExclamation,
+  faCircleStop, faMapPin, faBan, faPen, faLocationDot,
+  faFilter, faXmark, faSearch, faHome, faWarehouse,
+  faCircleXmark,
 } from '@fortawesome/free-solid-svg-icons'
 
 import { useAuth } from '../../context/AuthContext'
@@ -14,18 +14,26 @@ import { FloatingMenuTrigger } from './FloatingMenu'
 import './CenterList.css'
 
 
-const QUICK_FILTERS = [
-  { key: 'all', label: 'All', icon: faBuilding, status: null },
-  { key: 'available', label: 'Available', icon: faCircleCheck, status: 'Available' },
-  { key: 'near-full', label: 'Near full', icon: faTriangleExclamation, status: 'Near full' },
-  { key: 'full', label: 'Full', icon: faCircleStop, status: 'Full' },
-  { key: 'needs-mapping', label: 'Needs mapping', icon: faMapPin, status: 'needs-mapping' },
+const FILTER_CARDS = [
+  { key: 'all', label: 'All Centers', icon: faBuilding, colorToken: 'brand', countKey: 'all' },
+  { key: 'available', label: 'Available', icon: faCircleCheck, colorToken: 'success', countKey: 'available' },
+  { key: 'near-full', label: 'Near Full', icon: faTriangleExclamation, colorToken: 'warning', countKey: 'near-full' },
+  { key: 'full', label: 'Full', icon: faCircleStop, colorToken: 'danger', countKey: 'full' },
+  { key: 'needs-mapping', label: 'Needs Mapping', icon: faMapPin, colorToken: 'neutral', countKey: 'needs-mapping' },
 ]
 
 const STATUS_BY_KEY = {
   available: 'Available',
   'near-full': 'Near full',
   full: 'Full',
+}
+
+const COLOR_TOKEN_MAP = {
+  brand: { bg: 'brand-soft', border: 'brand', text: 'brand', dot: 'brand' },
+  success: { bg: 'success-soft', border: 'success', text: 'success', dot: 'success' },
+  warning: { bg: 'warning-soft', border: 'warning', text: 'warning', dot: 'warning' },
+  danger: { bg: 'danger-soft', border: 'danger', text: 'danger', dot: 'danger' },
+  neutral: { bg: 'neutral-soft', border: 'neutral', text: 'neutral', dot: 'neutral' },
 }
 
 export default function CenterList({
@@ -50,7 +58,6 @@ export default function CenterList({
   const [searchQuery, setSearchQuery] = useState('')
   const [barangayFilter, setBarangayFilter] = useState('')
   const [quickFilter, setQuickFilter] = useState('all')
-  const [viewMode, setViewMode] = useState('table')
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [barangayLocal, setBarangayLocal] = useState('')
 
@@ -77,16 +84,6 @@ export default function CenterList({
     })
     return c
   }, [allCenters])
-
-  const chipOptions = useMemo(
-    () =>
-      QUICK_FILTERS.map((chip) => ({
-        ...chip,
-        value: chip.key,
-        count: counts[chip.key],
-      })),
-    [counts]
-  )
 
   const activeFilterCount =
     (searchQuery.trim() ? 1 : 0) +
@@ -166,6 +163,15 @@ export default function CenterList({
     return `${buildingCount} building${buildingCount !== 1 ? 's' : ''} · ${roomCount} room${roomCount !== 1 ? 's' : ''}`
   }, [])
 
+  const structureIcon = useCallback((cen) => {
+    const buildingCount = Number(cen.building_count || 0)
+    const roomCount = Number(cen.room_count || cen.total_rooms || 0)
+    if (buildingCount <= 1) {
+      return roomCount > 0 ? faHome : faWarehouse
+    }
+    return faBuilding
+  }, [])
+
   const kebabItems = useCallback(
     (feature) => {
       const props = feature.properties || feature
@@ -187,24 +193,20 @@ export default function CenterList({
     },
     [isAdmin, canDeactivate, onEdit, onViewMap, onAddRooms, onDeactivate]
   )
+
   return (
     <section className={`ec-list-page ${className}`.trim()}>
       <header className="ec-list-header">
-        <div className="ec-list-title-row">
-          <span className="ec-list-title-icon" aria-hidden="true">
-            <FontAwesomeIcon icon={faHouseFlag} size="sm" />
-          </span>
-          <div className="ec-list-title-group">
-            <h2 className="ec-list-title">Evacuation Centers</h2>
-            <p className="ec-list-subtitle">
-              Check shelter capacity, building readiness, and live check-ins across the municipality.
-            </p>
-          </div>
+        <div className="ec-list-title-group">
+          <h2 className="ec-list-title">Evacuation Centers</h2>
+          <p className="ec-list-subtitle">
+            Check shelter capacity, building readiness, and live check-ins across the municipality.
+          </p>
         </div>
         <div className="ec-list-controls">
           <button
             type="button"
-            className="ds-btn ds-btn--icon ds-btn--ghost"
+            className="ds-btn ds-btn--icon ds-btn--ghost ec-refresh-btn"
             aria-label="Refresh centers"
             title="Refresh centers"
             onClick={handleRefresh}
@@ -219,252 +221,308 @@ export default function CenterList({
         </div>
       </header>
 
-      <div className="ec-quick-chips" role="navigation" aria-label="Quick center filters">
-        <FilterChip
-          options={chipOptions}
-          value={quickFilter}
-          onChange={setQuickFilter}
-          ariaLabel="Quick center status filter"
-        />
+      <div className="ec-filter-cards" role="group" aria-label="Center status filters">
+        {FILTER_CARDS.map((card) => {
+          const count = counts[card.countKey]
+          const active = quickFilter === card.key
+          const tokens = COLOR_TOKEN_MAP[card.colorToken]
+          return (
+            <button
+              key={card.key}
+              type="button"
+              role="radio"
+              aria-pressed={active}
+              className={`ec-filter-card ${active ? 'is-active' : ''}`}
+              style={{
+                '--card-bg': `var(--${tokens.bg})`,
+                '--card-border': `var(--${tokens.border})`,
+                '--card-text': `var(--${tokens.text})`,
+                '--card-dot': `var(--${tokens.dot})`,
+              }}
+              onClick={() => setQuickFilter(card.key)}
+            >
+              <div className="ec-filter-card-top">
+                <span className="ec-filter-card-icon" aria-hidden="true">
+                  <FontAwesomeIcon icon={card.icon} size="sm" />
+                </span>
+                <span className="ec-filter-card-count">{count}</span>
+              </div>
+              <span className="ec-filter-card-label">{card.label}</span>
+            </button>
+          )
+        })}
       </div>
 
-      <div className="ec-toolbar-row" role="toolbar" aria-label="Center list toolbar">
-        <div className="ec-toolbar-search" style={{ position: 'relative', flex: '1 1 260px', minWidth: '220px' }}>
-          <SearchInput
-            value={searchQuery}
-            onChange={setSearchQuery}
-            placeholder="Search center or barangay…"
-            ariaLabel="Search centers"
-          />
-          {searchQuery && (
+      <div className="ec-table-card">
+        <div className="ec-table-toolbar" role="toolbar" aria-label="Center list toolbar">
+          <div className="ec-toolbar-search" style={{ position: 'relative', flex: '1 1 260px', minWidth: '220px' }}>
+            <SearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search center or barangay…"
+              ariaLabel="Search centers"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="ds-btn ds-btn--icon ds-btn--ghost"
+                style={{ padding: 0, width: 'var(--control-height-sm)', height: 'var(--control-height-sm)', minWidth: 'var(--control-height-sm)' }}
+                onClick={() => {
+                  setSearchQuery('')
+                }}
+                aria-label="Clear search"
+              >
+                <FontAwesomeIcon icon={faXmark} size="xs" />
+              </button>
+            )}
+          </div>
+
+          <div className="ec-toolbar-select" style={{ minWidth: '200px', position: 'relative' }}>
             <button
               type="button"
-              className="ds-btn ds-btn--icon ds-btn--ghost"
-              style={{ padding: 0, width: 'var(--control-height-sm)', height: 'var(--control-height-sm)', minWidth: 'var(--control-height-sm)' }}
-              onClick={() => {
-                setSearchQuery('')
-              }}
-              aria-label="Clear search"
+              className="ds-select ec-barangay-select"
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              aria-expanded={dropdownOpen}
+              aria-label="Barangay filter"
             >
-              <FontAwesomeIcon icon={faXmark} size="xs" />
+              {barangayLocal ? barangayLocal : 'All Barangays'}
+              <FontAwesomeIcon icon={faXmark} size="xs" style={{ marginLeft: 'auto', color: barangayLocal ? 'var(--muted)' : 'transparent' }} />
+              <FontAwesomeIcon icon={faFilter} size="xs" style={{ marginLeft: 'var(--space-2)', color: 'var(--muted)' }} />
             </button>
-          )}
-        </div>
-
-        <div className="ec-toolbar-select" style={{ minWidth: '200px', position: 'relative' }}>
-          <button
-            type="button"
-            className="ds-select ec-barangay-select"
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            aria-expanded={dropdownOpen}
-            aria-label="Barangay filter"
-          >
-            {barangayLocal ? barangayLocal : 'All Barangays'}
-            <FontAwesomeIcon icon={faXmark} size="xs" style={{ marginLeft: 'auto', color: barangayLocal ? 'var(--muted)' : 'transparent' }} />
-            <FontAwesomeIcon icon={faFilter} size="xs" style={{ marginLeft: 'var(--space-2)', color: 'var(--muted)' }} />
-          </button>
-          {dropdownOpen && (
-            <div className="ec-dropdown ec-dropdown--open">
-              <input
-                type="text"
-                className="ds-input"
-                placeholder="Search barangays…"
-                autoFocus
-                onChange={(e) => setBarangayLocal(e.target.value || '')}
-                aria-label="Filter barangay options"
-              />
-              <ul role="listbox">
-                <li
-                  role="option"
-                  aria-selected={!barangayLocal}
-                  onClick={() => {
-                    setBarangayLocal('')
-                    onBarangayChange('')
-                    setDropdownOpen(false)
-                  }}
-                >
-                  All Barangays
-                </li>
-                {barangays
-                  .filter((b) => {
-                    const q = barangayLocal.toLowerCase()
-                    return !q || String(b.name || b).toLowerCase().includes(q)
-                  })
-                  .slice(0, 20)
-                  .map((b) => {
-                    const name = typeof b === 'string' ? b : b.name || b
-                    const id = typeof b === 'string' ? b : b.id || b
-                    return (
-                      <li
-                        key={id}
-                        role="option"
-                        aria-selected={barangayLocal === String(id)}
-                        onClick={() => {
-                          setBarangayLocal(name)
-                          onBarangayChange(String(id))
-                          setDropdownOpen(false)
-                        }}
-                      >
-                        {name}
-                      </li>
-                    )
-                  })
-                }
-              </ul>
-            </div>
-          )}
-        </div>
-
-        {activeFilterCount > 0 && (
-          <button
-            type="button"
-            className="ds-btn ds-btn--ghost ds-btn--sm"
-            onClick={handleClearFilters}
-            aria-label="Clear all filters"
-          >
-            <FontAwesomeIcon icon={faXmark} size="xs" /> Clear filters
-          </button>
-        )}
-
-        <div className="ec-toolbar-count">
-          <strong>{filtered.length}</strong> of {allCenters.length} center{allCenters.length !== 1 ? 's' : ''}
-        </div>
-
-        <div className="ec-toolbar-view" role="group" aria-label="View mode">
-          <button
-            type="button"
-            aria-pressed={viewMode === 'table'}
-            className={`ds-btn ds-btn--icon ds-btn--${viewMode === 'table' ? 'secondary' : 'ghost'}`}
-            onClick={() => setViewMode('table')}
-            title="Table view"
-          >
-            <FontAwesomeIcon icon={faTable} size="xs" />
-          </button>
-          <button
-            type="button"
-            aria-pressed={viewMode === 'cards'}
-            className={`ds-btn ds-btn--icon ds-btn--${viewMode === 'cards' ? 'secondary' : 'ghost'}`}
-            onClick={() => setViewMode('cards')}
-            title="Cards view"
-          >
-            <FontAwesomeIcon icon={faThLarge} size="xs" />
-          </button>
-          </div>
-        </div>
-      {isLoading ? (
-        <SkeletonRows count={4} />
-      ) : error ? (
-        <div className="ec-table-container">
-          <div className="ds-empty" role="alert" aria-live="polite">
-            <FontAwesomeIcon icon={faHouseFlag} className="ds-empty__icon" aria-hidden="true" />
-            <h2 className="ds-empty__title">Couldn't load centers</h2>
-            <p className="ds-empty__text">Check your connection and try again.</p>
-            <button type="button" className="ds-btn ds-btn--primary" onClick={handleRetry}>
-              Retry
-            </button>
-          </div>
-        </div>
-      ) : filtered.length === 0 ? (
-        <EmptyState
-          icon={faHouseFlag}
-          title="No centers match your filters"
-          text="Try clearing your filters or adjust your search."
-          action={handleClearFilters}
-          actionLabel="Clear filters"
-        />
-      ) : (
-        <div className="ec-table-container">
-          <table className="ds-table ec-center-table ds-table--stack">
-            <thead>
-              <tr>
-                <th style={{ width: '32%' }} scope="col">Center</th>
-                <th style={{ width: '22%' }} scope="col">Structure</th>
-                <th style={{ width: '26%' }} scope="col">Occupancy</th>
-                <th style={{ width: '12%' }} scope="col">Status</th>
-                <th style={{ width: '8%' }} scope="col" />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((feature) => {
-                const props = feature.properties || feature
-                const id = props.id
-                const name = props.name || 'Unnamed Center'
-                const mapped = !centerNeedsMapping(props)
-                const brgyList = Array.isArray(props.barangays) ? props.barangays : []
-                const brgyShown = brgyList.slice(0, 2).map((b) => ({
-                  id: typeof b === 'string' ? b : b.id || b,
-                  name: typeof b === 'string' ? b : b.name || b,
-                  color: typeof b === 'string' ? undefined : b.color,
-                }))
-                const extraBrgy = Math.max(0, brgyList.length - 2)
-                const cap = Number(props.capacity || 0)
-                const assigned = Number(props.assigned || 0)
-                const checkedIn = Number(props.occupied || 0)
-                const status = centerStatus(props, checkedIn, assigned, cap)
-
-                return (
-                  <tr
-                    key={id}
-                    className="ec-center-row"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Open ${name}`}
-                    onClick={() => handleRowOpen(feature)}
-                    onKeyDown={(e) => handleRowKeyDown(e, feature)}
+            {dropdownOpen && (
+              <div className="ec-dropdown ec-dropdown--open">
+                <input
+                  type="text"
+                  className="ds-input"
+                  placeholder="Search barangays…"
+                  autoFocus
+                  onChange={(e) => setBarangayLocal(e.target.value || '')}
+                  aria-label="Filter barangay options"
+                />
+                <ul role="listbox">
+                  <li
+                    role="option"
+                    aria-selected={!barangayLocal}
+                    onClick={() => {
+                      setBarangayLocal('')
+                      onBarangayChange('')
+                      setDropdownOpen(false)
+                    }}
                   >
-                    <td className="ec-cell-center" data-label="Center">
-                      <div className="ec-center-name" title={name}>
-                        {name}
-                      </div>
-                      <div className="ec-center-barangays">
-                        {brgyShown.map((b) => (
-                          <span
-                            key={b.id}
-                            className="ds-chip ds-chip--neutral"
-                            title={b.name}
-                            style={{
-                              fontSize: 'var(--text-xs)',
-                              padding: '2px 8px',
-                            }}
-                          >
-                            {b.name}
-                          </span>
-                        ))}
-                        {extraBrgy > 0 && <span className="ec-plus-n">+{extraBrgy}</span>}
-                        {!mapped && (
-                          <span className="ec-pin-off" aria-label="Not mapped" title="Not mapped">
-                            <FontAwesomeIcon icon={faBan} size="xs" />
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="ec-cell-structure" data-label="Structure">{structureText(props)}</td>
-                    <td className="ec-cell-occupancy" data-label="Occupancy">
-                      {cap > 0 ? (
-                        <>
-                          <OccupancyBar checkedIn={checkedIn} assigned={assigned} capacity={cap} showLabel={false} />
-                          <span className="ec-occ-number">{assigned} of {cap} assigned</span>
-                          <span className="ec-occ-muted">{checkedIn} checked in</span>
-                        </>
-                      ) : (
-                        <span className="ec-occ-muted">—</span>
-                      )}
-                    </td>
-                    <td className="ec-cell-status" data-label="Status"><StatusBadge status={status} /></td>
-                    <td className="ec-cell-actions" data-label="Actions" onClick={(e) => e.stopPropagation()}>
-                      <FloatingMenuTrigger
-                        items={kebabItems(feature)}
-                        label={`Actions for ${name}`}
-                        align="right"
-                      />
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                    All Barangays
+                  </li>
+                  {barangays
+                    .filter((b) => {
+                      const q = barangayLocal.toLowerCase()
+                      return !q || String(b.name || b).toLowerCase().includes(q)
+                    })
+                    .slice(0, 20)
+                    .map((b) => {
+                      const name = typeof b === 'string' ? b : b.name || b
+                      const id = typeof b === 'string' ? b : b.id || b
+                      return (
+                        <li
+                          key={id}
+                          role="option"
+                          aria-selected={barangayLocal === String(id)}
+                          onClick={() => {
+                            setBarangayLocal(name)
+                            onBarangayChange(String(id))
+                            setDropdownOpen(false)
+                          }}
+                        >
+                          {name}
+                        </li>
+                      )
+                    })
+                  }
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {activeFilterCount > 0 && (
+            <button
+              type="button"
+              className="ds-btn ds-btn--ghost ds-btn--sm"
+              onClick={handleClearFilters}
+              aria-label="Clear all filters"
+            >
+              <FontAwesomeIcon icon={faXmark} size="xs" /> Clear filters
+            </button>
+          )}
         </div>
-      )}
+
+        {isLoading ? (
+          <SkeletonRows count={4} />
+        ) : error ? (
+          <div className="ec-table-wrapper">
+            <div className="ds-empty" role="alert" aria-live="polite">
+              <FontAwesomeIcon icon={faBuilding} className="ds-empty__icon" aria-hidden="true" />
+              <h2 className="ds-empty__title">Couldn't load centers</h2>
+              <p className="ds-empty__text">Check your connection and try again.</p>
+              <button type="button" className="ds-btn ds-btn--primary" onClick={handleRetry}>
+                Retry
+              </button>
+            </div>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="ec-table-wrapper">
+            <EmptyState
+              icon={faBuilding}
+              title="No centers match your filters"
+              text="Try clearing your filters or adjust your search."
+              action={handleClearFilters}
+              actionLabel="Clear filters"
+            />
+          </div>
+        ) : (
+          <div className="ec-table-wrapper">
+            <table className="ds-table ec-center-table ds-table--stack">
+              <thead>
+                <tr>
+                  <th style={{ width: '22%' }} scope="col">Center</th>
+                  <th style={{ width: '22%' }} scope="col">Barangay</th>
+                  <th style={{ width: '15%' }} scope="col">Structure</th>
+                  <th style={{ width: '24%' }} scope="col">Occupancy</th>
+                  <th style={{ width: '13%' }} scope="col">Status</th>
+                  <th style={{ width: '4%' }} scope="col" />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((feature) => {
+                  const props = feature.properties || feature
+                  const id = props.id
+                  const name = props.name || 'Unnamed Center'
+                  const mapped = !centerNeedsMapping(props)
+                  const brgyList = Array.isArray(props.barangays) ? props.barangays : []
+                  const brgyShown = brgyList.slice(0, 2).map((b) => ({
+                    id: typeof b === 'string' ? b : b.id || b,
+                    name: typeof b === 'string' ? b : b.name || b,
+                    color: typeof b === 'string' ? undefined : b.color,
+                  }))
+                  const extraBrgy = Math.max(0, brgyList.length - 2)
+                  const allBrgyNames = brgyList.map((b) => (typeof b === 'string' ? b : b.name || b)).join(', ')
+                  const cap = Number(props.capacity || 0)
+                  const assigned = Number(props.assigned || 0)
+                  const checkedIn = Number(props.occupied || 0)
+                  const status = centerStatus(props, checkedIn, assigned, cap)
+                  const occupancyPct = cap > 0 ? Math.min(100, Math.round((assigned / cap) * 100)) : 0
+                  const statusVariantClass = statusVariant(status)
+                  const statusTokens = {
+                    Available: { bg: 'success-soft', border: 'success', text: 'success', dot: 'success' },
+                    'Near full': { bg: 'warning-soft', border: 'warning', text: 'warning', dot: 'warning' },
+                    Full: { bg: 'danger-soft', border: 'danger', text: 'danger', dot: 'danger' },
+                  }[status] || { bg: 'neutral-soft', border: 'neutral', text: 'neutral', dot: 'neutral' }
+
+                  return (
+                    <tr
+                      key={id}
+                      className="ec-center-row"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${name}`}
+                      onClick={() => handleRowOpen(feature)}
+                      onKeyDown={(e) => handleRowKeyDown(e, feature)}
+                    >
+                      <td className="ec-cell-center" data-label="Center">
+                        <div className="ec-center-name" title={name}>
+                          {name}
+                        </div>
+                        {!mapped && (
+                          <div className="ec-center-needs-mapping" aria-label="Not mapped">
+                            <FontAwesomeIcon icon={faBan} size="xs" /> Needs mapping
+                          </div>
+                        )}
+                      </td>
+                      <td className="ec-cell-barangay" data-label="Barangay">
+                        <div className="ec-barangay-badges">
+                          {brgyShown.map((b) => (
+                            <span
+                              key={b.id}
+                              className="ec-barangay-badge"
+                              title={b.name}
+                              style={{
+                                '--barangay-color': b.color || 'var(--neutral)',
+                              }}
+                            >
+                              {b.name}
+                            </span>
+                          ))}
+                          {extraBrgy > 0 && (
+                            <span className="ec-barangay-badge ec-barangay-badge--more" title={allBrgyNames}>
+                              +{extraBrgy}
+                            </span>
+                          )}
+                          {brgyShown.length === 0 && (
+                            <span className="ec-barangay-badge ec-barangay-badge--none">—</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="ec-cell-structure" data-label="Structure">
+                        <div className="ec-structure-cell">
+                          <span className="ec-structure-icon" aria-hidden="true">
+                            <FontAwesomeIcon icon={structureIcon(props)} size="xs" />
+                          </span>
+                          <span>{structureText(props)}</span>
+                        </div>
+                      </td>
+                      <td className="ec-cell-occupancy" data-label="Occupancy">
+                        <div className="ec-occupancy-cell">
+                          <div className="ec-occupancy-bar-wrap">
+                            <div className="ec-occupancy-bar-track">
+                              <div
+                                className="ec-occupancy-bar-fill"
+                                style={{
+                                  width: `${occupancyPct}%`,
+                                  backgroundColor: `var(--${statusTokens.dot})`,
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div className="ec-occupancy-text">
+                            <span className="ec-occupancy-assigned">
+                              <strong>{assigned}</strong> of {cap} assigned
+                            </span>
+                            <span className="ec-occupancy-checkedin">
+                              {checkedIn} CHECKED IN
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="ec-cell-status" data-label="Status">
+                        <span
+                          className={`ec-status-pill ${statusVariantClass}`}
+                          style={{
+                            '--pill-bg': `var(--${statusTokens.bg})`,
+                            '--pill-border': `var(--${statusTokens.border})`,
+                            '--pill-text': `var(--${statusTokens.text})`,
+                            '--pill-dot': `var(--${statusTokens.dot})`,
+                          }}
+                        >
+                          <span className="ec-status-dot" aria-hidden="true" />
+                          {status}
+                        </span>
+                      </td>
+                      <td className="ec-cell-actions" data-label="Actions" onClick={(e) => e.stopPropagation()}>
+                        <FloatingMenuTrigger
+                          items={kebabItems(feature)}
+                          label={`Actions for ${name}`}
+                          align="right"
+                        />
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <footer className="ec-list-footer">
+        Showing <strong>{filtered.length}</strong> of <strong>{allCenters.length}</strong> evacuation centers
+      </footer>
     </section>
   )
 }
@@ -485,24 +543,6 @@ export function SearchInput({ value, onChange, placeholder, ariaLabel }) {
   )
 }
 
-export function FilterChip({ options = [], value, onChange, ariaLabel }) {
-  const handleSelect = (optionValue) => { if (optionValue !== value) onChange(optionValue) }
-  return (
-    <div className="fc-wrap" role="radiogroup" aria-label={ariaLabel}>
-      {options.map((option) => {
-        const active = value === option.value
-        return (
-          <button type="button" key={option.value} role="radio" aria-checked={active} className={`fc-button ${active ? 'fc-button--active' : ''}`} onClick={() => handleSelect(option.value)}>
-            {option.icon && <FontAwesomeIcon icon={option.icon} size="xs" className="fc-icon" />}
-            <span className="fc-label">{option.label}</span>
-            {option.count != null && <span className="fc-count">{option.count}</span>}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
 export function EmptyState({ icon, title = 'No data available', text, action, actionLabel, className = '' }) {
   return (
     <div className={`es-empty ${className}`.trim()}>
@@ -518,7 +558,7 @@ export function EmptyState({ icon, title = 'No data available', text, action, ac
   )
 }
 
-export function OccupancyBar({ checkedIn = 0, assigned = 0, capacity = 0, showLabel = true, className = '' }) {
+export function OccupancyBar({ assigned = 0, capacity = 0, showLabel = true, className = '' }) {
   const cap = Math.max(0, capacity || 0)
   const as = Math.max(0, Math.min(assigned || 0, cap))
   const occupancy = cap > 0 ? as / cap : 0
@@ -558,15 +598,16 @@ export function Skeleton({ variant = 'line', count = 3, width, className = '' })
 
 export function SkeletonRows({ count = 4 }) {
   return (
-    <div className="ec-table-container">
+    <div className="ec-table-wrapper">
       <table className="ds-table">
         <thead>
           <tr>
-            <th style={{ width: '32%' }}>Center</th>
-            <th style={{ width: '22%' }}>Structure</th>
-            <th style={{ width: '26%' }}>Occupancy</th>
-            <th style={{ width: '12%' }}>Status</th>
-            <th style={{ width: '8%' }}></th>
+            <th style={{ width: '22%' }}>Center</th>
+            <th style={{ width: '22%' }}>Barangay</th>
+            <th style={{ width: '15%' }}>Structure</th>
+            <th style={{ width: '24%' }}>Occupancy</th>
+            <th style={{ width: '13%' }}>Status</th>
+            <th style={{ width: '4%' }}></th>
           </tr>
         </thead>
         <tbody>
@@ -574,6 +615,7 @@ export function SkeletonRows({ count = 4 }) {
             <tr key={i}>
               <td><div className="ds-skeleton ds-skeleton--title" style={{ width: '55%' }} /><div className="ds-skeleton" style={{ width: '40%', height: 'var(--text-xs)' }} /></td>
               <td><div className="ds-skeleton ds-skeleton--text" style={{ width: '60%' }} /></td>
+              <td><div className="ds-skeleton ds-skeleton--text" style={{ width: '45%' }} /></td>
               <td><div className="ds-skeleton ds-skeleton--text" style={{ width: '45%' }} /></td>
               <td><div className="ds-skeleton ds-skeleton--text" style={{ width: '55%' }} /></td>
               <td><div className="ds-skeleton ds-skeleton--btn" /></td>
@@ -641,4 +683,3 @@ export function Tag({ label, tone = 'neutral', className = '' }) {
     </span>
   )
 }
-

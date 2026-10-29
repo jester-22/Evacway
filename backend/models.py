@@ -222,6 +222,11 @@ class EvacuationCenter(BaseModel):
         nullable=True
     )
 
+    max_rooms = db.Column(
+        db.Integer,
+        nullable=True
+    )
+
     # Can be NULL until center is placed on map.
     geom = db.Column(
         Geometry('POLYGON', srid=4326),
@@ -288,6 +293,7 @@ class EvacuationCenter(BaseModel):
             "capacity": self.capacity,
             "center_type": self.center_type or "campus",
             "owner_name": self.owner_name,
+            "max_rooms": self.max_rooms,
             "building_material": self.building_material,
             "accessibility_notes": self.accessibility_notes,
             "hazard_exposure_score": self.hazard_exposure_score,
@@ -951,6 +957,28 @@ class EvacuationCenterBuilding(BaseModel):
         nullable=True
     )
 
+    max_rooms = db.Column(
+        db.Integer,
+        nullable=True
+    )
+
+    floors = db.Column(
+        db.Integer,
+        nullable=True
+    )
+
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default='open',
+        server_default='open'
+    )
+
+    notes = db.Column(
+        db.Text,
+        nullable=True
+    )
+
     geom = db.Column(
         Geometry('POLYGON', srid=4326),
         nullable=False
@@ -983,6 +1011,10 @@ class EvacuationCenterBuilding(BaseModel):
             "id": self.id,
             "evacuation_center_id": self.evacuation_center_id,
             "name": self.name,
+            "max_rooms": self.max_rooms,
+            "floors": self.floors,
+            "status": self.status,
+            "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

@@ -36,6 +36,9 @@ import {
   faChevronUp,
   faArrowsRotate,
   faCircleExclamation,
+  faHome,
+  faPlaceOfWorship,
+  faWarehouse,
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../../services/api";
@@ -194,6 +197,12 @@ export default function AdminMap() {
     }
     return counts;
   }, [buildingsGeoJSON]);
+
+  // Unmapped centers count for sidebar badge
+  const unmappedCentersCount = useMemo(() => {
+    if (!centers?.features) return 0;
+    return centers.features.filter((c) => !isCenterMapped(c)).length;
+  }, [centers]);
 
   // Match hazard report across both admin and public queries
   const matchedHazardReport = useMemo(() => {
@@ -1114,9 +1123,10 @@ export default function AdminMap() {
     };
   }, [deepLinkedLat, deepLinkedLng]);
 
-  // Deep Link Handling: <route>?lat=<lat>&lng=<lng>
+  // Deep Link Handling: <route>?lat=<lat>&lng=<lng>&hazard=<id> or ?lat=<lat>&lng=<lng>&rescue=<id>
+  // Only show incident marker for Hazard Reports/Rescue Alerts with explicit incident param
   useEffect(() => {
-    if (deepLinkedLat && deepLinkedLng) {
+    if (deepLinkedLat && deepLinkedLng && (deepLinkedHazardId || deepLinkedRescueId)) {
       const lat = Number(deepLinkedLat);
       const lng = Number(deepLinkedLng);
       if (Number.isFinite(lat) && Number.isFinite(lng)) {
@@ -1169,6 +1179,9 @@ export default function AdminMap() {
           requestedAt: Date.now(),
         });
       }
+    } else if (!deepLinkedHazardId && !deepLinkedRescueId) {
+      // Clear incident marker when no hazard/rescue param (e.g. user selects a center)
+      setMapFocusLocation(null);
     }
   }, [
     deepLinkedLat,
@@ -1481,7 +1494,7 @@ export default function AdminMap() {
   }, [allCentersList, filter, searchQuery]);
 
 
-  // Render Center List Item (72px tall, Phase 3 spec)
+  // Render Center List Item (3-row layout: name+type+mapped, location+counts, occupancy)
   function renderCenterItem(center) {
     const props = center.properties || center;
     const centerId = props.id ?? center.id;
@@ -1496,6 +1509,7 @@ export default function AdminMap() {
       props.total_rooms ??
       props.room_count ??
       0;
+    const buildingCount = buildingsCountByCenterId[centerId] || 0;
     const capacity = Number(props.capacity || 0);
     const occupied = Number(props.occupied || 0);
     const assigned = Number(props.assigned ?? props.total_assigned ?? 0);
@@ -1522,13 +1536,25 @@ export default function AdminMap() {
             .join(", ")
         : displayEntityName(props.barangay_name || props.address) || "Sogod";
 
-    const isVenueOrHouse = props.center_type && props.center_type !== "campus";
+    const centerType = props.center_type || "campus";
+    const isVenueOrHouse = centerType !== "campus";
 
-    // Exception badge only: Not mapped, Inactive, Full
+    // Center type label and icon
+    const typeConfig = {
+      campus: { label: "Campus", icon: faBuildingColumns, color: "#2563eb", bg: "#eff6ff" },
+      private_property: { label: "Private Property", icon: faHome, color: "#7c3aed", bg: "#f5f3ff" },
+      single_venue: { label: "Single Venue", icon: faPlaceOfWorship, color: "#059669", bg: "#ecfdf5" },
+    };
+    const typeInfo = typeConfig[centerType] || typeConfig.campus;
+
+    // Mapped status chip
+    const mappedChip = mapped
+      ? { label: "Mapped", color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0" }
+      : { label: "Not mapped", color: "#dc2626", bg: "#fef2f2", border: "#fecaca" };
+
+    // Exception badge only: Inactive, Full (Not mapped is now a chip in row 1)
     let exceptionBadge = null;
-    if (!mapped) {
-      exceptionBadge = { label: "Not mapped", tone: "unmapped" };
-    } else if (!active) {
+    if (!active) {
       exceptionBadge = { label: "Inactive", tone: "inactive" };
     } else if (isFull) {
       exceptionBadge = { label: "Full", tone: "full" };
@@ -1550,69 +1576,126 @@ export default function AdminMap() {
         aria-selected={isSelected}
       >
         <div className="admin-map-item-main">
-          <div className="admin-map-item-title-row">
+          {/* Row 1: Name + Type badge + Mapped chip */}
+          <div className="admin-map-item-row1">
             <span
-              className={`admin-map-status-dot ${
-                active ? "is-active" : "is-inactive"
-              }`}
+              className={`admin-map-status-dot ${active ? "is-active" : "is-inactive"}`}
               title={active ? "Active" : "Inactive"}
               aria-label={active ? "Active" : "Inactive"}
             />
-            <span className="admin-map-item-name">
-              {props.name || "Evacuation Center"}
+            <span className="admin-map-item-name">{props.name || "Evacuation Center"}</span>
+            <span
+              className="admin-map-center-type-badge"
+              style={{
+                backgroundColor: typeInfo.bg,
+                color: typeInfo.color,
+                borderColor: typeInfo.color,
+              }}
+              title={typeInfo.label}
+            >
+              <FontAwesomeIcon icon={typeInfo.icon} size="xs" style={{ marginRight: "4px" }} />
+              {typeInfo.label}
+            </span>
+            <span
+              className="admin-map-mapped-chip"
+              style={{
+                backgroundColor: mappedChip.bg,
+                color: mappedChip.color,
+                borderColor: mappedChip.border,
+              }}
+            >
+              <FontAwesomeIcon
+                icon={mapped ? faMapPin : faCircleExclamation}
+                size="xs"
+                style={{ marginRight: "4px" }}
+              />
+              {mappedChip.label}
             </span>
           </div>
 
-          <div className="admin-map-item-sub">
+          {/* Row 2: Barangay + Room/Building counts (wrapping) */}
+          <div className="admin-map-item-row2">
             <span className="admin-map-item-sub-brgy">{barangayLabel}</span>
-            <span className="admin-map-item-sub-rooms">
-              {" · "}
+            <span className="admin-map-item-sub-counts">
               {roomCount} {roomCount === 1 ? "room" : "rooms"}
+              {!isVenueOrHouse && buildingCount > 0 && (
+                <>
+                  {" · "}
+                  <FontAwesomeIcon icon={faWarehouse} size="xs" style={{ marginRight: "2px" }} />
+                  {buildingCount} {buildingCount === 1 ? "building" : "buildings"}
+                </>
+              )}
             </span>
           </div>
 
-          {!isVenueOrHouse && (buildingsCountByCenterId[centerId] || 0) === 0 && (
-            <div>
+          {/* Row 3: Occupancy bar + "X of Y here" + exception badge */}
+          <div className="admin-map-item-row3">
+            <div className="admin-map-item-occ-bar-wrap">
+              <span className="admin-map-item-here-text">
+                {occupied} of {capacity} here
+              </span>
+              <div className="admin-map-item-occ-bar" aria-hidden="true">
+                {assignedPct > 0 && (
+                  <div
+                    className="admin-map-item-occ-assigned"
+                    style={{ width: `${assignedPct}%` }}
+                  />
+                )}
+                {occPct > 0 && (
+                  <div
+                    className="admin-map-item-occ-fill"
+                    style={{ width: `${occPct}%`, backgroundColor: barColor }}
+                  />
+                )}
+              </div>
+            </div>
+            {exceptionBadge && (
+              <span className={`admin-map-exception-tag is-${exceptionBadge.tone}`}>
+                {exceptionBadge.label}
+              </span>
+            )}
+          </div>
+
+          {/* Place on map / Edit polygon button for ALL center types */}
+          <div className="admin-map-item-polygon-action-wrap">
+            <button
+              type="button"
+              className="admin-map-center-row-polygon-action"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCloseCenterModal?.();
+                startPlacementFlow(center);
+              }}
+              title={mapped ? `Edit polygon for ${props.name || "center"}` : `Place ${props.name || "center"} on map`}
+              aria-label={mapped ? "Edit polygon" : "Place on map"}
+            >
+              <FontAwesomeIcon
+                icon={mapped ? faPen : faDrawPolygon}
+                size="xs"
+                style={{ marginRight: "4px" }}
+              />
+              {mapped ? "Edit polygon" : "Place on map"}
+            </button>
+          </div>
+
+          {/* Add building button for campus only */}
+          {!isVenueOrHouse && (
+            <div className="admin-map-item-add-building-wrap">
               <button
                 type="button"
-                className="admin-map-center-row-add-bld"
+                className={`admin-map-center-row-add-bld ${!mapped ? "is-disabled" : ""}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  startAddBuildingFlowForCenter(center);
+                  if (mapped) {
+                    startAddBuildingFlowForCenter(center);
+                  }
                 }}
-                title={`Add building to ${props.name || "center"}`}
+                title={mapped ? `Add building to ${props.name || "center"}` : "Place the center on the map first"}
+                disabled={!mapped}
               >
-                <FontAwesomeIcon icon={faPlus} /> Add building
+                <FontAwesomeIcon icon={faPlus} size="xs" style={{ marginRight: "4px" }} /> Add building
               </button>
             </div>
-          )}
-        </div>
-
-        <div className="admin-map-item-badge-wrap">
-          <span className="admin-map-item-here-text">
-            {occupied} of {capacity} here
-          </span>
-          {exceptionBadge && (
-            <span
-              className={`admin-map-exception-tag is-${exceptionBadge.tone}`}
-            >
-              {exceptionBadge.label}
-            </span>
-          )}
-        </div>
-
-        <div className="admin-map-item-occ-bar" aria-hidden="true">
-          {assignedPct > 0 && (
-            <div
-              className="admin-map-item-occ-assigned"
-              style={{ width: `${assignedPct}%` }}
-            />
-          )}
-          {occPct > 0 && (
-            <div
-              className="admin-map-item-occ-fill"
-              style={{ width: `${occPct}%`, backgroundColor: barColor }}
-            />
           )}
         </div>
       </div>
@@ -3350,6 +3433,23 @@ export default function AdminMap() {
     const centerFamilies = selectedCenterDetailsQuery.data?.families || [];
     const isOwner = props.center_type === "private_property" && props.owner_name;
 
+    // Center type config
+    const centerType = props.center_type || "campus";
+    const typeConfig = {
+      campus: { label: "Campus", icon: faBuildingColumns, color: "#2563eb", bg: "#eff6ff" },
+      private_property: { label: "Private Property", icon: faHome, color: "#7c3aed", bg: "#f5f3ff" },
+      single_venue: { label: "Single Venue", icon: faPlaceOfWorship, color: "#059669", bg: "#ecfdf5" },
+    };
+    const typeInfo = typeConfig[centerType] || typeConfig.campus;
+
+    // Mapped status chip
+    const mappedChip = mapped
+      ? { label: "Mapped", color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0", icon: faMapPin }
+      : { label: "Not mapped", color: "#dc2626", bg: "#fef2f2", border: "#fecaca", icon: faCircleExclamation };
+
+    // Check if any building has geometry (for campus type)
+    const hasMappedBuildings = centerBuildings.some((b) => b.geometry && b.geometry.coordinates && b.geometry.coordinates.length > 0);
+
     return (
       <div
         className="admin-center-modal-backdrop"
@@ -3371,18 +3471,36 @@ export default function AdminMap() {
                 <h2 id="admin-center-modal-title" className="admin-center-modal-title">
                   {props.name || "Evacuation Center"}
                 </h2>
+                {/* Center type badge */}
                 <span
-                  className={`admin-center-modal-status-badge ${
-                    active ? "is-active" : "is-inactive"
-                  }`}
+                  className="admin-center-modal-type-badge"
+                  style={{
+                    backgroundColor: typeInfo.bg,
+                    color: typeInfo.color,
+                    borderColor: typeInfo.color,
+                  }}
+                  title={typeInfo.label}
+                >
+                  <FontAwesomeIcon icon={typeInfo.icon} size="xs" style={{ marginRight: "4px" }} />
+                  {typeInfo.label}
+                </span>
+                {/* Mapped/Not mapped chip */}
+                <span
+                  className="admin-center-modal-mapped-chip"
+                  style={{
+                    backgroundColor: mappedChip.bg,
+                    color: mappedChip.color,
+                    borderColor: mappedChip.border,
+                  }}
+                >
+                  <FontAwesomeIcon icon={mappedChip.icon} size="xs" style={{ marginRight: "4px" }} />
+                  {mappedChip.label}
+                </span>
+                <span
+                  className={`admin-center-modal-status-badge ${active ? "is-active" : "is-inactive"}`}
                 >
                   {active ? "Active" : "Inactive"}
                 </span>
-                {!mapped && !isVenueOrHouse && (
-                  <span className="admin-center-modal-status-badge is-unmapped">
-                    Not mapped
-                  </span>
-                )}
               </div>
               <div className="admin-center-modal-subtitle">
                 {barangayText}
@@ -3700,74 +3818,146 @@ export default function AdminMap() {
                     </button>
                   </div>
                 ) : (
-                  centerBuildings.map((b) => {
-                    const bProps = b.properties || {};
-                    const bId = bProps.id ?? b.id;
-                    const bName = bProps.name || "Building";
-                    const bRoomCount =
-                      bProps.room_count ??
-                      selectedCenterRooms.filter(
-                        (r) => String(r.building_id) === String(bId)
-                      ).length;
-                    const bCap = Number(bProps.capacity || 0);
-                    const bOcc = Number(bProps.occupied || 0);
-                    const bOccPct =
-                      bCap > 0
-                        ? Math.min(100, Math.round((bOcc / bCap) * 100))
-                        : 0;
-                    const bColor =
-                      bProps.fill_color ||
-                      bProps.status_color ||
-                      (bCap <= 0
-                        ? "#94a3b8"
-                        : bOcc >= bCap
-                        ? "#dc2626"
-                        : bOccPct >= 70
-                        ? "#d97706"
-                        : "#16a34a");
+                  !mapped ? (
+                    // Center not mapped: show "Map the center first" message
+                    <div className="admin-center-modal-buildings-empty-action">
+                      <div className="admin-center-modal-empty-icon-wrap">
+                        <FontAwesomeIcon icon={faCircleExclamation} />
+                      </div>
+                      <div className="admin-center-modal-empty-text">
+                        Map the center first
+                      </div>
+                    </div>
+                  ) : (
+                    centerBuildings.map((b) => {
+                      const bProps = b.properties || {};
+                      const bId = bProps.id ?? b.id;
+                      const bName = bProps.name || "Building";
+                      const bRoomCount =
+                        bProps.room_count ??
+                        selectedCenterRooms.filter(
+                          (r) => String(r.building_id) === String(bId)
+                        ).length;
+                      const bCap = Number(bProps.capacity || 0);
+                      const bOcc = Number(bProps.occupied || 0);
+                      const bOccPct =
+                        bCap > 0
+                          ? Math.min(100, Math.round((bOcc / bCap) * 100))
+                          : 0;
+                      const bColor =
+                        bProps.fill_color ||
+                        bProps.status_color ||
+                        (bCap <= 0
+                          ? "#94a3b8"
+                          : bOcc >= bCap
+                          ? "#dc2626"
+                          : bOccPct >= 70
+                          ? "#d97706"
+                          : "#16a34a");
+                      // Building mapped status
+                      const bMapped = Boolean(b.geometry && b.geometry.coordinates && b.geometry.coordinates.length > 0);
+                      const bMappedChip = bMapped
+                        ? { label: "Mapped", color: "#16a34a", bg: "#f0fdf4", border: "#bbf7d0", icon: faMapPin }
+                        : { label: "Not mapped", color: "#dc2626", bg: "#fef2f2", border: "#fecaca", icon: faCircleExclamation };
 
-                    return (
-                      <button
-                        key={bId}
-                        type="button"
-                        role="listitem"
-                        className="admin-center-modal-building-row"
-                        onClick={() => {
-                          setSelectedBuildingId(bId);
-                          const centroid = getPolygonCentroid(b.geometry);
-                          if (centroid) {
-                            setMapFocusLocation({
-                              ...centroid,
-                              zoom: 18,
-                              noPin: true,
-                              requestedAt: Date.now(),
-                            });
-                          }
-                          setCenterModalOpen(false);
-                          setBuildingModalOpen(true);
-                        }}
-                      >
-                        <span
-                          className="admin-center-modal-building-swatch"
-                          style={{ backgroundColor: bColor }}
-                          aria-hidden="true"
-                        />
-                        <span className="admin-center-modal-building-name">
-                          {bName}
-                        </span>
-                        <span className="admin-center-modal-building-rooms">
-                          {bRoomCount} {bRoomCount === 1 ? "room" : "rooms"}
-                        </span>
-                        <span className="admin-center-modal-building-occ">
-                          {bOcc} of {bCap} here
-                        </span>
-                        <FontAwesomeIcon
-                          icon={faChevronRight}
-                          className="admin-center-modal-building-chevron"
-                        />
-                      </button>
-                    );
-                  })
+                      // Building polygon action handler
+                      const handleBuildingPolygonAction = (e) => {
+                        e.stopPropagation(); // Prevent row click (zoom to building)
+                        if (bMapped) {
+                          // Edit existing building polygon
+                          const points = polygonToPoints(b.geometry);
+                          setNewBuildingPoints(points);
+                          setRedrawingBuildingId(bId);
+                          setIsDrawingBuilding(true);
+                          handleCloseCenterModal();
+                          showPlacementToast(`Click points on map to redraw "${bName}" outline.`);
+                        } else {
+                          // Map new building polygon
+                          setNewBuildingPoints([]);
+                          setRedrawingBuildingId(null);
+                          setIsAddingBuilding(true);
+                          setIsDrawingBuilding(true);
+                          setAddBuildingStep("draw");
+                          setNewBuildingName(`${bName} (mapped)`);
+                          setNewBuildingRoomIds([]);
+                          setRoomSearchQuery("");
+                          setRoomRangeInput("");
+                          handleCloseCenterModal();
+                          showPlacementToast(`Draw ${bName} outline inside the center boundary.`);
+                        }
+                      };
+
+                      return (
+                        <div key={bId} className="admin-center-modal-building-row-wrap">
+                          <button
+                            type="button"
+                            role="listitem"
+                            className="admin-center-modal-building-row"
+                            onClick={() => {
+                              setSelectedBuildingId(bId);
+                              const centroid = getPolygonCentroid(b.geometry);
+                              if (centroid) {
+                                setMapFocusLocation({
+                                  ...centroid,
+                                  zoom: 18,
+                                  noPin: true,
+                                  requestedAt: Date.now(),
+                                });
+                              }
+                              setCenterModalOpen(false);
+                              setBuildingModalOpen(true);
+                            }}
+                          >
+                            <span
+                              className="admin-center-modal-building-swatch"
+                              style={{ backgroundColor: bColor }}
+                              aria-hidden="true"
+                            />
+                            <span className="admin-center-modal-building-name">
+                              {bName}
+                            </span>
+                            <span className="admin-center-modal-building-rooms">
+                              {bRoomCount} {bRoomCount === 1 ? "room" : "rooms"}
+                            </span>
+                            {/* Mapped/Not mapped chip for building */}
+                            <span
+                              className="admin-center-modal-building-mapped-chip"
+                              style={{
+                                backgroundColor: bMappedChip.bg,
+                                color: bMappedChip.color,
+                                borderColor: bMappedChip.border,
+                              }}
+                            >
+                              <FontAwesomeIcon icon={bMappedChip.icon} size="xs" style={{ marginRight: "4px" }} />
+                              {bMappedChip.label}
+                            </span>
+                            <span className="admin-center-modal-building-occ">
+                              {bOcc} of {bCap} here
+                            </span>
+                            <FontAwesomeIcon
+                              icon={faChevronRight}
+                              className="admin-center-modal-building-chevron"
+                            />
+                          </button>
+                          {/* Building polygon action button */}
+                          <button
+                            type="button"
+                            className="admin-center-modal-building-action"
+                            onClick={handleBuildingPolygonAction}
+                            title={bMapped ? `Edit ${bName} polygon` : `Map ${bName} polygon`}
+                            aria-label={bMapped ? "Edit polygon" : "Map building"}
+                          >
+                            <FontAwesomeIcon
+                              icon={bMapped ? faPen : faDrawPolygon}
+                              size="xs"
+                              style={{ marginRight: "4px" }}
+                            />
+                            {bMapped ? "Edit polygon" : "Map building"}
+                          </button>
+                        </div>
+                      );
+                    })
+                  )
                 )}
               </div>
             </div>
@@ -3775,22 +3965,77 @@ export default function AdminMap() {
 
           {/* Fixed Footer */}
           <footer className="admin-center-modal-footer">
-            <button
-              type="button"
-              className="admin-center-modal-btn is-secondary"
-              onClick={handleCloseCenterModal}
-            >
-              Close
-            </button>
-            <button
-              type="button"
-              className="admin-center-modal-btn is-text"
-              onClick={() => {
-                navigate(`${basePath}?tab=centers&center=${centerId}`);
-              }}
-            >
-              Manage center
-            </button>
+            {!mapped ? (
+              // NOT MAPPED: Primary "Place on map", Secondary "Edit center"
+              <>
+                <button
+                  type="button"
+                  className="admin-center-modal-btn is-primary"
+                  onClick={() => {
+                    handleCloseCenterModal();
+                    startPlacementFlow(selectedCenter);
+                  }}
+                >
+                  <FontAwesomeIcon icon={faDrawPolygon} style={{ marginRight: "6px" }} />
+                  Place on map
+                </button>
+                <button
+                  type="button"
+                  className="admin-center-modal-btn is-secondary"
+                  onClick={() => {
+                    navigate(`${basePath}?tab=centers&center=${centerId}`);
+                  }}
+                >
+                  <FontAwesomeIcon icon={faPen} style={{ marginRight: "6px" }} />
+                  Edit center
+                </button>
+              </>
+            ) : (
+              // MAPPED: Primary "Edit polygon", Secondary "View on map" + "Edit center"
+              <>
+                <button
+                  type="button"
+                  className="admin-center-modal-btn is-primary"
+                  onClick={() => {
+                    handleCloseCenterModal();
+                    startPlacementFlow(selectedCenter);
+                  }}
+                >
+                  <FontAwesomeIcon icon={faPen} style={{ marginRight: "6px" }} />
+                  Edit polygon
+                </button>
+                <button
+                  type="button"
+                  className="admin-center-modal-btn is-text"
+                  onClick={() => {
+                    // View on map - focus map on center and close modal
+                    const coords = getCenterCoordinates(selectedCenter);
+                    if (coords) {
+                      setMapFocusLocation({
+                        ...coords,
+                        zoom: 16,
+                        noPin: true,
+                        requestedAt: Date.now(),
+                      });
+                    }
+                    handleCloseCenterModal();
+                  }}
+                >
+                  <FontAwesomeIcon icon={faEye} style={{ marginRight: "6px" }} />
+                  View on map
+                </button>
+                <button
+                  type="button"
+                  className="admin-center-modal-btn is-text"
+                  onClick={() => {
+                    navigate(`${basePath}?tab=centers&center=${centerId}`);
+                  }}
+                >
+                  <FontAwesomeIcon icon={faPen} style={{ marginRight: "6px" }} />
+                  Edit center
+                </button>
+              </>
+            )}
           </footer>
         </div>
       </div>
@@ -3807,6 +4052,7 @@ export default function AdminMap() {
         logout={logout}
         isMobile={isMobile}
         onSelectNotification={handleNotificationSelect}
+        unmappedCentersCount={unmappedCentersCount}
       />
 
       <div className="dashboard-content">

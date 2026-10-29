@@ -492,6 +492,32 @@
   word-break: break-word;
 }
 
+/* Center type badge */
+.admin-map-center-type-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-full, 9999px);
+  border: 1px solid;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: auto;
+  line-height: 1.2;
+}
+
+.admin-map-item-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.admin-map-item-title-row .admin-map-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .admin-map-item-sub {
   display: flex;
   align-items: center;
@@ -581,7 +607,256 @@
   height: 100%;
 }
 
-/* Loading Skeleton, Empty & Error States (Phase 3 Item 5) */
+/* =========================================================
+   CENTER LIST ITEM - 3 ROW LAYOUT
+   ========================================================= */
+
+.admin-map-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Row 1: Name + Type badge + Mapped chip */
+.admin-map-item-row1 {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-map-item-row1 .admin-map-status-dot {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.admin-map-item-row1 .admin-map-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ew-text-primary, #0f172a);
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Mapped/Not mapped chip in row 1 */
+.admin-map-mapped-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-full, 9999px);
+  border: 1px solid;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+/* Row 2: Barangay + counts (wrapping) */
+.admin-map-item-row2 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ew-text-secondary, #334155);
+  line-height: 1.25;
+  padding-left: 16px; /* align with name after status dot */
+}
+
+.admin-map-item-sub-brgy {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.admin-map-item-sub-counts {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Row 3: Occupancy bar + exception badge */
+.admin-map-item-row3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-map-item-occ-bar-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.admin-map-item-occ-bar-wrap .admin-map-item-here-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ew-text-primary, #0f172a);
+  white-space: nowrap;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Occupancy bar in row 3 (not absolute positioned) */
+.admin-map-item-row3 .admin-map-item-occ-bar {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.admin-map-item-row3 .admin-map-item-occ-assigned {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: #94a3b8;
+  opacity: 0.45;
+  border-radius: 4px;
+}
+
+.admin-map-item-row3 .admin-map-item-occ-fill {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  border-radius: 4px;
+}
+
+/* Add building button wrapper */
+.admin-map-item-add-building-wrap {
+  padding-top: 4px;
+  padding-left: 16px;
+}
+
+/* Exception tag (Inactive, Full) */
+.admin-map-exception-tag {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-full, 9999px);
+  white-space: nowrap;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.admin-map-exception-tag.is-inactive {
+  background: var(--ew-bg-subtle, #f1f5f9);
+  color: var(--ew-text-secondary, #475569);
+  border: 1px solid var(--ew-border-strong, #cbd5e1);
+}
+
+.admin-map-exception-tag.is-full {
+  background: var(--ew-danger-bg, #fef2f2);
+  color: var(--ew-danger-text, #dc2626);
+  border: 1px solid var(--ew-danger-border, #fecaca);
+}
+
+/* Legacy styles (kept for detail view) */
+.admin-map-item-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.admin-map-item-title-row .admin-map-item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.admin-map-item-sub {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ew-text-secondary, #334155);
+  line-height: 1.25;
+  padding-left: 16px;
+}
+
+.admin-map-item-sub-brgy {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-map-item-sub-rooms {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-map-item-badge-wrap {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+}
+
+.admin-map-item-here-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ew-text-primary, #0f172a);
+  white-space: nowrap;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-map-exception-tag.is-unmapped,
+.admin-map-exception-tag.is-inactive {
+  background: var(--ew-bg-subtle, #f1f5f9);
+  color: var(--ew-text-secondary, #475569);
+  border: 1px solid var(--ew-border-strong, #cbd5e1);
+}
+
+.admin-map-exception-tag.is-full {
+  background: var(--ew-danger-bg, #fef2f2);
+  color: var(--ew-danger-text, #dc2626);
+  border: 1px solid var(--ew-danger-border, #fecaca);
+}
+
+/* Legacy occupancy bar (absolute positioned for detail view) */
+.admin-map-item-occ-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: #f1f5f9;
+  overflow: hidden;
+}
+
+.admin-map-item-occ-assigned {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: #94a3b8;
+  opacity: 0.45;
+}
+
+.admin-map-item-occ-fill {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+}
 .admin-map-skeleton-row {
   height: 72px;
   min-height: 72px;
@@ -3218,6 +3493,53 @@
   line-height: 1.4;
 }
 
+/* Center type badge in modal header */
+.admin-center-modal-type-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-full, 9999px);
+  border: 1px solid;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+/* Mapped/Not mapped chip in modal header */
+.admin-center-modal-mapped-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: var(--radius-full, 9999px);
+  border: 1px solid;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+/* Title row in modal header */
+.admin-center-modal-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-center-modal-title {
+  margin: 0;
+  font-family: var(--font-display, 'Public Sans', system-ui, sans-serif);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--ew-text-primary, #0f172a);
+  line-height: 1.25;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .admin-center-modal-close-btn {
   width: 44px;
   height: 44px;
@@ -3455,6 +3777,74 @@
   flex-shrink: 0;
 }
 
+/* Building mapped/unmapped chip */
+.admin-center-modal-building-mapped-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-full, 9999px);
+  border: 1px solid;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+/* Building row wrapper with action button */
+.admin-center-modal-building-row-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+/* Allow wrapping of action button to second line */
+.admin-center-modal-building-row {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap; /* Allow wrapping */
+  cursor: pointer;
+  text-align: left;
+  box-sizing: border-box;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+/* Building polygon action button */
+.admin-center-modal-building-action {
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background-color 150ms ease, border-color 150ms ease;
+  white-space: nowrap;
+  margin-left: auto; /* Push to right when on same line */
+}
+
+.admin-center-modal-building-action:hover {
+  background: #fde68a;
+  border-color: #fcd34d;
+}
+
+.admin-center-modal-building-action:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}
+
 .admin-center-modal-footer {
   padding: 14px 20px 18px;
   border-top: 1px solid var(--ew-border-subtle, #e2e8f0);
@@ -3506,37 +3896,109 @@
   outline-offset: 2px;
 }
 
-@media (max-width: 768px) {
-  .admin-center-modal-backdrop {
-    align-items: flex-end;
-    padding: 0;
+/* =========================================================
+   CENTER MODAL RESPONSIVE CENTERING - 3 RESOLUTIONS
+   ========================================================= */
+
+  /* Mobile: 390x844 (e.g., iPhone 12/13/14) - Bottom sheet */
+  @media (max-width: 480px) {
+    .admin-center-modal-backdrop {
+      align-items: flex-end;
+      padding: 0;
+    }
+
+    .admin-center-modal-dialog {
+      max-width: 100%;
+      width: 100%;
+      max-height: 85vh;
+      border-radius: 16px 16px 0 0;
+      border-bottom: none;
+    }
+
+    .admin-center-modal-footer {
+      padding: 12px 18px calc(16px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .admin-center-modal-close-btn {
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
+      min-height: 44px;
+    }
+
+    .admin-center-modal-btn {
+      min-height: 44px;
+      height: 44px;
+      flex: 1 1 0;
+    }
   }
 
-  .admin-center-modal-dialog {
-    max-width: 100%;
-    width: 100%;
-    max-height: 85vh;
-    border-radius: 16px 16px 0 0;
-    border-bottom: none;
+  /* Tablet/Laptop: 1366x768 - Centered modal with max-width */
+  @media (min-width: 481px) and (max-width: 1024px) {
+    .admin-center-modal-backdrop {
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .admin-center-modal-dialog {
+      max-width: 480px;
+      width: 90%;
+      max-height: 80vh;
+      border-radius: 16px;
+      border-bottom: 1px solid var(--ew-border-strong, #cbd5e1);
+    }
   }
 
-  .admin-center-modal-footer {
-    padding: 12px 18px calc(16px + env(safe-area-inset-bottom, 0px));
+  /* Desktop: 1920x1080 - Centered modal with max-width */
+  @media (min-width: 1025px) {
+    .admin-center-modal-backdrop {
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .admin-center-modal-dialog {
+      max-width: 520px;
+      width: auto;
+      max-height: 85vh;
+      border-radius: 16px;
+      border-bottom: 1px solid var(--ew-border-strong, #cbd5e1);
+    }
   }
 
-  .admin-center-modal-close-btn {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
-  }
+  /* Legacy mobile breakpoint for compatibility */
+  @media (max-width: 768px) and (min-width: 481px) {
+    .admin-center-modal-backdrop {
+      align-items: flex-end;
+      padding: 0;
+    }
 
-  .admin-center-modal-btn {
-    min-height: 44px;
-    height: 44px;
-    flex: 1 1 0;
+    .admin-center-modal-dialog {
+      max-width: 100%;
+      width: 100%;
+      max-height: 85vh;
+      border-radius: 16px 16px 0 0;
+      border-bottom: none;
+    }
+
+    .admin-center-modal-footer {
+      padding: 12px 18px calc(16px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .admin-center-modal-close-btn {
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
+      min-height: 44px;
+    }
+
+    .admin-center-modal-btn {
+      min-height: 44px;
+      height: 44px;
+      flex: 1 1 0;
+    }
   }
-}
 
 /* =========================================================
    CENTER MODAL EMPTY STATE & BUTTONS (Change 1)
@@ -3616,6 +4078,51 @@
 .admin-map-center-row-add-bld:hover {
   background: #dbeafe;
   border-color: #93c5fd;
+}
+
+/* Disabled state for Add building on unmapped campus */
+.admin-map-center-row-add-bld.is-disabled {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.admin-map-center-row-add-bld.is-disabled:hover {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+}
+
+/* Center List Row "Place on map / Edit polygon" button */
+.admin-map-item-polygon-action-wrap {
+  padding-top: 4px;
+  padding-left: 16px;
+}
+
+.admin-map-center-row-polygon-action {
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.admin-map-center-row-polygon-action:hover {
+  background: #fde68a;
+  border-color: #fcd34d;
+}
+
+.admin-map-center-row-polygon-action:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
 }
 
 /* =========================================================

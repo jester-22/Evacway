@@ -177,6 +177,43 @@
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
 }
 
+/* Animated badge for unmapped centers count */
+.sidebar-tab-badge {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: sidebar-badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes sidebar-badge-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 6px rgba(220, 38, 38, 0);
+  }
+}
+
+/* Ensure tab has enough padding for badge */
+.sidebar-tab:has(.sidebar-tab-badge) {
+  padding-right: 36px;
+}
+
 .sidebar-account {
   position: relative;
   display: flex;

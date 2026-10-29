@@ -76,4 +76,50 @@
     padding: var(--space-3);
     border-radius: var(--radius-control);
   }
+}
+
+/* =========================================================
+   DASHBOARD LOADING STATE - Responsive Centering
+   ========================================================= */
+
+.dashboard-loading-wrap {
+  /* Base: centered in content area */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh; /* reasonable default */
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-8) var(--space-4);
+}
+
+/* Tablet/Laptop (1366x768) */
+@media (min-width: 1025px) and (max-width: 1440px) {
+  .dashboard-loading-wrap {
+    min-height: calc(100dvh - 56px); /* account for mobile header if visible */
+    padding: var(--space-12) var(--space-6);
+  }
+}
+
+/* Desktop (1920x1080 and above) */
+@media (min-width: 1441px) {
+  .dashboard-loading-wrap {
+    min-height: calc(100dvh - 56px);
+    padding: var(--space-16) var(--space-8);
+  }
+}
+
+/* Mobile (390x844 and similar) */
+@media (max-width: 1024px) {
+  .dashboard-loading-wrap {
+    min-height: calc(100dvh - 56px); /* account for mobile header */
+    padding: var(--space-6) var(--space-4);
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .evacway-spinner {
+    animation-duration: 0.01ms !important;
+  }
 }

@@ -798,6 +798,12 @@ export default function EvacuationCenterManager({
               navigate(`${mapBasePath}?lat=${lat}&lng=${lng}&room=${room.id}`);
             }
           }}
+          onViewBuildingMap={(building) => {
+            const cId = selectedCenter?.id || selectedCenter?.properties?.id;
+            if (cId && building?.id) {
+              navigate(`${mapBasePath}?center=${cId}&building=${building.id}`);
+            }
+          }}
           onLinkRoom={(room) => openEditRoomModal(room)}
           onDeleteRoom={(room) => confirmDeleteRoom(room)}
           onMove={(family) => openMoveModal(family)}

@@ -103,6 +103,7 @@ function Sidebar({
   logout,
   isMobile,
   onSelectNotification,
+  unmappedCentersCount = 0,
 }) {
   const role = user?.role;
   const { updateUser } = useAuth();
@@ -614,22 +615,31 @@ function Sidebar({
             <div key={section.title} className="sidebar-nav-section">
               <span className="sidebar-section-heading">{section.title}</span>
               <div className="sidebar-section-items">
-                {section.items.map((item) => (
-                  <button
-                    key={item.key}
-                    onClick={() => {
-                      setTab(item.key);
-                      setDrawerOpen(false);
-                    }}
-                    title={item.label}
-                    aria-label={item.label}
-                    aria-current={tab === item.key ? "page" : undefined}
-                    className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
-                  >
-                    <FontAwesomeIcon icon={item.icon} />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
+                {section.items.map((item) => {
+                  const isCentersTab = item.key === "centers";
+                  const showBadge = isCentersTab && unmappedCentersCount > 0;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => {
+                        setTab(item.key);
+                        setDrawerOpen(false);
+                      }}
+                      title={item.label}
+                      aria-label={showBadge ? `${item.label}, ${unmappedCentersCount} unmapped` : item.label}
+                      aria-current={tab === item.key ? "page" : undefined}
+                      className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
+                    >
+                      <FontAwesomeIcon icon={item.icon} />
+                      <span>{item.label}</span>
+                      {showBadge && (
+                        <span className="sidebar-tab-badge" aria-label={`${unmappedCentersCount} centers not mapped`}>
+                          {unmappedCentersCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -715,19 +725,28 @@ function Sidebar({
             <div key={section.title} className="sidebar-nav-section">
               <span className="sidebar-section-heading">{section.title}</span>
               <div className="sidebar-section-items">
-                {section.items.map((item) => (
-                  <button
-                    key={item.key}
-                    onClick={() => setTab(item.key)}
-                    title={item.label}
-                    aria-label={item.label}
-                    aria-current={tab === item.key ? "page" : undefined}
-                    className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
-                  >
-                    <FontAwesomeIcon icon={item.icon} />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
+                {section.items.map((item) => {
+                  const isCentersTab = item.key === "centers";
+                  const showBadge = isCentersTab && unmappedCentersCount > 0;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => setTab(item.key)}
+                      title={item.label}
+                      aria-label={showBadge ? `${item.label}, ${unmappedCentersCount} unmapped` : item.label}
+                      aria-current={tab === item.key ? "page" : undefined}
+                      className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
+                    >
+                      <FontAwesomeIcon icon={item.icon} />
+                      <span>{item.label}</span>
+                      {showBadge && (
+                        <span className="sidebar-tab-badge" aria-label={`${unmappedCentersCount} centers not mapped`}>
+                          {unmappedCentersCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}

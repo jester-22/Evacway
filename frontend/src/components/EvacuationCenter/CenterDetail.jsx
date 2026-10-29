@@ -116,6 +116,7 @@ export default function CenterDetail({
   onAddRoom,
   onEditRoom,
   onViewRoomMap,
+  onViewBuildingMap,
   onLinkRoom,
   onDeleteRoom,
   onMove,
@@ -201,6 +202,7 @@ export default function CenterDetail({
             onAddRoom={onAddRoom}
             onEditRoom={onEditRoom}
             onViewRoomMap={onViewRoomMap}
+            onViewBuildingMap={onViewBuildingMap}
             onLinkRoom={onLinkRoom}
             onDeleteRoom={onDeleteRoom}
           />
@@ -595,7 +597,7 @@ export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, o
     </div>
   )
 }
-export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding, onAddRoom, onEditRoom, onViewRoomMap, onLinkRoom, onDeleteRoom }) {
+export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding, onAddRoom, onEditRoom, onViewRoomMap, onViewBuildingMap, onLinkRoom, onDeleteRoom }) {
   const isSingleVenue = center?.center_type === 'single_venue'
   const isPrivateProperty = center?.center_type === 'private_property'
 
@@ -710,14 +712,17 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
                                 <FontAwesomeIcon icon={faPen} size="xs" />
                               </button>
                             )}
-                            {onViewRoomMap && room.latitude != null && room.longitude != null && (
+                            {onViewBuildingMap && room.building_id && (
                               <button
                                 type="button"
                                 className="ds-btn ds-btn--ghost ds-btn--icon"
-                                onClick={() => onViewRoomMap(room)}
-                                title="View on map"
+                                onClick={() => {
+                                  const bldg = buildings.find((b) => b.id === room.building_id);
+                                  if (bldg) onViewBuildingMap(bldg);
+                                }}
+                                title="Show building on map"
                               >
-                                <FontAwesomeIcon icon={faMapPin} size="xs" />
+                                <FontAwesomeIcon icon={faBuilding} size="xs" />
                               </button>
                             )}
                             {/* No Link to building for private_property */}
@@ -783,14 +788,17 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
                                 <FontAwesomeIcon icon={faPen} size="xs" />
                               </button>
                             )}
-                            {onViewRoomMap && room.latitude != null && room.longitude != null && (
+                            {onViewBuildingMap && room.building_id && (
                               <button
                                 type="button"
                                 className="ds-btn ds-btn--ghost ds-btn--icon"
-                                onClick={() => onViewRoomMap(room)}
-                                title="View on map"
+                                onClick={() => {
+                                  const bldg = buildings.find((b) => b.id === room.building_id);
+                                  if (bldg) onViewBuildingMap(bldg);
+                                }}
+                                title="Show building on map"
                               >
-                                <FontAwesomeIcon icon={faMapPin} size="xs" />
+                                <FontAwesomeIcon icon={faBuilding} size="xs" />
                               </button>
                             )}
                             {onLinkRoom && (

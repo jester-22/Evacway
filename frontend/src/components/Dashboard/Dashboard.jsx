@@ -444,13 +444,6 @@ function Dashboard() {
 
   return (
     <div className="dashboard-layout">
-      {isLoading && (
-        <div className="dashboard-loading-wrap" style={{ height: "100dvh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <LoadingState message="Loading dashboard data…" size="lg" />
-        </div>
-      )}
-      {!isLoading && (
-        <>
       <Sidebar
         tab="dashboard"
         setTab={handleSectionChange}
@@ -458,10 +451,16 @@ function Dashboard() {
         logout={logout}
         isMobile={isMobile}
         onSelectNotification={handleNotificationSelect}
+        unmappedCentersCount={0}
       />
 
       <main className="dashboard-content dashboard-page bg-slate-50">
         <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 space-y-6">
+          {isLoading && !stats && (
+            <div className="dashboard-loading-wrap">
+              <LoadingState message="Loading dashboard data…" size="lg" />
+            </div>
+          )}
 
           {/* 1. HEADER */}
           <header className="dashboard-card p-4 sm:p-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -500,7 +499,7 @@ function Dashboard() {
           </header>
 
           {/* ERROR STATE */}
-          {error && (
+          {error && !isLoading && (
             <section
               className="flex flex-col justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 p-6 text-red-800 sm:flex-row sm:items-center shadow-sm"
               role="alert"
@@ -522,7 +521,7 @@ function Dashboard() {
             </section>
           )}
 
-          {/* LOADING SKELETON */}
+          {/* LOADING SKELETON - shows while loading and no stats yet */}
           {isLoading && !stats ? (
             <div className="space-y-6" aria-label="Loading dashboard" aria-busy="true">
               <div className="dashboard-skeleton h-36 rounded-2xl border border-slate-200 bg-white p-6" />
@@ -1248,8 +1247,6 @@ function Dashboard() {
           ) : null}
         </div>
       </main>
-      </>
-      )}
     </div>
   );
 }

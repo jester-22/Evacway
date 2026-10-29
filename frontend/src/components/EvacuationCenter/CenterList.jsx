@@ -4,11 +4,11 @@ import {
   faPlus, faRotate, faBuilding, faCircleCheck, faTriangleExclamation,
   faCircleStop, faMapPin, faBan, faPen, faLocationDot,
   faFilter, faXmark, faSearch, faHome, faWarehouse,
-  faCircleXmark,
+  faCircleXmark, faDrawPolygon,
 } from '@fortawesome/free-solid-svg-icons'
 
 import { useAuth } from '../../context/AuthContext'
-import { centerStatus, centerNeedsMapping } from './utils'
+import { centerStatus, centerNeedsMapping, isCenterMapped } from './utils'
 import { statusVariant } from './evacuationStatus'
 import { FloatingMenuTrigger } from './FloatingMenu'
 import './CenterList.css'
@@ -48,6 +48,7 @@ export default function CenterList({
   canDeactivate,
   onRowOpen,
   onBarangayChange,
+  onPlaceOnMap,
   loading = false,
   error = '',
   className = '',
@@ -175,9 +176,13 @@ export default function CenterList({
   const kebabItems = useCallback(
     (feature) => {
       const props = feature.properties || feature
+      const mapped = isCenterMapped(props)
       const items = [
         { label: 'View on map', icon: faLocationDot, onClick: () => onViewMap?.(props) },
       ]
+      if (!mapped) {
+        items.push({ label: 'Place on map', icon: faDrawPolygon, onClick: () => onPlaceOnMap?.(props) })
+      }
       if (isAdmin) {
         items.unshift({ label: 'Edit', icon: faPen, onClick: () => onEdit?.(props) })
         items.splice(1, 0, { label: 'Add rooms', onClick: () => onAddRooms?.(props) })
@@ -191,7 +196,7 @@ export default function CenterList({
       }
       return items
     },
-    [isAdmin, canDeactivate, onEdit, onViewMap, onAddRooms, onDeactivate]
+    [isAdmin, canDeactivate, onEdit, onViewMap, onAddRooms, onDeactivate, onPlaceOnMap]
   )
 
   return (

@@ -28,6 +28,19 @@ export function centerNeedsMapping(center) {
   return center.has_map === false || center.has_map === undefined
 }
 
+export function isCenterMapped(item) {
+  if (!item) return false
+  const geom = item.geometry || item.geom
+  if (geom && Array.isArray(geom.coordinates) && geom.coordinates.length > 0) {
+    return true
+  }
+  const props = item.properties || item
+  if (props.has_map !== undefined) {
+    return Boolean(props.has_map)
+  }
+  return false
+}
+
 export function countVulnerable(families = []) {
   return families.filter((fam) => {
     const needs = Array.isArray(fam.special_needs) ? fam.special_needs : []

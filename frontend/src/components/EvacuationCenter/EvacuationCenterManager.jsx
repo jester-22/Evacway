@@ -805,7 +805,7 @@ export default function EvacuationCenterManager({
           canDeactivate={canDeactivate}
           onPlaceOnMap={() => {
             const cId = selectedCenter?.id || selectedCenter?.properties?.id;
-            navigate(`${mapBasePath}?center=${cId}`);
+            navigate(`${mapBasePath}?center=${cId}&mode=place`);
           }}
         />
       ) : (
@@ -822,7 +822,6 @@ export default function EvacuationCenterManager({
           }}
           onAddRooms={() => {
             setRoomModalMode("add");
-
             setError("");
           }}
           onRowOpen={(feature) => {
@@ -830,6 +829,10 @@ export default function EvacuationCenterManager({
             setCenterSection("overview");
           }}
           onDeactivate={(f) => confirmToggleCenterActive(f)}
+          onPlaceOnMap={(f) => {
+            const cId = f.properties?.id ?? f.id;
+            navigate(`${mapBasePath}?center=${cId}&mode=place`);
+          }}
         />
       )}
 

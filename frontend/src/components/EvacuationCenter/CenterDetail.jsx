@@ -12,18 +12,16 @@ import { useAuth } from '../../context/AuthContext'
 import { useCenterDetails } from '../../hooks/useEvacuationQueries'
 import {
   centerStatus,
-  centerNeedsMapping,
-  useEscapeKey,
   CENTER_TABS,
-  MAPPING_BANNER_STORAGE_KEY,
   formatBarangays,
   plusN,
   countVulnerable,
   vulnerableBreakdown,
-  statusVariant,
 } from './utils'
 import { StatusBadge, EmptyState } from './CenterList'
 import { FloatingMenuTrigger } from './FloatingMenu'
+import MappingBanner from './MappingBanner'
+import ReadinessChecklist from './ReadinessChecklist'
 import './CenterDetail.css'
 
 function ConfirmDialog({
@@ -442,53 +440,6 @@ function KpiCardShared({ label, value, helper, percent, barVariant = 'brand', cl
     </div>
   )
 }
-export function MappingBanner({ center, onPlaceOnMap, onDismiss, storageKey }) {
-  const key = storageKey || (center?.id ? `evacway:dismissed-mapping-banner-${center.id}` : 'evacway:dismissed-mapping-banner')
-
-  const [dismissed, setDismissed] = useState(() => {
-    try {
-      return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1'
-    } catch {
-      return false
-    }
-  })
-
-  if (!center || !centerNeedsMapping(center) || dismissed) return null
-
-  const handleDismiss = () => {
-    setDismissed(true)
-    try {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(key, '1')
-      }
-    } catch {
-      // localStorage unavailable or quota exceeded — dismissal won't persist, banner stays dismissible in-session
-    }
-    onDismiss?.()
-  }
-
-  return (
-    <div className="ds-banner ds-banner--info" role="status" aria-label="Mapping notice">
-      <FontAwesomeIcon icon={faMapPin} size="xs" className="ds-banner__icon" />
-      <div className="ds-banner__content">
-        <p className="ds-banner__title" style={{ margin: 0, fontWeight: '600' }}>
-          This center isn't on the map yet
-        </p>
-        <p className="ds-banner__text" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>
-          Place it on the map so staff can route families here.
-        </p>
-      </div>
-      <div className="ec-banner-actions">
-        <button type="button" className="ds-btn ds-btn--primary ds-btn--sm" onClick={() => { onPlaceOnMap?.() }}>
-          <FontAwesomeIcon icon={faMapPin} size="xs" /> Place on map
-        </button>
-        <button type="button" className="ds-btn ds-btn--ghost ds-btn--sm" onClick={handleDismiss}>
-          <FontAwesomeIcon icon={faXmark} size="xs" />
-        </button>
-      </div>
-    </div>
-  )
-}
 export function SectionTabs({ activeKey, counts = {}, onSelect, className = '' }) {
   const keys = CENTER_TABS.map((t) => t.key)
 
@@ -604,16 +555,6 @@ export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, o
 
   const breakdown = Array.isArray(center.barangay_breakdown) ? center.barangay_breakdown : []
 
-  const readinessItems = [
-    { key: 'mapped', label: 'Placed on the map', ok: Boolean(center.has_map), action: onPlaceOnMap, actionLabel: 'Place on map' },
-    { key: 'rooms', label: 'Rooms added', ok: Boolean(center.building_count || rooms.length > 0), action: onAddRooms, actionLabel: 'Add room' },
-    { key: 'entrance', label: 'Entrance point set', ok: Boolean(center.entrancePoint || center.has_map), action: onEdit, actionLabel: 'Set entrance' },
-    { key: 'contact', label: 'Contact number', ok: Boolean(center.contact_number), action: onEdit, actionLabel: 'Edit' },
-    { key: 'accessibility', label: 'Accessibility info', ok: Boolean(center.accessibility_notes), action: onEdit, actionLabel: 'Edit' },
-  ]
-
-  const readyCount = readinessItems.filter((item) => item.ok).length
-
   const hasVulnData = Array.isArray(centerFamilies) && centerFamilies.length > 0
   const vulnTotal = hasVulnData ? countVulnerable(centerFamilies) : 0
   const vulnBreakdown = hasVulnData ? vulnerableBreakdown(centerFamilies) : {}
@@ -642,25 +583,21 @@ export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, o
         </div>
       </div>
       <div className="ec-col-right">
-        <div className="ds-card ec-readiness-card">
-          <div className="ec-overview-title-row">
-            <h2>Readiness checklist</h2>
-          </div>
-          <p className="ec-readiness-count">{readyCount} of 5 ready</p>
-          {readinessItems.map((item) => (
-            <div key={item.key} className="ec-readiness-item" role="listitem">
-              <span className={`ec-readiness-icon ds-badge ds-badge--${item.ok ? 'success' : 'warning'}`}>
-                {item.ok ? <FontAwesomeIcon icon={faCheck} size="xs" /> : <FontAwesomeIcon icon={faTriangleExclamation} size="xs" />}
-              </span>
-              <span className="ec-readiness-label">{item.label}</span>
-            </div>
-          ))}
-        </div>
+        <ReadinessChecklist
+          center={center}
+          onPlaceOnMap={onPlaceOnMap}
+          onAddRooms={onAddRooms}
+          onSetEntrance={onEdit}
+          onEditContact={onEdit}
+          onEditAccessibility={onEdit}
+        />
       </div>
     </div>
   )
 }
 export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding, onAddRoom, onEditRoom, onViewRoomMap, onLinkRoom, onDeleteRoom }) {
+  const isSingleVenue = center?.center_type === 'single_venue'
+
   // Group rooms by building_id (compare as strings), rooms without building_id go to "Unassigned"
   const groups = useMemo(() => {
     const buildingMap = new Map();
@@ -690,19 +627,27 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
       <div className="ec-structure-header">
         <h2>Center Structure</h2>
         <div className="ec-structure-actions">
-          {onAddBuilding && (
+          {!isSingleVenue && onAddBuilding && (
             <button type="button" className="ds-btn ds-btn--secondary" onClick={onAddBuilding}>
               <FontAwesomeIcon icon={faBuilding} size="xs" style={{ marginRight: 'var(--space-1)' }} />
               Add building
             </button>
           )}
-          <button type="button" className="ds-btn ds-btn--primary" onClick={onAddRoom}>
-            <FontAwesomeIcon icon={faPlus} size="xs" style={{ marginRight: 'var(--space-1)' }} />
-            Add room
-          </button>
+          {!isSingleVenue && onAddRoom && (
+            <button type="button" className="ds-btn ds-btn--primary" onClick={onAddRoom}>
+              <FontAwesomeIcon icon={faPlus} size="xs" style={{ marginRight: 'var(--space-1)' }} />
+              Add room
+            </button>
+          )}
         </div>
       </div>
-      {rooms.length === 0 && buildings.length === 0 ? (
+      {isSingleVenue ? (
+        <EmptyState
+          icon={faBuilding}
+          title="Single venue"
+          text="This center is a single venue (chapel, plaza, covered court). No buildings or rooms are required."
+        />
+      ) : rooms.length === 0 && buildings.length === 0 ? (
         <EmptyState icon={faBuilding} title="No rooms yet" text="Add a building, then add rooms to it." />
       ) : (
         <div className="ec-structure-groups">

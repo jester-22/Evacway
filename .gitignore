@@ -4,3 +4,5 @@ token.json
 *.db
 frontend/*screenshots*/
 frontend/*.cjs
+TEST_HANDOFF_REPORT.md
+CLEANUP_ZZ_TEST_DATA.sql

@@ -2,7 +2,7 @@ import re
 import secrets
 
 from flask import Blueprint, current_app, request, jsonify
-from models import db, User, SystemLog
+from models import db, User, ResidentAccount, SystemLog
 from werkzeug.security import check_password_hash, generate_password_hash
 from flask_jwt_extended import get_jwt_identity
 from sqlalchemy import func
@@ -68,6 +68,11 @@ def update_my_profile():
         User.id != user.id,
     ).first()
     if duplicate:
+        return jsonify({'error': 'A user with this email already exists'}), 409
+    if ResidentAccount.query.filter(
+        func.lower(ResidentAccount.email) == email,
+        ResidentAccount.is_active == True
+    ).first():
         return jsonify({'error': 'A user with this email already exists'}), 409
 
     user.name = name
@@ -146,6 +151,11 @@ def update_user(user_id):
     ).first()
     if duplicate:
         return jsonify({'error': 'A user with this email already exists'}), 409
+    if ResidentAccount.query.filter(
+        func.lower(ResidentAccount.email) == email,
+        ResidentAccount.is_active == True
+    ).first():
+        return jsonify({'error': 'A user with this email already exists'}), 409
 
     user.name = name
     user.email = email
@@ -171,6 +181,11 @@ def check_user_email():
         return jsonify({"error": "Enter a valid email address"}), 400
 
     exists = User.query.filter(func.lower(User.email) == email).first() is not None
+    if not exists:
+        exists = ResidentAccount.query.filter(
+            func.lower(ResidentAccount.email) == email,
+            ResidentAccount.is_active == True
+        ).first() is not None
     return jsonify({"exists": exists})
 
 
@@ -190,6 +205,11 @@ def create_user():
         return jsonify({"error": "Enter a valid email address"}), 400
 
     if User.query.filter(func.lower(User.email) == email).first():
+        return jsonify({"error": "A user with this email already exists"}), 409
+    if ResidentAccount.query.filter(
+        func.lower(ResidentAccount.email) == email,
+        ResidentAccount.is_active == True
+    ).first():
         return jsonify({"error": "A user with this email already exists"}), 409
 
     new_user = User(

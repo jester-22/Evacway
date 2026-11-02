@@ -23,6 +23,7 @@ import {
 import "./Sidebar.css";
 import NotificationCenter from "./NotificationCenter";
 import { useAuth } from "../../context/AuthContext";
+import { api } from "../../services/api";
 
 const NAV_SECTIONS = [
   {
@@ -75,6 +76,12 @@ const NAV_SECTIONS = [
     title: "System",
     items: [
       {
+        key: "registrations",
+        label: "Resident Registrations",
+        icon: faUsers,
+        roles: ["admin", "lgu_personnel"],
+      },
+      {
         key: "users",
         label: "Users",
         icon: faUsers,
@@ -108,6 +115,7 @@ function Sidebar({
   const role = user?.role;
   const { updateUser } = useAuth();
   const navigate = useNavigate();
+  const [pendingRegistrationCount, setPendingRegistrationCount] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -144,6 +152,25 @@ function Sidebar({
   const activeTabObj = availableTabs.find((t) => t.key === tab) || availableTabs[0];
 
   useEffect(() => () => window.clearTimeout(logoutTimer.current), []);
+
+  useEffect(() => {
+    if (!(["admin", "lgu_personnel"].includes(role))) return undefined;
+    let active = true;
+    const refreshPendingCount = async () => {
+      try {
+        const result = await api.getResidentRegistrations({ status: "pending" });
+        if (active) setPendingRegistrationCount(result.count || 0);
+      } catch {
+        if (active) setPendingRegistrationCount(0);
+      }
+    };
+    refreshPendingCount();
+    const interval = window.setInterval(refreshPendingCount, 60000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [role]);
 
   // Close drawer on Escape key
   useEffect(() => {
@@ -617,7 +644,10 @@ function Sidebar({
               <div className="sidebar-section-items">
                 {section.items.map((item) => {
                   const isCentersTab = item.key === "centers";
-                  const showBadge = isCentersTab && unmappedCentersCount > 0;
+                  const isRegistrationsTab = item.key === "registrations";
+                  const badgeCount = isRegistrationsTab ? pendingRegistrationCount : unmappedCentersCount;
+                  const showBadge = (isCentersTab || isRegistrationsTab) && badgeCount > 0;
+                  const badgeDescription = isRegistrationsTab ? `${badgeCount} pending registrations` : `${badgeCount} unmapped`;
                   return (
                     <button
                       key={item.key}
@@ -626,15 +656,15 @@ function Sidebar({
                         setDrawerOpen(false);
                       }}
                       title={item.label}
-                      aria-label={showBadge ? `${item.label}, ${unmappedCentersCount} unmapped` : item.label}
+                      aria-label={showBadge ? `${item.label}, ${badgeDescription}` : item.label}
                       aria-current={tab === item.key ? "page" : undefined}
                       className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
                     >
                       <FontAwesomeIcon icon={item.icon} />
                       <span>{item.label}</span>
                       {showBadge && (
-                        <span className="sidebar-tab-badge" aria-label={`${unmappedCentersCount} centers not mapped`}>
-                          {unmappedCentersCount}
+                          <span className="sidebar-tab-badge" aria-label={badgeDescription}>
+                          {badgeCount}
                         </span>
                       )}
                     </button>
@@ -727,21 +757,24 @@ function Sidebar({
               <div className="sidebar-section-items">
                 {section.items.map((item) => {
                   const isCentersTab = item.key === "centers";
-                  const showBadge = isCentersTab && unmappedCentersCount > 0;
+                  const isRegistrationsTab = item.key === "registrations";
+                  const badgeCount = isRegistrationsTab ? pendingRegistrationCount : unmappedCentersCount;
+                  const showBadge = (isCentersTab || isRegistrationsTab) && badgeCount > 0;
+                  const badgeDescription = isRegistrationsTab ? `${badgeCount} pending registrations` : `${badgeCount} unmapped`;
                   return (
                     <button
                       key={item.key}
                       onClick={() => setTab(item.key)}
                       title={item.label}
-                      aria-label={showBadge ? `${item.label}, ${unmappedCentersCount} unmapped` : item.label}
+                      aria-label={showBadge ? `${item.label}, ${badgeDescription}` : item.label}
                       aria-current={tab === item.key ? "page" : undefined}
                       className={`sidebar-tab ${tab === item.key ? "sidebar-tab-active" : ""}`}
                     >
                       <FontAwesomeIcon icon={item.icon} />
                       <span>{item.label}</span>
                       {showBadge && (
-                        <span className="sidebar-tab-badge" aria-label={`${unmappedCentersCount} centers not mapped`}>
-                          {unmappedCentersCount}
+                          <span className="sidebar-tab-badge" aria-label={badgeDescription}>
+                          {badgeCount}
                         </span>
                       )}
                     </button>

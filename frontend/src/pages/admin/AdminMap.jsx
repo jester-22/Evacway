@@ -67,6 +67,7 @@ import CenterPlacementFlow, { polygonToPoints } from "../../components/CenterPla
 import RoomDetailsModal from "../../components/EvacuationCenter/RoomDetailsModal";
 import BuildingDetailsModal from "../../components/BuildingDetailsModal/BuildingDetailsModal";
 import { displayEntityName } from "../../utils/displayEntityName";
+import { snapLngLatToPolygonEdge } from "../../utils/polygonSnap";
 import "../../components_css/AdminMap.css";
 
 function naturalCompare(a, b) {
@@ -894,12 +895,15 @@ export default function AdminMap() {
       setBuildingEditBoundaryError(null);
       // Set selectedCenter from refetched centers list by id (never from response copy)
       const selCenterId = selectedCenter?.id ?? selectedCenter?.properties?.id;
-      if (selCenterId && centers?.features) {
-        const match = centers.features.find((c) => {
-          const cid = c.properties?.id ?? c.id;
-          return String(cid) === String(selCenterId);
-        });
-        if (match) setSelectedCenter(match);
+      if (selCenterId) {
+        const refetchedCenters = queryClient.getQueryData(queryKeys.evacuationCenters(true));
+        if (refetchedCenters?.features) {
+          const match = refetchedCenters.features.find((c) => {
+            const cid = c.properties?.id ?? c.id;
+            return String(cid) === String(selCenterId);
+          });
+          if (match) setSelectedCenter(match);
+        }
       }
     } catch (err) {
       console.error("Failed to save building outline:", err);
@@ -1211,12 +1215,13 @@ export default function AdminMap() {
       setMapRoomsTab("buildings");
       setRedrawingBuildingId(bId);
       setIsDrawingBuilding(true);
-      setNewBuildingPoints([]);
+      // Initialize with existing polygon points so vertex handles appear for editing
+      setNewBuildingPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
       // Hide the saved building outline during redraw
-      
-      
-      
-      
+
+
+
+
     } else {
       setBuildingModalOpen(true);
     }
@@ -1360,10 +1365,11 @@ export default function AdminMap() {
     setEditingCenter(center);
     setSelectedCenter(center);
     setFootprintPoints([]);
-    setCenterEditOriginalPoints(polygonToPoints(center.geometry));
+    const originalPoints = polygonToPoints(center.geometry);
+    setCenterEditOriginalPoints(originalPoints);
 
     // Hide the saved center outline during redraw
-    if (centerEditOriginalPoints.length >= 3) {
+    if (originalPoints.length >= 3) {
       setRedrawingCenterId(centerId);
       
       
@@ -1523,14 +1529,19 @@ export default function AdminMap() {
       setCenterEditOriginalEntrances(savedEntrances);
       const footprint = footprintPoints;
       let removedCount = 0;
-      const filtered = savedEntrances.filter((ent) => {
-        const isInside = isPointInOrNearPolygon(
+      // Re-snap each entrance onto the (possibly edited) outline; drop ones now > 15 m away
+      const filtered = [];
+      savedEntrances.forEach((ent) => {
+        const snapped = snapLngLatToPolygonEdge(
           { lng: ent.lng ?? ent.longitude, lat: ent.lat ?? ent.latitude },
           footprint,
           15
         );
-        if (!isInside) removedCount++;
-        return isInside;
+        if (!snapped) {
+          removedCount++;
+          return;
+        }
+        filtered.push({ ...ent, lng: snapped.lng, lat: snapped.lat });
       });
       setEntrancePoints(filtered);
       if (removedCount > 0) {
@@ -1608,8 +1619,9 @@ export default function AdminMap() {
     setEditingCenter(null);
     setPanelCollapsed(false);
     // Set selectedCenter from refetched centers list by id (never from response copy)
-    if (centers?.features) {
-      const match = centers.features.find((c) => {
+    const refetchedCenters = queryClient.getQueryData(queryKeys.evacuationCenters(true));
+    if (refetchedCenters?.features) {
+      const match = refetchedCenters.features.find((c) => {
         const cid = c.properties?.id ?? c.id;
         return String(cid) === String(centerId);
       });
@@ -2455,8 +2467,9 @@ export default function AdminMap() {
                       setBuildingEditOriginalPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
                       setBuildingEditUndoStack([]);
                       setRedrawingBuildingId(bDetailId);
-                      setNewBuildingPoints([]);
-                      
+                      // Initialize with existing polygon points so vertex handles appear for editing
+                      setNewBuildingPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
+
                     }}
                   >
                     <FontAwesomeIcon icon={faArrowsRotate} />
@@ -4138,11 +4151,11 @@ export default function AdminMap() {
                           setBuildingEditOriginalPoints(points);
                           // Clear undo stack
                           setBuildingEditUndoStack([]);
-                          // Start with ZERO points - never preload saved corners
-                          setNewBuildingPoints([]);
+                          // Load existing polygon points so vertex handles appear for editing
+                          setNewBuildingPoints(points.length >= 3 ? points : []);
                           setRedrawingBuildingId(bId);
                           setIsDrawingBuilding(true);
-                          
+
                           handleCloseCenterModal();
                         } else {
                           // Map existing unmapped building polygon (updates existing building, never creates new)
@@ -4464,8 +4477,11 @@ export default function AdminMap() {
                 onMapClick={(latlng) => {
                   if (isPlacingRoom) {
                     handleMapClickForRoom(latlng);
-                  } else if (isDrawingBuilding && (!redrawingBuildingId || newBuildingPoints.length === 0 || buildingEditOriginalPoints.length === 0)) {
-                    // Add points on click in "add new building" mode or when mapping an unmapped building
+                  } else if (isDrawingBuilding) {
+                    // Allow adding points by clicking in ALL building drawing modes:
+                    // - Adding a new building
+                    // - Mapping an unmapped building
+                    // - Editing an existing building (redrawingBuildingId is set)
                     setNewBuildingPoints((pts) => [...pts, latlng]);
                   }
                 }}
@@ -4520,6 +4536,78 @@ export default function AdminMap() {
               </div>
             )}
 
+            {/* Building edit toolbar (full-screen like center edit) */}
+            {isDrawingBuilding && redrawingBuildingId && (
+              <div className="admin-map-building-edit-bar" role="toolbar" aria-label="Building edit actions">
+                <div className="admin-map-building-edit-title">
+                  <FontAwesomeIcon icon={faArrowsRotate} />
+                  <span>Editing {selectedBuildingDetail?.properties?.name || "Building"}</span>
+                </div>
+                {buildingEditBoundaryError && (
+                  <div className="admin-map-building-edit-error" role="alert">
+                    <FontAwesomeIcon icon={faCircleExclamation} />
+                    <span>{buildingEditBoundaryError}</span>
+                  </div>
+                )}
+                <div className="admin-map-building-edit-actions">
+                  <button
+                    type="button"
+                    className="admin-map-btn admin-map-btn-secondary"
+                    onClick={handleUndoBuildingEdit}
+                    disabled={buildingEditUndoStack.length === 0}
+                    title="Undo last change"
+                    aria-label="Undo"
+                  >
+                    <FontAwesomeIcon icon={faRotateLeft} />
+                    <span>Undo</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-map-btn admin-map-btn-secondary"
+                    onClick={handleResetBuildingEdit}
+                    disabled={buildingEditOriginalPoints.length === 0}
+                    title="Reset to original outline"
+                    aria-label="Reset"
+                  >
+                    <FontAwesomeIcon icon={faArrowLeft} />
+                    <span>Reset</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-map-btn admin-map-btn-secondary"
+                    onClick={handleRedrawBuildingEdit}
+                    title="Redraw from scratch"
+                    aria-label="Redraw"
+                  >
+                    <FontAwesomeIcon icon={faTrashCan} />
+                    <span>Redraw</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-map-btn admin-map-btn-primary"
+                    onClick={handleSaveBuildingOutline}
+                    disabled={newBuildingPoints.length < 3 || isSavingBuilding}
+                    title="Save building outline"
+                    aria-label="Save"
+                  >
+                    <FontAwesomeIcon icon={faCheck} />
+                    <span>{isSavingBuilding ? "Saving..." : "Save"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-map-btn admin-map-btn-danger"
+                    onClick={handleCancelDrawingBuilding}
+                    disabled={isSavingBuilding}
+                    title="Cancel editing"
+                    aria-label="Cancel"
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                    <span>Cancel</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Room placement toast (e.g. click outside outline) */}
             {placementToast && !isMapping && (
               <div className="admin-map-floating-toast" role="alert">
@@ -4567,7 +4655,7 @@ export default function AdminMap() {
           {/* ---------------------------------------------------------
               DESKTOP FLOATING PANEL (Width 360px, left 16px, top 16px)
               --------------------------------------------------------- */}
-          {!isMobile && !panelCollapsed && !isMapping && (
+          {!isMobile && !panelCollapsed && !isMapping && !isDrawingBuilding && (
             <aside
               className="admin-map-floating-panel"
               aria-label="Evacuation Centers Panel"
@@ -4632,7 +4720,7 @@ export default function AdminMap() {
           {/* ---------------------------------------------------------
               MOBILE BOTTOM SHEET (Visible <= 768px: collapsed 120px, half, full)
               --------------------------------------------------------- */}
-          {isMobile && !isMapping && (
+          {isMobile && !isMapping && !isDrawingBuilding && (
             <section
               className={`admin-map-bottom-sheet is-open snap-${mobileSheetSnap}`}
               role="region"

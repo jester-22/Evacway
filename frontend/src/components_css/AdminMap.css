@@ -1470,6 +1470,196 @@
 }
 
 /* ---------------------------------------------------------
+   BUILDING EDIT TOOLBAR (Full-screen building polygon edit)
+   --------------------------------------------------------- */
+.admin-map-building-edit-bar {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #0f172a;
+  color: #ffffff;
+  padding: 10px 16px;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.35);
+  font-size: 13.5px;
+  max-width: min(850px, calc(100% - 32px));
+  box-sizing: border-box;
+  animation: buildingEditBarSlideDown 150ms ease-out;
+}
+
+@media (min-width: 769px) {
+  /* Default when panel is collapsed: centered leaving room for top-right layers */
+  .admin-map-building-edit-bar {
+    left: calc(50% - 40px);
+    transform: translateX(-50%);
+    max-width: min(820px, calc(100% - 180px));
+  }
+
+  /* When side panel is open, center over map area between panel (344px) and Layers button (140px) */
+  .admin-map-page:not(.is-panel-collapsed) .admin-map-building-edit-bar {
+    left: calc(344px + (100% - 344px - 140px) / 2);
+    transform: translateX(-50%);
+    max-width: min(720px, calc(100% - 344px - 150px));
+  }
+}
+
+@media (max-width: 768px) {
+  /* Mobile: below top buttons, full width minus margins */
+  .admin-map-building-edit-bar {
+    top: 64px;
+    left: 12px;
+    right: 12px;
+    transform: none;
+    width: auto;
+    max-width: calc(100% - 24px);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+
+  .admin-map-building-edit-actions {
+    justify-content: flex-end;
+  }
+}
+
+@keyframes buildingEditBarSlideDown {
+  from {
+    transform: translate(-50%, -10px);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+.admin-map-building-edit-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.admin-map-building-edit-title svg {
+  font-size: 16px;
+}
+
+.admin-map-building-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.admin-map-building-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 120ms ease;
+  white-space: nowrap;
+  min-height: 36px;
+}
+
+.admin-map-building-edit-btn:hover {
+  transform: translateY(-1px);
+}
+
+.admin-map-building-edit-btn:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.admin-map-building-edit-btn.is-primary {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #3b82f6;
+}
+
+.admin-map-building-edit-btn.is-primary:hover {
+  background: #1d4ed8;
+  border-color: #2563eb;
+}
+
+.admin-map-building-edit-btn.is-secondary {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.admin-map-building-edit-btn.is-secondary:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.admin-map-building-edit-btn.is-danger {
+  background: #dc2626;
+  color: #ffffff;
+  border-color: #ef4444;
+}
+
+.admin-map-building-edit-btn.is-danger:hover {
+  background: #b91c1c;
+  border-color: #dc2626;
+}
+
+.admin-map-building-edit-btn.is-ghost {
+  background: transparent;
+  color: #93c5fd;
+  border-color: transparent;
+}
+
+.admin-map-building-edit-btn.is-ghost:hover {
+  background: rgba(147, 197, 253, 0.15);
+  color: #bfdbfe;
+}
+
+.admin-map-building-edit-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(220, 38, 38, 0.9);
+  color: #ffffff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  margin-top: 8px;
+  animation: buildingEditErrorFade 150ms ease-out;
+}
+
+@media (max-width: 768px) {
+  .admin-map-building-edit-error {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@keyframes buildingEditErrorFade {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------------
    MAP ROOMS PANEL VIEW (Inside Desktop Side Panel & Mobile Sheet)
    --------------------------------------------------------- */
 .admin-map-rooms-panel-view {

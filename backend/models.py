@@ -81,6 +81,14 @@ class User(BaseModel):
         db.String(20)
     )
 
+    resident_id = db.Column(
+        db.Integer,
+        db.ForeignKey('residents.id', ondelete='SET NULL'),
+        unique=True,
+        nullable=True,
+        index=True
+    )
+
     role = db.Column(
         db.String(20),
         nullable=False
@@ -96,17 +104,28 @@ class User(BaseModel):
         default=philippines_now
     )
 
+    last_login_at = db.Column(
+        db.DateTime,
+        nullable=True
+    )
+
     def to_dict(self):
         return {
             "id": self.id,
             "name": self.name,
             "email": self.email,
             "contact_number": self.contact_number,
+            "resident_id": self.resident_id,
             "role": self.role,
             "is_active": self.is_active,
             "created_at": (
                 self.created_at.isoformat()
                 if self.created_at
+                else None
+            ),
+            "last_login_at": (
+                self.last_login_at.isoformat()
+                if self.last_login_at
                 else None
             )
         }
@@ -932,6 +951,146 @@ class Resident(BaseModel):
 
 
 # ---------------------------------------------------------
+# RESIDENT ACCOUNTS
+# ---------------------------------------------------------
+class ResidentAccount(BaseModel):
+    __tablename__ = 'resident_accounts'
+
+    id = db.Column(
+        db.Integer,
+        primary_key=True
+    )
+
+    resident_id = db.Column(
+        db.Integer,
+        db.ForeignKey('residents.id', ondelete='CASCADE'),
+        unique=True,
+        nullable=False
+    )
+
+    email = db.Column(
+        db.String(120),
+        nullable=False
+    )
+
+    password_hash = db.Column(
+        db.String(255),
+        nullable=False
+    )
+
+    is_active = db.Column(
+        db.Boolean,
+        default=True,
+        nullable=False
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        default=philippines_now
+    )
+
+    updated_at = db.Column(
+        db.DateTime,
+        default=philippines_now,
+        onupdate=philippines_now
+    )
+
+    last_login_at = db.Column(
+        db.DateTime,
+        nullable=True
+    )
+
+    resident = db.relationship(
+        'Resident',
+        backref=db.backref('account', uselist=False, lazy=True)
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "resident_id": self.resident_id,
+            "email": self.email,
+            "is_active": self.is_active,
+            "created_at": (
+                self.created_at.isoformat()
+                if self.created_at
+                else None
+            ),
+            "updated_at": (
+                self.updated_at.isoformat()
+                if self.updated_at
+                else None
+            ),
+            "last_login_at": (
+                self.last_login_at.isoformat()
+                if self.last_login_at
+                else None
+            )
+        }
+
+    def __repr__(self):
+        return f"<ResidentAccount {self.email} (resident={self.resident_id})>"
+
+
+# ---------------------------------------------------------
+# RESIDENT REGISTRATION REQUESTS
+# ---------------------------------------------------------
+class ResidentRegistrationRequest(BaseModel):
+    __tablename__ = 'resident_registration_requests'
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected')",
+            name='ck_resident_registration_request_status'
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    first_name = db.Column(db.String(100), nullable=False)
+    middle_name = db.Column(db.String(100))
+    last_name = db.Column(db.String(100), nullable=False)
+    birthdate = db.Column(db.Date, nullable=False)
+    barangay = db.Column(db.String(100), nullable=False)
+    address = db.Column(db.String(255), nullable=False)
+    contact_number = db.Column(db.String(20), nullable=False)
+    email = db.Column(db.String(120), nullable=False, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    matched_resident_id = db.Column(
+        db.Integer,
+        db.ForeignKey('residents.id', ondelete='SET NULL')
+    )
+    reviewed_by = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL')
+    )
+    reviewed_at = db.Column(db.DateTime)
+    rejection_reason = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=philippines_now, nullable=False)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "first_name": self.first_name,
+            "middle_name": self.middle_name,
+            "last_name": self.last_name,
+            "full_name": " ".join(
+                part for part in (self.first_name, self.middle_name, self.last_name) if part
+            ),
+            "birthdate": self.birthdate.isoformat() if self.birthdate else None,
+            "barangay": self.barangay,
+            "address": self.address,
+            "contact_number": self.contact_number,
+            "email": self.email,
+            "status": self.status,
+            "matched_resident_id": self.matched_resident_id,
+            "reviewed_by": self.reviewed_by,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+            "rejection_reason": self.rejection_reason,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ---------------------------------------------------------
 # EVACUATION CENTER BUILDINGS
 #
 # Physical buildings within an evacuation center, stored as polygons.
@@ -979,9 +1138,10 @@ class EvacuationCenterBuilding(BaseModel):
         nullable=True
     )
 
+    # Can be NULL until building is placed on map.
     geom = db.Column(
         Geometry('POLYGON', srid=4326),
-        nullable=False
+        nullable=True
     )
 
     created_at = db.Column(
@@ -1017,6 +1177,7 @@ class EvacuationCenterBuilding(BaseModel):
             "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "is_mapped": self.geom is not None,
         }
 
     def __repr__(self):

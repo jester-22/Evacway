@@ -21,6 +21,7 @@ from routes.families import families_bp
 from routes.notifications import notifications_bp
 from routes.rescue_requests import rescue_bp
 from routes.buildings import buildings_bp
+from routes.resident_registrations import registrations_bp
 
 
 app = Flask(__name__)
@@ -78,6 +79,7 @@ app.register_blueprint(families_bp)
 app.register_blueprint(notifications_bp)
 app.register_blueprint(rescue_bp)
 app.register_blueprint(buildings_bp)
+app.register_blueprint(registrations_bp)
 
 
 # =========================================================

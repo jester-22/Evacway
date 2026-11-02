@@ -14,11 +14,12 @@ import HazardReportReview from "../../components/HazardReportReview/HazardReport
 import BarangayManager from "../../components/BarangayManager/BarangayManager";
 import RescueRequestManager from "../../components/RescueRequestManager/RescueRequestManager";
 import SystemAndLogs from "../../components/ActivityLogs/SystemAndLogs";
+import ResidentRegistrations from "../../components/ResidentRegistrations/ResidentRegistrations";
 
 function LguDashboard() {
   const requestedTab = new URLSearchParams(location.search).get("tab");
   const notificationId = new URLSearchParams(location.search).get("notificationId");
-  const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "settings"].includes(requestedTab) ? requestedTab : "centers");
+  const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "registrations", "settings"].includes(requestedTab) ? requestedTab : "centers");
   const [flashNotice, setFlashNotice] = useState(location.state?.flashMessage || "");
   const [focusedReportId, setFocusedReportId] = useState(null);
   const [focusedRescueId, setFocusedRescueId] = useState(null);
@@ -64,7 +65,7 @@ function LguDashboard() {
       setFlashNotice("Admins only");
       setTab("centers");
       navigate("/lgu?tab=centers", { replace: true });
-    } else if (requestedTab && ["centers", "barangays", "reports", "rescue", "settings"].includes(requestedTab)) {
+    } else if (requestedTab && ["centers", "barangays", "reports", "rescue", "registrations", "settings"].includes(requestedTab)) {
       setTab(requestedTab);
     }
   }, [requestedTab, navigate]);
@@ -213,6 +214,8 @@ function LguDashboard() {
         {tab === "rescue" && (
           <RescueRequestManager key={focusedRescueId ?? "rescue-queue"} initialRequestId={focusedRescueId} onOpenMap={openMapLocation} />
         )}
+
+        {tab === "registrations" && <ResidentRegistrations />}
 
         {tab === "settings" && (
           <SystemAndLogs logs={logs} user={user} loading={logsQuery.isLoading} error={logsQuery.error?.message || ""} />

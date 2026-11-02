@@ -104,10 +104,11 @@ def get_center_buildings(center_id):
     raw_polys = {}
     for b in buildings:
         try:
-            poly = to_shape(b.geom)
-            if not poly.is_valid:
-                poly = poly.buffer(0)
-            raw_polys[b.id] = poly
+            if b.geom is not None:
+                poly = to_shape(b.geom)
+                if not poly.is_valid:
+                    poly = poly.buffer(0)
+                raw_polys[b.id] = poly
         except Exception:
             continue
 
@@ -126,10 +127,12 @@ def get_center_buildings(center_id):
         resolved_polys[b.id] = geom
 
     for b in buildings:
-        if b.id not in resolved_polys:
-            continue
-        poly = resolved_polys[b.id]
-        geom_dict = mapping(poly)
+        # Handle buildings with and without geometry
+        if b.id in resolved_polys:
+            poly = resolved_polys[b.id]
+            geom_dict = mapping(poly)
+        else:
+            geom_dict = None  # Building not yet mapped
 
         rooms = EvacuationCenterRoom.query.filter(
             EvacuationCenterRoom.building_id == b.id,
@@ -220,6 +223,7 @@ def get_center_buildings(center_id):
                 "fill_color": fill_color,
                 "outline_color": outline_color,
                 "rooms": rooms_summary,
+                "is_mapped": b.geom is not None,
             }
         })
 
@@ -278,9 +282,15 @@ def create_building(center_id):
 
     notes = data.get('notes')
 
+    # Geometry is optional - building can be created without location and mapped later
+    building_geom = None
     if geojson_geom and isinstance(geojson_geom, dict):
         try:
             poly_shape = shape(geojson_geom)
+            if not poly_shape.is_valid:
+                poly_shape = poly_shape.buffer(0)
+            if poly_shape.geom_type == 'Polygon' and not poly_shape.is_empty:
+                building_geom = from_shape(poly_shape, srid=4326)
         except Exception as e:
             return jsonify({"error": f"Invalid geometry: {str(e)}"}), 400
     elif raw_coords and isinstance(raw_coords, list):
@@ -291,20 +301,17 @@ def create_building(center_id):
             else:
                 coords_list = raw_coords
             poly_shape = Polygon(coords_list[0], coords_list[1:] if len(coords_list) > 1 else None)
+            if not poly_shape.is_valid:
+                poly_shape = poly_shape.buffer(0)
+            if poly_shape.geom_type == 'Polygon' and not poly_shape.is_empty:
+                building_geom = from_shape(poly_shape, srid=4326)
         except Exception as e:
             return jsonify({"error": f"Invalid polygon coordinates: {str(e)}"}), 400
-    else:
-        return jsonify({"error": "Polygon coordinates or geometry is required"}), 400
-
-    if not poly_shape.is_valid:
-        poly_shape = poly_shape.buffer(0)
-    if poly_shape.geom_type != 'Polygon' or poly_shape.is_empty:
-        return jsonify({"error": "A valid Polygon shape is required"}), 400
 
     new_building = EvacuationCenterBuilding(
         evacuation_center_id=center_id,
         name=name,
-        geom=from_shape(poly_shape, srid=4326),
+        geom=building_geom,
         max_rooms=max_rooms,
         floors=floors,
         status=status,

@@ -19,7 +19,8 @@ from models import (
     EvacuationCenterRoom,
     EvacuationAssignment,
     CenterBarangay,
-    SystemLog
+    SystemLog,
+    User,
 )
 
 from utils import role_required
@@ -2148,13 +2149,19 @@ def list_residents():
             )
         )
 
-    return jsonify([
+    linked_resident_ids = {
+        resident_id
+        for (resident_id,) in User.query.with_entities(User.resident_id).filter(
+            User.resident_id.isnot(None)
+        ).all()
+    }
+    result = []
+    for resident in residents:
+        resident_data = resident.to_dict()
+        resident_data["already_linked"] = resident.id in linked_resident_ids
+        result.append(resident_data)
 
-        resident.to_dict()
-
-        for resident in residents
-
-    ]), 200
+    return jsonify(result), 200
 
 
 # =========================================================
@@ -2501,4 +2508,4 @@ def autosuggest_residents():
 
     return jsonify({
         "suggestions": suggestions[:5]
-    }), 200
+    }), 200

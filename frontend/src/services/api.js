@@ -60,6 +60,38 @@ export const api = {
       }),
     }),
 
+  submitResidentRegistration: (payload) =>
+    request("/api/resident-registrations", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  getResidentRegistrations: ({ status = "pending", search = "" } = {}) => {
+    const params = new URLSearchParams({ status });
+    if (search.trim()) params.set("search", search.trim());
+    return request(`/api/resident-registrations?${params.toString()}`);
+  },
+
+  getResidentRegistrationMatches: (requestId) =>
+    request(`/api/resident-registrations/${requestId}/matches`),
+
+  approveResidentRegistration: (requestId, matchedResidentId) =>
+    request(`/api/resident-registrations/${requestId}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ matched_resident_id: matchedResidentId }),
+    }),
+
+  rejectResidentRegistration: (requestId, reason) =>
+    request(`/api/resident-registrations/${requestId}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+
+  resendResidentRegistrationEmail: (requestId) =>
+    request(`/api/resident-registrations/${requestId}/resend-email`, {
+      method: "POST",
+    }),
+
   requestPasswordReset: (email) =>
     request("/api/auth/password/forgot", {
       method: "POST",
@@ -323,6 +355,8 @@ export const api = {
           : ""
       }`
     ),
+
+  getPublicBarangays: () => request("/api/barangays/public"),
 
   findMyEvacuationCenter: (name) =>
     request(

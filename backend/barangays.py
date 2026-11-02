@@ -35,6 +35,18 @@ def _normalized_name_column():
     )
 
 
+@barangays_bp.route('/api/barangays/public', methods=['GET'])
+def get_public_barangays():
+    # Barangays are hard-deleted when retired, so persisted rows are current.
+    barangays = db.session.query(Barangay.id, Barangay.name).order_by(
+        Barangay.name.asc()
+    ).all()
+    return jsonify([
+        {"id": barangay_id, "name": barangay_name}
+        for barangay_id, barangay_name in barangays
+    ]), 200
+
+
 # =========================================================
 # GET ALL BARANGAYS
 # Counts are computed with grouped queries in total,
@@ -679,4 +691,4 @@ def get_barangay_families(barangay_id):
     ).all()
 
     from routes.families import _family_list_rows
-    return jsonify(_family_list_rows(families)), 200
+    return jsonify(_family_list_rows(families)), 200

@@ -51,6 +51,25 @@ import {
 } from "../../utils/mapBuildingLayers";
 import { polygonToPoints } from "../CenterPlacementFlow/CenterPlacementFlow";
 import { createVertexHandleMarkers, updateVertexHandleMarkers } from "../../utils/mapVertexHandles";
+import { snapToPolygonEdge } from "../../utils/polygonSnap";
+
+// Max screen distance (px) from the outline for an entrance click to count.
+const ENTRANCE_SNAP_TOLERANCE_PX = 14;
+
+/**
+ * Snaps a screen point to the footprint outline, in screen-pixel space.
+ * Returns the snapped { lng, lat } (ready to store) or null if beyond tolerance.
+ */
+function snapScreenPointToOutline(map, screenPoint, footprint, tolerancePx) {
+  if (!map || !footprint || footprint.length < 3) return null;
+  const ringPx = footprint.map((p) =>
+    map.project([Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)])
+  );
+  const snapped = snapToPolygonEdge({ x: screenPoint.x, y: screenPoint.y }, ringPx, tolerancePx);
+  if (!snapped) return null;
+  const ll = map.unproject([snapped.x, snapped.y]);
+  return { lng: ll.lng, lat: ll.lat };
+}
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -477,6 +496,12 @@ function DashboardMap({
   const drawModeRef = useRef(drawMode);
   drawModeRef.current = drawMode;
   const roomCursorMarkerRef = useRef(null);
+  const entranceCursorMarkerRef = useRef(null);
+  const entranceMarkersRef = useRef([]);
+  const entranceDragRef = useRef(onEntranceDrag);
+  entranceDragRef.current = onEntranceDrag;
+  const pendingFootprintRef = useRef(pendingFootprint);
+  pendingFootprintRef.current = pendingFootprint;
 
 
 
@@ -1309,9 +1334,16 @@ function DashboardMap({
       }
     }
 
-    // 5. Outline / Pending footprint
+    // 5. Outline / Pending footprint (only for non-mapping display; mapping uses draw-preview)
     try {
+      const isMappingStep =
+        drawMode === "footprint" ||
+        drawMode === "entrance" ||
+        drawMode === "confirm" ||
+        drawMode === "room";
+
       const isActive =
+        !isMappingStep &&
         (drawMode === "footprint" ||
           drawMode === "entrance" ||
           drawMode === "room") &&
@@ -2716,8 +2748,16 @@ function DashboardMap({
     /*
    * Draw-preview: GeoJSON source + layers for live footprint/outline drawing.
    * Replaces DOM-marker preview. One source "draw-preview" with line, fill and circle layers.
+   * Active in ALL mapping steps: footprint, entrance, confirm, room, and building redraw.
    */
   const drawPreviewRef = useRef({ sourceAdded: false, layersAdded: false });
+
+  // Determine if we're in any mapping step where the outline should be visible
+  const isMappingStep =
+    drawMode === "footprint" ||
+    drawMode === "entrance" ||
+    drawMode === "confirm" ||
+    drawMode === "room";
 
   function ensureDrawPreviewLayers(map) {
     if (!map || !map.getStyle()) return false;
@@ -2726,16 +2766,19 @@ function DashboardMap({
         map.addSource("draw-preview", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         drawPreviewRef.current.sourceAdded = true;
       }
+      // Line layer - base style (solid for entrance/confirm, will be updated per step)
       if (!map.getLayer("draw-preview-line")) {
         map.addLayer({ id: "draw-preview-line", type: "line", source: "draw-preview", slot: "top",
           filter: ["==", ["get", "kind"], "line"],
           paint: { "line-color": "#1d4ed8", "line-width": 3 } });
       }
+      // Fill layer
       if (!map.getLayer("draw-preview-fill")) {
         map.addLayer({ id: "draw-preview-fill", type: "fill", source: "draw-preview", slot: "top",
           filter: ["==", ["get", "kind"], "fill"],
           paint: { "fill-color": "#2563eb", "fill-opacity": 0.15 } });
       }
+      // Circle layer (corner dots)
       if (!map.getLayer("draw-preview-circle")) {
         map.addLayer({ id: "draw-preview-circle", type: "circle", source: "draw-preview", slot: "top",
           filter: ["==", ["get", "kind"], "point"],
@@ -2747,26 +2790,91 @@ function DashboardMap({
           } });
         drawPreviewRef.current.layersAdded = true;
       }
+      // Closing segment layer (dashed line from last point to first) - only for footprint step
+      if (!map.getLayer("draw-preview-closing")) {
+        map.addLayer({ id: "draw-preview-closing", type: "line", source: "draw-preview", slot: "top",
+          filter: ["==", ["get", "kind"], "closing"],
+          paint: { "line-color": "#1d4ed8", "line-width": 3, "line-dasharray": [4, 4] } });
+      }
       return true;
     } catch (e) { return false; }
   }
 
-  function rebuildDrawPreview(map, points) {
+  function updateDrawPreviewStyle(map, step) {
     if (!map || !map.getStyle()) return;
-    if (!ensureDrawPreviewLayers(map)) return;
+    try {
+      const isFootprint = step === "footprint";
+      const isEntranceOrConfirm = step === "entrance" || step === "confirm";
+      const isRoom = step === "room";
+
+      // Line: solid for all mapping steps (closing segment handles dashed preview in footprint step)
+      if (map.getLayer("draw-preview-line")) {
+        map.setPaintProperty("draw-preview-line", "line-width", 3);
+        map.setPaintProperty("draw-preview-line", "line-color", "#1d4ed8");
+      }
+
+      // Fill: light fill for all steps when polygon is closed (3+ points)
+      if (map.getLayer("draw-preview-fill")) {
+        map.setPaintProperty("draw-preview-fill", "fill-color", "#2563eb");
+        map.setPaintProperty("draw-preview-fill", "fill-opacity", 0.15);
+      }
+
+      // Circles: radius 4 for entrance/confirm/room (small corner dots), 6/8 for footprint
+      if (map.getLayer("draw-preview-circle")) {
+        if (isEntranceOrConfirm || isRoom) {
+          // Small corner dots: radius 4, white with #2563eb stroke (all same size)
+          map.setPaintProperty("draw-preview-circle", "circle-radius", 4);
+          map.setPaintProperty("draw-preview-circle", "circle-color", "#ffffff");
+          map.setPaintProperty("draw-preview-circle", "circle-stroke-color", "#2563eb");
+          map.setPaintProperty("draw-preview-circle", "circle-stroke-width", 2);
+        } else {
+          // Footprint step: larger dots, first point blue
+          map.setPaintProperty("draw-preview-circle", "circle-radius", ["case", ["==", ["get", "isFirst"], true], 8, 6]);
+          map.setPaintProperty("draw-preview-circle", "circle-color", ["case", ["==", ["get", "isFirst"], true], "#2563eb", "#ffffff"]);
+          map.setPaintProperty("draw-preview-circle", "circle-stroke-color", "#2563eb");
+          map.setPaintProperty("draw-preview-circle", "circle-stroke-width", 2);
+        }
+      }
+
+      // Closing segment: only visible in footprint step
+      if (map.getLayer("draw-preview-closing")) {
+        map.setLayoutProperty("draw-preview-closing", "visibility", isFootprint ? "visible" : "none");
+      }
+    } catch (e) {}
+  }
+
+  function rebuildDrawPreview(map, points, step) {
+    if (!map || !map.getStyle()) return;
+    // Ensure layers exist (create if missing, no-op if present)
+    ensureDrawPreviewLayers(map);
     const features = [];
     if (points && points.length > 0) {
+      // Main line. In the footprint step it's open (the dashed "closing" segment previews
+      // the last edge). In every later step the shape is finished, so close the ring.
+      const lineCoords = points.map((p) => [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)]);
+      if (step !== "footprint" && lineCoords.length >= 3) {
+        lineCoords.push(lineCoords[0]);
+      }
       features.push({
         type: "Feature", properties: { kind: "line" },
-        geometry: { type: "LineString",
-          coordinates: points.map((p) => [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)]) },
+        geometry: { type: "LineString", coordinates: lineCoords },
       });
+      // Closing segment (from last point to first) - only for footprint step
+      if (step === "footprint" && points.length >= 2) {
+        const coords = points.map((p) => [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)]);
+        features.push({
+          type: "Feature", properties: { kind: "closing" },
+          geometry: { type: "LineString", coordinates: [coords[coords.length - 1], coords[0]] },
+        });
+      }
+      // Fill (closed polygon) - when 3+ points (visible in ALL mapping steps)
       if (points.length >= 3) {
         const ring = points.map((p) => [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)]);
         ring.push(ring[0]);
         features.push({ type: "Feature", properties: { kind: "fill" },
           geometry: { type: "Polygon", coordinates: [ring] } });
       }
+      // Corner dots
       points.forEach((p, i) => {
         features.push({ type: "Feature", properties: { kind: "point", isFirst: i === 0 },
           geometry: { type: "Point",
@@ -2777,6 +2885,8 @@ function DashboardMap({
       const source = map.getSource("draw-preview");
       if (source) source.setData({ type: "FeatureCollection", features });
     } catch (e) {}
+    // Update styling based on step
+    updateDrawPreviewStyle(map, step);
   }
 
   function removeDrawPreview(map) {
@@ -2785,40 +2895,68 @@ function DashboardMap({
       if (map.getLayer("draw-preview-circle")) map.removeLayer("draw-preview-circle");
       if (map.getLayer("draw-preview-fill")) map.removeLayer("draw-preview-fill");
       if (map.getLayer("draw-preview-line")) map.removeLayer("draw-preview-line");
+      if (map.getLayer("draw-preview-closing")) map.removeLayer("draw-preview-closing");
       if (map.getSource("draw-preview")) map.removeSource("draw-preview");
     } catch (e) {}
     drawPreviewRef.current.sourceAdded = false;
     drawPreviewRef.current.layersAdded = false;
   }
 
+  // This effect manages the draw-preview lifecycle across mapping steps.
+  // It ensures the outline persists in ALL mapping steps (footprint, entrance, confirm, room)
+  // and only removes it when exiting mapping mode entirely (drawMode becomes "none").
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-    const isActive = drawMode === "footprint" && pendingFootprint && pendingFootprint.length > 0;
-    map.once("styledata", () => {
-      drawPreviewRef.current.sourceAdded = false;
-      drawPreviewRef.current.layersAdded = false;
+
+    // Only remove draw-preview when EXITING mapping mode entirely (drawMode becomes "none")
+    const wasMapping = drawPreviewRef.current.wasMapping ?? false;
+    const isMappingNow = isMappingStep;
+
+    // Track if we were in mapping mode before
+    drawPreviewRef.current.wasMapping = isMappingNow;
+
+    // If we just exited mapping mode, clean up
+    if (wasMapping && !isMappingNow) {
       removeDrawPreview(map);
-      ensureDrawPreviewLayers(map);
-      rebuildDrawPreview(map, isActive ? pendingFootprint : []);
-    });
-    if (!ensureDrawPreviewLayers(map)) {
-      const onIdle = () => {
-        ensureDrawPreviewLayers(map);
-        rebuildDrawPreview(map, isActive ? pendingFootprint : []);
-      };
-      map.once("idle", onIdle);
-      map.once("style.load", onIdle);
+      return;
     }
-    rebuildDrawPreview(map, isActive ? pendingFootprint : []);
-    return () => {
-      try { map.off("styledata", () => {}); } catch {}
-      removeDrawPreview(map);
-    };
+
+    // If we're in a mapping step, ensure layers exist and rebuild with current points + step
+    if (isMappingNow) {
+      const points = pendingFootprint && pendingFootprint.length > 0 ? pendingFootprint : [];
+
+      // Handle style changes: recreate layers and repaint data
+      const handleStyleData = () => {
+        drawPreviewRef.current.sourceAdded = false;
+        drawPreviewRef.current.layersAdded = false;
+        ensureDrawPreviewLayers(map);
+        rebuildDrawPreview(map, points, drawMode);
+      };
+      map.once("styledata", handleStyleData);
+
+      // Ensure layers exist now (or on next idle/style.load if style not ready)
+      if (!ensureDrawPreviewLayers(map)) {
+        const onIdle = () => {
+          ensureDrawPreviewLayers(map);
+          rebuildDrawPreview(map, points, drawMode);
+        };
+        map.once("idle", onIdle);
+        map.once("style.load", onIdle);
+      }
+
+      // Always rebuild with current step's styling
+      rebuildDrawPreview(map, points, drawMode);
+
+      return () => {
+        try { map.off("styledata", handleStyleData); } catch {}
+      };
+    }
+  }, [mapLoaded, drawMode, pendingFootprint, styleVersion]);
   // Apply/remove layer filters for hidden center/building during redraw
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.getStyle()) return;
+    if (!map || !mapLoaded || !map.getStyle()) return;
 
     // Center filter
     const centerFill = map.getLayer("evac-centers-fill");
@@ -2847,105 +2985,131 @@ function DashboardMap({
       if (bldHalo) map.setFilter("evacway-buildings-outline-halo", null);
       if (bldSymbol) map.setFilter("evacway-buildings-symbol", null);
     }
-  }, [hiddenCenterId, hiddenBuildingId]);
-
-  }, [mapLoaded, drawMode, pendingFootprint, styleVersion]);
+  }, [mapLoaded, styleVersion, hiddenCenterId, hiddenBuildingId]);
 
   /*
    * Pending entrances (only displayed when drawMode === "entrance" or "confirm")
    * In edit mode (editingCenter), markers are draggable to adjust entrance positions.
    */
+  // NOTE: These are DOM markers, so they do NOT depend on the style being loaded.
+  // Previously this effect bailed out on `!map.isStyleLoaded()`, which is false
+  // whenever tiles are still loading (e.g. right after a click / pan / zoom), so the
+  // entrance was added to state ("1 entrance") but no marker was ever drawn.
+  const hasEntranceDrag = Boolean(onEntranceDrag);
   useEffect(() => {
     const map = mapRef.current;
+    if (!map || !mapLoaded) return;
 
-    if (!map || !mapLoaded || !map.style || !map.isStyleLoaded()) return;
-
-    const oldMarkers = map.__evacwayPendingEntranceMarkers || [];
-    oldMarkers.forEach((marker) => {
-      marker.remove();
-    });
-    map.__evacwayPendingEntranceMarkers = [];
-
-    const isActive =
-      (drawMode === "entrance" || drawMode === "confirm") &&
-      pendingEntrances &&
+    const isEditMode = Boolean(editingCenter && hasEntranceDrag);
+    const isVisible =
+      (drawMode === "entrance" || drawMode === "confirm" || isEditMode) &&
+      Array.isArray(pendingEntrances) &&
       pendingEntrances.length > 0;
 
-    // In edit mode, we show entrances even in "footprint" step so they can be dragged
-    const isEditMode = editingCenter && onEntranceDrag;
+    const points = isVisible
+      ? pendingEntrances
+          .map((point, index) => ({
+            index,
+            lng: Number(point?.lng ?? point?.longitude),
+            lat: Number(point?.lat ?? point?.latitude),
+          }))
+          .filter((p) => Number.isFinite(p.lng) && Number.isFinite(p.lat))
+      : [];
 
-    if (isActive || isEditMode) {
-      const newMarkers = [];
-      pendingEntrances.forEach((point, index) => {
-        const lng = Number(point?.lng ?? point?.longitude);
-        const lat = Number(point?.lat ?? point?.latitude);
-        if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+    const existing = entranceMarkersRef.current;
+    const canReuse =
+      existing.length === points.length &&
+      existing.every((m, i) => m.__editMode === isEditMode && m.__index === points[i].index);
 
-        const element = document.createElement("div");
-        element.className = "cpf-entrance-marker";
-        element.title = `Entrance ${index + 1}`;
-        element.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V6a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v14"/><path d="M2 20h20"/><path d="M14 12v.01"/></svg>`;
-
-        // In edit mode, make markers draggable
-        const markerOptions = {
-          element,
-          anchor: "center",
-        };
-
-        if (isEditMode) {
-          markerOptions.draggable = true;
-        }
-
-        const marker = new mapboxgl.Marker(markerOptions)
-          .setLngLat([lng, lat])
-          .setPopup(createPopup(`Entrance ${index + 1}`, "Building entrance"))
-          .addTo(map);
-
-        if (isEditMode) {
-          marker.on("dragstart", () => {
-            element.style.cursor = "grabbing";
-            element.style.transform = "scale(1.2)";
-            element.style.boxShadow = "0 4px 16px rgba(15, 23, 42, 0.4)";
-          });
-
-          marker.on("drag", () => {
-            const lngLat = marker.getLngLat();
-            if (onEntranceDrag) {
-              onEntranceDrag(index, { lat: lngLat.lat, lng: lngLat.lng });
-            }
-          });
-
-          marker.on("dragend", () => {
-            element.style.cursor = "grab";
-            element.style.transform = "scale(1)";
-            element.style.boxShadow = "0 2px 8px rgba(15, 23, 42, 0.35)";
-            const lngLat = marker.getLngLat();
-            if (onEntranceDrag) {
-              onEntranceDrag(index, { lat: lngLat.lat, lng: lngLat.lng }, true);
-            }
-          });
-        }
-
-        element.__marker = marker;
-        element.dataset.lng = lng;
-        element.dataset.lat = lat;
-
-        newMarkers.push(marker);
+    if (canReuse) {
+      // Same set of entrances: just move them (never tear down a marker mid-drag)
+      existing.forEach((m, i) => {
+        if (!m.__dragging) m.setLngLat([points[i].lng, points[i].lat]);
       });
-
-      map.__evacwayPendingEntranceMarkers = newMarkers;
+      return;
     }
 
-    return () => {
-      try {
-        const markers = map.__evacwayPendingEntranceMarkers || [];
-        markers.forEach((m) => m.remove());
-        map.__evacwayPendingEntranceMarkers = [];
-      } catch (e) {
-        // Safe ignore
+    // Don't rebuild while the user is dragging; the drag end will trigger a re-sync
+    if (existing.some((m) => m.__dragging)) return;
+
+    existing.forEach((m) => m.remove());
+    entranceMarkersRef.current = points.map((p) => {
+      // Saved/placed entrance: numbered blue badge. Clearly different from the
+      // outline's small white corner dots and from the translucent cursor preview.
+      const element = document.createElement("div");
+      element.className = "evacway-entrance-marker";
+      element.title = `Entrance ${p.index + 1}`;
+      element.textContent = String(p.index + 1);
+      Object.assign(element.style, {
+        width: "26px",
+        height: "26px",
+        borderRadius: "50%",
+        background: "#2563eb",
+        border: "3px solid #ffffff",
+        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.45)",
+        boxSizing: "border-box",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "#ffffff",
+        font: "700 12px/1 system-ui, -apple-system, Segoe UI, sans-serif",
+        pointerEvents: isEditMode ? "auto" : "none",
+        cursor: isEditMode ? "grab" : "default",
+        zIndex: "5",
+      });
+
+      const marker = new mapboxgl.Marker({
+        element,
+        anchor: "center",
+        draggable: isEditMode,
+      }).setLngLat([p.lng, p.lat]);
+
+      if (isEditMode) {
+        marker.setPopup(createPopup(`Entrance ${p.index + 1}`, "Building entrance"));
+        marker.on("dragstart", () => {
+          marker.__dragging = true;
+          element.style.cursor = "grabbing";
+        });
+        // Keep dragged entrances on the outline (no tolerance: always snap to nearest edge)
+        const snapMarkerToOutline = () => {
+          const ll = marker.getLngLat();
+          const snapped = snapScreenPointToOutline(
+            map,
+            map.project(ll),
+            pendingFootprintRef.current,
+            Infinity
+          );
+          if (snapped) marker.setLngLat([snapped.lng, snapped.lat]);
+          return snapped || { lng: ll.lng, lat: ll.lat };
+        };
+        marker.on("drag", () => {
+          const ll = snapMarkerToOutline();
+          entranceDragRef.current?.(p.index, { lat: ll.lat, lng: ll.lng });
+        });
+        marker.on("dragend", () => {
+          marker.__dragging = false;
+          element.style.cursor = "grab";
+          const ll = snapMarkerToOutline();
+          entranceDragRef.current?.(p.index, { lat: ll.lat, lng: ll.lng }, true);
+        });
       }
+
+      marker.addTo(map);
+      marker.__editMode = isEditMode;
+      marker.__index = p.index;
+      return marker;
+    });
+  }, [mapLoaded, drawMode, pendingEntrances, editingCenter, hasEntranceDrag]);
+
+  // Remove entrance markers on unmount
+  useEffect(() => {
+    return () => {
+      entranceMarkersRef.current.forEach((m) => {
+        try { m.remove(); } catch { /* ignore */ }
+      });
+      entranceMarkersRef.current = [];
     };
-  }, [mapLoaded, drawMode, pendingEntrances, styleVersion, editingCenter, onEntranceDrag]);
+  }, []);
 
   /*
    * Drawing / map click & cursor tracking
@@ -2961,17 +3125,29 @@ function DashboardMap({
         if (roomCursorMarkerRef.current) {
           roomCursorMarkerRef.current.getElement().style.display = "none";
         }
+        if (entranceCursorMarkerRef.current) {
+          entranceCursorMarkerRef.current.getElement().style.display = "none";
+        }
         return;
       }
       if (drawMode === "entrance" || drawMode === "room") {
-        const isInside =
-          pendingFootprint && pendingFootprint.length >= 3
-            ? isPointInOrNearPolygon(
-                { lng: event.lngLat.lng, lat: event.lngLat.lat },
-                pendingFootprint,
-                15
-              )
-            : true;
+        const hasOutline = pendingFootprint && pendingFootprint.length >= 3;
+        // Entrance: same snap + tolerance as the click handler, so the preview
+        // shows exactly where the entrance will be stored.
+        const entranceSnap =
+          drawMode === "entrance" && hasOutline
+            ? snapScreenPointToOutline(map, event.point, pendingFootprint, ENTRANCE_SNAP_TOLERANCE_PX)
+            : null;
+        const isInside = !hasOutline
+          ? true
+          : drawMode === "entrance"
+          ? Boolean(entranceSnap)
+          : isPointInOrNearPolygon(
+              { lng: event.lngLat.lng, lat: event.lngLat.lat },
+              pendingFootprint,
+              15
+            );
+        const previewLngLat = entranceSnap || event.lngLat;
         map.getCanvas().style.cursor = isInside ? "crosshair" : "not-allowed";
 
         if (drawMode === "room") {
@@ -3007,6 +3183,43 @@ function DashboardMap({
             }
           }
         }
+
+        // Entrance cursor preview (shows where entrance will be placed)
+        if (drawMode === "entrance") {
+          if (isInside) {
+            if (!entranceCursorMarkerRef.current) {
+              // Ghost preview: hollow, translucent ring (the placed entrance is a
+              // solid numbered badge, so the two are never confused).
+              const el = document.createElement("div");
+              el.className = "evacway-entrance-cursor";
+              Object.assign(el.style, {
+                width: "22px",
+                height: "22px",
+                borderRadius: "50%",
+                background: "rgba(37, 99, 235, 0.18)",
+                border: "2px dashed #2563eb",
+                boxSizing: "border-box",
+                pointerEvents: "none",
+              });
+              entranceCursorMarkerRef.current = new mapboxgl.Marker({
+                element: el,
+                anchor: "center",
+              })
+                .setLngLat([previewLngLat.lng, previewLngLat.lat])
+                .addTo(map);
+            } else {
+              entranceCursorMarkerRef.current.setLngLat([
+                previewLngLat.lng,
+                previewLngLat.lat,
+              ]);
+              entranceCursorMarkerRef.current.getElement().style.display = "block";
+            }
+          } else {
+            if (entranceCursorMarkerRef.current) {
+              entranceCursorMarkerRef.current.getElement().style.display = "none";
+            }
+          }
+        }
       } else if (drawMode === "footprint") {
         map.getCanvas().style.cursor = "crosshair";
       } else {
@@ -3017,6 +3230,9 @@ function DashboardMap({
     const handleMouseLeave = () => {
       if (roomCursorMarkerRef.current) {
         roomCursorMarkerRef.current.getElement().style.display = "none";
+      }
+      if (entranceCursorMarkerRef.current) {
+        entranceCursorMarkerRef.current.getElement().style.display = "none";
       }
     };
 
@@ -3053,7 +3269,23 @@ function DashboardMap({
         }
       }
 
-      if (drawMode === "entrance" || drawMode === "room") {
+      // Entrances: store the closest point ON the outline (screen-px projection),
+      // never the raw click. Clicks farther than the tolerance are rejected.
+      let entranceSnapped = null;
+      if (drawMode === "entrance" && pendingFootprint && pendingFootprint.length >= 3) {
+        entranceSnapped = snapScreenPointToOutline(
+          map,
+          event.point,
+          pendingFootprint,
+          ENTRANCE_SNAP_TOLERANCE_PX
+        );
+        if (!entranceSnapped) {
+          if (onOutsideOutlineClickRef.current) onOutsideOutlineClickRef.current();
+          return;
+        }
+      }
+
+      if (drawMode === "room") {
         if (pendingFootprint && pendingFootprint.length >= 3) {
           const isInside = isPointInOrNearPolygon(
             { lng: event.lngLat.lng, lat: event.lngLat.lat },
@@ -3061,7 +3293,7 @@ function DashboardMap({
             15
           );
           if (!isInside) {
-            if (onOutsideOutlineClick) onOutsideOutlineClick();
+            if (onOutsideOutlineClickRef.current) onOutsideOutlineClickRef.current();
             return;
           }
         }
@@ -3069,6 +3301,9 @@ function DashboardMap({
 
       if (roomCursorMarkerRef.current) {
         roomCursorMarkerRef.current.getElement().style.display = "none";
+      }
+      if (entranceCursorMarkerRef.current) {
+        entranceCursorMarkerRef.current.getElement().style.display = "none";
       }
 
       // First-corner close: click within 12px of first corner closes the shape
@@ -3083,10 +3318,12 @@ function DashboardMap({
         }
       }
 
-      onMapClickRef.current({
-        lat: event.lngLat.lat,
-        lng: event.lngLat.lng,
-      });
+      onMapClickRef.current(
+        entranceSnapped || {
+          lat: event.lngLat.lat,
+          lng: event.lngLat.lng,
+        }
+      );
     };
 
     const handleDblClick = (event) => {
@@ -3124,6 +3361,10 @@ function DashboardMap({
           roomCursorMarkerRef.current.remove();
           roomCursorMarkerRef.current = null;
         }
+        if (entranceCursorMarkerRef.current) {
+          entranceCursorMarkerRef.current.remove();
+          entranceCursorMarkerRef.current = null;
+        }
 
         if (mapRef.current === map && map.style) {
           map.doubleClickZoom?.enable();
@@ -3142,7 +3383,6 @@ function DashboardMap({
     drawMode,
     mappingTool,
     pendingFootprint,
-    onOutsideOutlineClick,
     onBasemapBuildingClick,
   ]);
 

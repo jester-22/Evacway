@@ -30,7 +30,7 @@ function App() {
           <Route
             path="/dashboard"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
                 <Dashboard />
               </ProtectedRoute>
             }

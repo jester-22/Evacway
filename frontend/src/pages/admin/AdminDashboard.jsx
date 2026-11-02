@@ -14,8 +14,9 @@ import BarangayManager from "../../components/BarangayManager/BarangayManager";
 import DataManagement from "../../components/DataManagement/DataManagement";
 import SystemAndLogs from "../../components/ActivityLogs/SystemAndLogs";
 import RescueRequestManager from "../../components/RescueRequestManager/RescueRequestManager";
+import ResidentRegistrations from "../../components/ResidentRegistrations/ResidentRegistrations";
 
-const ADMIN_TABS = ["centers", "barangays", "reports", "rescue", "users", "data-management", "settings"];
+const ADMIN_TABS = ["centers", "barangays", "reports", "rescue", "registrations", "users", "data-management", "settings"];
 function AdminDashboard() {
   const location = useLocation();
   const requestedTab = new URLSearchParams(location.search).get("tab");
@@ -172,6 +173,8 @@ function AdminDashboard() {
         {tab === "rescue" && (
           <RescueRequestManager key={focusedRescueId ?? "rescue-queue"} initialRequestId={focusedRescueId} onOpenMap={openMapLocation} />
         )}
+
+        {tab === "registrations" && <ResidentRegistrations />}
 
         {/* MANAGE USERS */}
         {tab === "users" && (

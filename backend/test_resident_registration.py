@@ -4,19 +4,25 @@ from unittest.mock import patch
 
 from flask import Flask
 from flask_jwt_extended import JWTManager, create_access_token
-from sqlalchemy import text
+from sqlalchemy import text, event
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import time
 from models import (
     db,
     Barangay,
+    Family,
     Resident,
     ResidentRegistrationRequest,
     ResidentAccount,
+    RosterYear,
+    EvacuationAssignment,
+    EvacuationCenterRoom,
     SystemLog,
     User,
 )
 from routes.auth import auth_bp
+from routes.families import families_bp
 from routes.resident_registrations import _registration_rate_limits, registrations_bp
 from routes.residents import residents_bp
 from routes.users import users_bp
@@ -41,10 +47,22 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         cls.app.register_blueprint(residents_bp)
         cls.app.register_blueprint(registrations_bp)
         cls.app.register_blueprint(users_bp)
+        cls.app.register_blueprint(families_bp)
         cls.app_context = cls.app.app_context()
         cls.app_context.push()
+        @event.listens_for(db.engine, 'connect')
+        def register_sqlite_functions(dbapi_connection, connection_record):
+            dbapi_connection.create_function('AsEWKB', 1, lambda x: x)
+            dbapi_connection.create_function('GeomFromEWKT', 1, lambda x: x)
+            dbapi_connection.create_function('ST_AsEWKB', 1, lambda x: x)
+            dbapi_connection.create_function('ST_GeomFromEWKT', 1, lambda x: x)
+
         db.metadata.create_all(bind=db.engine, tables=[
             User.__table__,
+            Family.__table__,
+            RosterYear.__table__,
+            EvacuationAssignment.__table__,
+            EvacuationCenterRoom.__table__,
             Resident.__table__,
             ResidentAccount.__table__,
             ResidentRegistrationRequest.__table__,
@@ -52,7 +70,7 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         ])
         with db.engine.begin() as connection:
             connection.execute(text(
-                'CREATE TABLE barangays (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL)'
+                'CREATE TABLE barangays (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, population INTEGER, geom BLOB)'
             ))
 
     @classmethod
@@ -68,6 +86,10 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         ResidentAccount.query.delete(synchronize_session=False)
         User.query.delete(synchronize_session=False)
         Resident.query.delete(synchronize_session=False)
+        Family.query.delete(synchronize_session=False)
+        RosterYear.query.delete(synchronize_session=False)
+        EvacuationAssignment.query.delete(synchronize_session=False)
+        EvacuationCenterRoom.query.delete(synchronize_session=False)
         Barangay.query.delete(synchronize_session=False)
         db.session.commit()
         _registration_rate_limits.clear()
@@ -137,14 +159,49 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         )
 
     def _create_roster_resident(self, **overrides):
+        barangay_name = overrides.pop('barangay', 'San José')
+        address = overrides.pop('address', 'Purok 2')
+        contact_number = overrides.pop('contact_number', '09181234567')
+        head_name = overrides.pop('household_head_name', 'Jose Manuel Dela Cruz')
+        family_members = overrides.pop('family_members', 1)
+
+        brgy = Barangay.query.filter_by(name=barangay_name).first()
+        if not brgy:
+            brgy = Barangay(name=barangay_name)
+            db.session.add(brgy)
+            db.session.flush()
+
+        family = overrides.pop('family', None)
+        if not family:
+            family_id = overrides.pop('family_id', None)
+            if family_id:
+                family = db.session.get(Family, family_id)
+        if not family:
+            roster_year_id = overrides.pop('roster_year_id', None)
+            if not roster_year_id:
+                ry = RosterYear.query.filter_by(is_active=True).first()
+                if not ry:
+                    ry = RosterYear(year=2026, is_active=True)
+                    db.session.add(ry)
+                    db.session.flush()
+                roster_year_id = ry.id
+            family = Family(
+                roster_year_id=roster_year_id,
+                barangay_id=brgy.id,
+                family_code=f"FAM-{time.time()}-{id(overrides)}",
+                head_name=head_name,
+                member_count=family_members,
+                contact_number=contact_number,
+                address=address,
+            )
+            db.session.add(family)
+            db.session.flush()
+
         values = {
+            'family_id': family.id,
             'first_name': 'Jose',
             'middle_name': 'Manuel',
             'last_name': 'Dela Cruz',
-            'household_head_name': 'Jose Manuel Dela Cruz',
-            'barangay': 'San José',
-            'address': 'Purok 2',
-            'contact_number': '09181234567',
             'date_of_birth': date(1990, 4, 12),
         }
         values.update(overrides)
@@ -687,6 +744,188 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
 
+
+
+    def test_registration_matching_normalized_schema(self):
+        """Registration matching correctly reads barangay, address, contact via family relation."""
+        resident = self._create_roster_resident(
+            first_name='Maria',
+            middle_name='Santos',
+            last_name='Reyes',
+            household_head_name='Maria Santos Reyes',
+            barangay='Santa Cruz',
+            address='Sitio Ilaya',
+            contact_number='09191112233',
+            date_of_birth=date(1995, 8, 20),
+        )
+
+        # Confirm resident has no household columns stored directly in table, but accesses them via properties/family
+        self.assertEqual(resident.barangay, 'Santa Cruz')
+        self.assertEqual(resident.address, 'Sitio Ilaya')
+        self.assertEqual(resident.contact_number, '09191112233')
+
+        # Submit registration request
+        res = self._submit(
+            first_name='Maria',
+            middle_name='Santos',
+            last_name='Reyes',
+            birthdate='1995-08-20',
+            barangay='Santa Cruz',
+            address='Sitio Ilaya',
+            contact_number='09191112233',
+            email='maria.reyes@example.com',
+        )
+        self.assertEqual(res.status_code, 201)
+        req_id = res.get_json()['registration']['id']
+
+        # Query matches as staff
+        matches_res = self.client.get(
+            f'/api/resident-registrations/{req_id}/matches',
+            headers=self._staff_headers(),
+        )
+        self.assertEqual(matches_res.status_code, 200)
+        data = matches_res.get_json()
+        self.assertEqual(data['status'], 'match')
+        self.assertTrue(len(data['matches']) >= 1)
+        top_match = data['matches'][0]
+        self.assertEqual(top_match['resident']['id'], resident.id)
+        self.assertEqual(top_match['resident']['barangay'], 'Santa Cruz')
+        self.assertEqual(top_match['resident']['address'], 'Sitio Ilaya')
+        self.assertEqual(top_match['resident']['contact_number'], '09191112233')
+        self.assertTrue(top_match['match_flags']['name'])
+        self.assertTrue(top_match['match_flags']['birthdate'])
+        self.assertTrue(top_match['match_flags']['barangay'])
+
+    def test_family_member_count_on_add_move_remove(self):
+        """Verify member_count stays strictly accurate when residents are added, moved, and removed."""
+        brgy = Barangay(name='Poblacion')
+        ry = RosterYear(year=2025, is_active=True)
+        db.session.add_all([brgy, ry])
+        db.session.flush()
+
+        fam_a = Family(
+            roster_year_id=ry.id,
+            barangay_id=brgy.id,
+            family_code='FAM-A',
+            head_name='Juan Dela Cruz',
+            member_count=1,
+            contact_number='09181111111',
+            address='Zone 1',
+        )
+        fam_b = Family(
+            roster_year_id=ry.id,
+            barangay_id=brgy.id,
+            family_code='FAM-B',
+            head_name='Pedro Santos',
+            member_count=1,
+            contact_number='09182222222',
+            address='Zone 2',
+        )
+        db.session.add_all([fam_a, fam_b])
+        db.session.flush()
+
+        head_a = Resident(family_id=fam_a.id, first_name='Juan', last_name='Dela Cruz', is_head_of_family=True)
+        head_b = Resident(family_id=fam_b.id, first_name='Pedro', last_name='Santos', is_head_of_family=True)
+        db.session.add_all([head_a, head_b])
+        db.session.commit()
+
+        self.assertEqual(fam_a.member_count, 1)
+        self.assertEqual(fam_b.member_count, 1)
+
+        with patch('routes.families._serialize_family_detail', return_value={}):
+            # 1. Add resident to Family A
+            add_res = self.client.post(
+                f'/api/families/{fam_a.id}/members',
+                headers=self._staff_headers(),
+                json={
+                    'first_name': 'Ana',
+                    'last_name': 'Dela Cruz',
+                    'relationship_to_head': 'Spouse',
+                    'is_head_of_family': False,
+                }
+            )
+            self.assertEqual(add_res.status_code, 201)
+            ana_id = add_res.get_json()['member']['id']
+
+            db.session.refresh(fam_a)
+            self.assertEqual(fam_a.member_count, 2)
+            self.assertEqual(Resident.query.filter_by(family_id=fam_a.id).count(), 2)
+
+            # 2. Move resident (Ana) from Family A to Family B
+            move_res = self.client.post(
+                f'/api/families/{fam_a.id}/members/{ana_id}/move',
+                headers=self._staff_headers(),
+                json={
+                    'target_family_id': fam_b.id,
+                    'relationship_to_head': 'Sibling',
+                }
+            )
+            self.assertEqual(move_res.status_code, 200)
+
+            db.session.refresh(fam_a)
+            db.session.refresh(fam_b)
+            self.assertEqual(fam_a.member_count, 1)
+            self.assertEqual(fam_b.member_count, 2)
+            self.assertEqual(Resident.query.filter_by(family_id=fam_a.id).count(), 1)
+            self.assertEqual(Resident.query.filter_by(family_id=fam_b.id).count(), 2)
+
+            # 3. Remove resident (Ana) from Family B
+            del_res = self.client.delete(
+                f'/api/families/{fam_b.id}/members/{ana_id}',
+                headers=self._staff_headers(),
+            )
+            self.assertEqual(del_res.status_code, 200)
+
+            db.session.refresh(fam_b)
+            self.assertEqual(fam_b.member_count, 1)
+            self.assertEqual(Resident.query.filter_by(family_id=fam_b.id).count(), 1)
+
+    def test_residents_query_count_constant_with_joinedload(self):
+        """Verify GET /api/residents executes a fixed 3 queries (joinedload) regardless of roster size."""
+        brgy = Barangay(name='Query Test Barangay')
+        ry = RosterYear(year=2024, is_active=True)
+        db.session.add_all([brgy, ry])
+        db.session.flush()
+
+        # Seed 10 families and 30 residents
+        for f_idx in range(10):
+            fam = Family(
+                roster_year_id=ry.id,
+                barangay_id=brgy.id,
+                family_code=f'QFAM-{f_idx}',
+                head_name=f'Head {f_idx}',
+                member_count=3,
+                contact_number='09170000000',
+                address=f'Purok {f_idx}',
+            )
+            db.session.add(fam)
+            db.session.flush()
+            for r_idx in range(3):
+                res = Resident(
+                    family_id=fam.id,
+                    first_name=f'First{f_idx}_{r_idx}',
+                    last_name=f'Last{f_idx}',
+                    is_head_of_family=(r_idx == 0),
+                )
+                db.session.add(res)
+        db.session.commit()
+
+        # Measure query count during GET /api/residents
+        queries = []
+        from sqlalchemy import event
+        def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+            queries.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', before_cursor_execute)
+        try:
+            res = self.client.get('/api/residents', headers=self._staff_headers())
+            self.assertEqual(res.status_code, 200)
+            items = res.get_json()
+            self.assertTrue(len(items) >= 30)
+            # Must be exactly 3 queries: (1) joined residents+family+barangay+roster_year, (2) User.resident_id, (3) ResidentAccount.resident_id
+            self.assertEqual(len(queries), 3)
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', before_cursor_execute)
 
 if __name__ == '__main__':
     unittest.main()

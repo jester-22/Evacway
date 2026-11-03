@@ -8,6 +8,8 @@ import pandas as pd
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
+from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from models import (
     db,
@@ -1710,6 +1712,14 @@ def upload_residents():
 
                     contact_number=contact_number,
 
+                    address=address,
+
+                    vulnerable_members=vulnerable_members,
+
+                    remarks=remarks,
+
+                    uploaded_by=user_id,
+
                     evacuation_status="Unassigned"
                 )
 
@@ -1828,31 +1838,6 @@ def upload_residents():
 
                 last_name=last_name,
 
-                household_head_name=(
-                    household_head_name
-                ),
-
-                barangay=barangay.name,
-
-                address=address,
-
-                contact_number=contact_number,
-
-                family_members=(
-                    family_members
-                    if family_members
-                    and family_members > 0
-                    else 1
-                ),
-
-                vulnerable_members=(
-                    vulnerable_members
-                ),
-
-                remarks=remarks,
-
-                uploaded_by=user_id,
-
                 **detail_values
             )
 
@@ -1924,8 +1909,7 @@ def upload_residents():
                 for extra_head in heads[1:]:
                     extra_head.is_head_of_family = False
 
-            for r in family_residents:
-                r.family_members = actual_count
+            family.member_count = actual_count
 
         db.session.flush()
 
@@ -2097,57 +2081,28 @@ def list_residents():
         'barangay'
     )
 
-    query = Resident.query
+    query = Resident.query.outerjoin(Resident.family).outerjoin(Family.barangay).options(
+        joinedload(Resident.family).joinedload(Family.barangay),
+        joinedload(Resident.family).joinedload(Family.roster_year)
+    )
 
     if barangay_filter:
-
-        normalized_filter = (
-            normalize_barangay_name(
-                barangay_filter
-            )
-        )
-
-        residents = Resident.query.all()
-
-        residents = [
-
-            resident
-            for resident in residents
-
-            if normalize_barangay_name(
-                resident.barangay
-            ) == normalized_filter
-
-        ]
-
-    else:
-
-        residents = query.order_by(
-
-            Resident.barangay,
-
-            Resident.household_head_name,
-
+        normalized_filter = normalize_barangay_name(barangay_filter)
+        residents = query.filter(
+            func.lower(func.trim(Barangay.name)) == normalized_filter.lower()
+        ).order_by(
+            Barangay.name,
+            Family.head_name,
             Resident.last_name,
-
             Resident.first_name
-
         ).all()
-
-    if barangay_filter:
-
-        residents.sort(
-
-            key=lambda resident: (
-
-                resident.household_head_name.lower(),
-
-                resident.last_name.lower(),
-
-                resident.first_name.lower()
-
-            )
-        )
+    else:
+        residents = query.order_by(
+            Barangay.name,
+            Family.head_name,
+            Resident.last_name,
+            Resident.first_name
+        ).all()
 
     linked_resident_ids = {
         resident_id
@@ -2466,15 +2421,15 @@ def autosuggest_residents():
     suggestions = []
     seen = set()
 
-    # Query families
-    families = Family.query.all()
+    # Query families with barangay preloaded
+    families = Family.query.join(Barangay).options(joinedload(Family.barangay)).all()
     for family in families:
         head_name = (family.head_name or '').strip()
         if not head_name:
             continue
         head_normalized = normalize_name(head_name)
         if _name_matches(query_normalized, head_normalized):
-            b_name = barangays.get(family.barangay_id, '')
+            b_name = family.barangay.name if family.barangay else ''
             key = (head_name.lower(), b_name.lower())
             if key not in seen:
                 seen.add(key)
@@ -2485,17 +2440,19 @@ def autosuggest_residents():
                 if len(suggestions) >= 5:
                     break
 
-    # If fewer than 5, also check individual residents
+    # If fewer than 5, also check individual residents with family and barangay preloaded
     if len(suggestions) < 5:
-        residents = Resident.query.all()
+        residents = Resident.query.join(Family).join(Barangay).options(
+            joinedload(Resident.family).joinedload(Family.barangay)
+        ).all()
         for res in residents:
             full_name = (res.get_full_name() or f"{res.first_name} {res.last_name}").strip()
             if not full_name:
                 continue
             res_normalized = normalize_name(full_name)
             if _name_matches(query_normalized, res_normalized):
-                family = Family.query.get(res.family_id) if res.family_id else None
-                b_name = barangays.get(family.barangay_id, '') if family else ''
+                family = res.family
+                b_name = family.barangay.name if (family and family.barangay) else ''
                 key = (full_name.lower(), b_name.lower())
                 if key not in seen:
                     seen.add(key)

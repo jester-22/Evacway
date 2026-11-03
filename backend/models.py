@@ -675,6 +675,23 @@ class Family(BaseModel):
         db.String(50)
     )
 
+    address = db.Column(
+        db.String(255)
+    )
+
+    vulnerable_members = db.Column(
+        db.String(255)
+    )
+
+    remarks = db.Column(
+        db.Text
+    )
+
+    uploaded_by = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id')
+    )
+
     created_at = db.Column(
         db.DateTime,
         default=philippines_now
@@ -708,6 +725,10 @@ class Family(BaseModel):
             "member_count": self.member_count,
             "contact_number": self.contact_number,
             "evacuation_status": self.evacuation_status,
+            "address": self.address,
+            "vulnerable_members": self.vulnerable_members,
+            "remarks": self.remarks,
+            "uploaded_by": self.uploaded_by,
             "created_at": (
                 self.created_at.isoformat()
                 if self.created_at
@@ -743,12 +764,6 @@ class Resident(BaseModel):
         nullable=True
     )
 
-    roster_year_id = db.Column(
-        db.Integer,
-        db.ForeignKey('roster_years.id'),
-        nullable=True
-    )
-
     first_name = db.Column(
         db.String(100),
         nullable=False
@@ -761,37 +776,6 @@ class Resident(BaseModel):
     last_name = db.Column(
         db.String(100),
         nullable=False
-    )
-
-    household_head_name = db.Column(
-        db.String(150),
-        nullable=False
-    )
-
-    barangay = db.Column(
-        db.String(100),
-        nullable=False
-    )
-
-    address = db.Column(
-        db.String(255)
-    )
-
-    contact_number = db.Column(
-        db.String(20)
-    )
-
-    family_members = db.Column(
-        db.Integer,
-        default=1
-    )
-
-    vulnerable_members = db.Column(
-        db.String(255)
-    )
-
-    remarks = db.Column(
-        db.Text
     )
 
     # -----------------------------------------------------
@@ -864,11 +848,6 @@ class Resident(BaseModel):
         db.Text
     )
 
-    uploaded_by = db.Column(
-        db.Integer,
-        db.ForeignKey('users.id')
-    )
-
     created_at = db.Column(
         db.DateTime,
         default=philippines_now
@@ -880,6 +859,42 @@ class Resident(BaseModel):
         lazy=True,
         cascade='all, delete-orphan'
     )
+
+    @property
+    def household_head_name(self):
+        return self.family.head_name if self.family else None
+
+    @property
+    def barangay(self):
+        return self.family.barangay.name if (self.family and self.family.barangay) else None
+
+    @property
+    def address(self):
+        return self.family.address if self.family else None
+
+    @property
+    def contact_number(self):
+        return self.family.contact_number if self.family else None
+
+    @property
+    def family_members(self):
+        return self.family.member_count if self.family else None
+
+    @property
+    def vulnerable_members(self):
+        return self.family.vulnerable_members if self.family else None
+
+    @property
+    def remarks(self):
+        return self.family.remarks if self.family else None
+
+    @property
+    def uploaded_by(self):
+        return self.family.uploaded_by if self.family else None
+
+    @property
+    def roster_year_id(self):
+        return self.family.roster_year_id if self.family else None
 
     def to_dict(self):
         return {

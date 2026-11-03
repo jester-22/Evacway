@@ -146,10 +146,6 @@ def _sync_household_and_barangay(family, old_barangay_id=None):
             first_name=first_name,
             middle_name=middle_name,
             last_name=last_name,
-            household_head_name=family.head_name,
-            barangay=barangay_name,
-            contact_number=family.contact_number,
-            family_members=1,
             is_head_of_family=True,
             relationship_to_head='Household Head',
         )
@@ -200,12 +196,6 @@ def _sync_household_and_barangay(family, old_barangay_id=None):
 
         count = len(residents)
         family.member_count = count
-        for r in residents:
-            r.family_members = count
-            if family.head_name:
-                r.household_head_name = family.head_name
-            if barangay_name:
-                r.barangay = barangay_name
     else:
         family.member_count = 0
 
@@ -799,11 +789,6 @@ def _make_resident_model(member, family, head_name, barangay_name, default_addre
         gender=member.get('gender'),
         alternate_contact=member.get('alternate_contact'),
         relationship_to_head=rel,
-        household_head_name=head_name,
-        barangay=barangay_name,
-        address=member.get('address') or default_address,
-        contact_number=member.get('contact_number') or family.contact_number,
-        family_members=family.member_count,
         is_head_of_family=bool(is_head_flag),
         is_pwd=bool(member.get('is_pwd')),
         disability_type=member.get('disability_type'),
@@ -814,9 +799,6 @@ def _make_resident_model(member, family, head_name, barangay_name, default_addre
         needs_assistance=bool(member.get('needs_assistance')),
         medical_notes=member.get('medical_notes'),
         notes=member.get('notes'),
-        remarks=member.get('remarks'),
-        vulnerable_members=member.get('vulnerable_members'),
-        uploaded_by=uploaded_by,
     )
 
 
@@ -1895,6 +1877,9 @@ def add_family():
         head_name=head_name,
         member_count=member_count,
         contact_number=contact_number or head_data.get('contact_number'),
+        address=address,
+        remarks=str(data.get('remarks') or head_data.get('remarks') or '').strip() or None,
+        uploaded_by=get_jwt_identity(),
         evacuation_status='Assigned' if assignment_room else 'Unassigned',
     )
 
@@ -1909,12 +1894,6 @@ def add_family():
                 first_name=member_data['first_name'],
                 middle_name=member_data['middle_name'],
                 last_name=member_data['last_name'],
-                household_head_name=head_name,
-                barangay=barangay.name,
-                address=address,
-                contact_number=member_data['contact_number'] or contact_number,
-                family_members=member_count,
-                uploaded_by=get_jwt_identity(),
                 suffix=member_data['suffix'],
                 date_of_birth=member_data['date_of_birth'],
                 gender=member_data['gender'],
@@ -1929,13 +1908,8 @@ def add_family():
                 needs_assistance=member_data['needs_assistance'],
                 medical_notes=member_data['medical_notes'],
                 notes=member_data['notes'],
-                vulnerable_members=member_data['vulnerable_members'],
                 alternate_contact=(
                     str(data.get('alternate_contact') or member_data.get('alternate_contact') or '').strip() or None
-                    if member_data['is_head_of_family'] else None
-                ),
-                remarks=(
-                    str(data.get('remarks') or member_data.get('remarks') or '').strip() or None
                     if member_data['is_head_of_family'] else None
                 ),
             )
@@ -2116,18 +2090,15 @@ def add_family_member(family_id):
                     m.relationship_to_head = str(data.get('previous_head_relationship') or 'Family Member')
 
     new_count = len(existing_members) + 1
+    if shared_address and not family.address:
+        family.address = shared_address
     resident = Resident(
         family_id=family.id,
         first_name=parsed['first_name'],
         middle_name=parsed['middle_name'],
         last_name=parsed['last_name'],
         suffix=parsed['suffix'],
-        household_head_name=family.head_name,
-        barangay=barangay_name,
-        address=shared_address,
-        contact_number=parsed['contact_number'] or family.contact_number,
         alternate_contact=parsed['alternate_contact'],
-        family_members=new_count,
         date_of_birth=parsed['date_of_birth'],
         gender=parsed['gender'],
         relationship_to_head='Household Head' if is_head else parsed['relationship_to_head'],
@@ -2141,9 +2112,6 @@ def add_family_member(family_id):
         needs_assistance=parsed['needs_assistance'],
         medical_notes=parsed['medical_notes'],
         notes=parsed['notes'],
-        vulnerable_members=parsed['vulnerable_members'],
-        remarks=parsed['remarks'],
-        uploaded_by=get_jwt_identity(),
     )
 
     db.session.add(resident)
@@ -2246,9 +2214,7 @@ def update_family_member(family_id, member_id):
     resident.needs_assistance = parsed['needs_assistance']
     resident.medical_notes = parsed['medical_notes']
     resident.notes = parsed['notes']
-    resident.vulnerable_members = parsed['vulnerable_members']
-    if 'remarks' in data:
-        resident.remarks = parsed['remarks']
+    # Vulnerability and remarks now belong to the family level
 
     if resident.is_head_of_family and parsed['contact_number']:
         family.contact_number = parsed['contact_number']
@@ -2272,6 +2238,69 @@ def update_family_member(family_id, member_id):
 # =========================================================
 # DELETE FAMILY MEMBER
 # =========================================================
+
+# =========================================================
+# MOVE FAMILY MEMBER TO ANOTHER HOUSEHOLD
+# =========================================================
+@families_bp.route(
+    '/api/families/<int:family_id>/members/<int:member_id>/move',
+    methods=['POST']
+)
+@jwt_required()
+@role_required('admin', 'lgu_personnel')
+def move_family_member(family_id, member_id):
+    source_family = db.session.get(Family, family_id)
+    if not source_family:
+        return jsonify({"error": "Source family not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    target_family_id = data.get('target_family_id')
+    if not target_family_id:
+        return jsonify({"error": "target_family_id is required"}), 400
+
+    target_family = db.session.get(Family, int(target_family_id))
+    if not target_family:
+        return jsonify({"error": "Target family not found"}), 404
+
+    resident = Resident.query.filter_by(id=member_id, family_id=source_family.id).first()
+    if not resident:
+        return jsonify({"error": "Family member not found in source family"}), 404
+
+    source_members = Resident.query.filter_by(family_id=source_family.id).all()
+    if len(source_members) <= 1:
+        return jsonify({"error": "Cannot move the only member of a household. Delete the household instead."}), 400
+
+    if resident.is_head_of_family:
+        replacement_head_id = data.get('replacement_head_id')
+        if not replacement_head_id:
+            return jsonify({"error": "replacement_head_id is required when moving the household head"}), 400
+        replacement = next((m for m in source_members if m.id == int(replacement_head_id) and m.id != resident.id), None)
+        if not replacement:
+            return jsonify({"error": "Valid replacement household head from source household is required"}), 400
+        replacement.is_head_of_family = True
+        replacement.relationship_to_head = 'Household Head'
+        source_family.head_name = replacement.get_full_name()
+
+    resident.is_head_of_family = False
+    resident.relationship_to_head = str(data.get('relationship_to_head') or 'Family Member')
+    resident.family_id = target_family.id
+
+    db.session.flush()
+    _sync_household_and_barangay(source_family)
+    _sync_household_and_barangay(target_family)
+
+    db.session.add(SystemLog(
+        user_id=get_jwt_identity(),
+        action=f"Moved member '{resident.get_full_name()}' from family {source_family.family_code} to {target_family.family_code}"
+    ))
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Moved '{resident.get_full_name()}' to family {target_family.family_code} successfully.",
+        "source_family": _serialize_family_detail(source_family),
+        "target_family": _serialize_family_detail(target_family),
+    }), 200
+
 @families_bp.route(
     '/api/families/<int:family_id>/members/<int:member_id>',
     methods=['DELETE']
@@ -2747,22 +2776,19 @@ def update_family(family_id):
                         head_res.suffix = None
                 family.head_name = head_name
 
-    address = str(data.get('address') or '').strip() or None
+    if 'address' in data:
+        family.address = str(data.get('address') or '').strip() or None
+    if 'remarks' in data:
+        family.remarks = str(data.get('remarks') or '').strip() or None
+    if 'vulnerable_members' in data:
+        family.vulnerable_members = str(data.get('vulnerable_members') or '').strip() or None
+
     head_resident = next(
         (resident for resident in residents if resident.is_head_of_family),
         residents[0] if residents else None,
     )
-    for resident in residents:
-        if 'address' in data:
-            resident.address = address
-        if family.barangay:
-            resident.barangay = family.barangay.name
-        if family.head_name:
-            resident.household_head_name = family.head_name
     if head_resident and 'alternate_contact' in data:
         head_resident.alternate_contact = str(data.get('alternate_contact') or '').strip() or None
-    if head_resident and 'remarks' in data:
-        head_resident.remarks = str(data.get('remarks') or '').strip() or None
 
     db.session.flush()
     _sync_household_and_barangay(family, old_barangay_id=old_barangay_id)

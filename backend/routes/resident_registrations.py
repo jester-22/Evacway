@@ -8,11 +8,14 @@ from difflib import SequenceMatcher
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity
 from sqlalchemy import func, or_
+from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
 
 from models import (
     db,
+    Barangay,
+    Family,
     Resident,
     ResidentRegistrationRequest,
     ResidentAccount,
@@ -199,17 +202,21 @@ def _duplicate_registration(email, contact_digits, exclude_request_id=None):
 def _match_fields(registration, resident):
     resident_birthdate = resident.date_of_birth.isoformat() if resident.date_of_birth else None
     resident_name = resident.get_full_name()
+    fam = resident.family
+    fam_barangay = fam.barangay.name if (fam and fam.barangay) else ''
+    fam_address = fam.address if fam else None
+    fam_contact = fam.contact_number if fam else None
     return {
         'name': _names_match(registration, resident),
         'birthdate': resident_birthdate == registration.birthdate.isoformat(),
-        'barangay': _normalize_text(resident.barangay) == _normalize_text(registration.barangay),
+        'barangay': _normalize_text(fam_barangay) == _normalize_text(registration.barangay),
         'address': bool(
-            resident.address
-            and _normalize_text(resident.address) == _normalize_text(registration.address)
+            fam_address
+            and _normalize_text(fam_address) == _normalize_text(registration.address)
         ),
         'contact_number': bool(
-            resident.contact_number
-            and _normalize_contact(resident.contact_number)
+            fam_contact
+            and _normalize_contact(fam_contact)
             == _normalize_contact(registration.contact_number)
         ),
         'name_similarity': round(
@@ -232,7 +239,7 @@ def _resident_match_result(registration):
     }
     candidates = []
 
-    for resident in Resident.query.all():
+    for resident in Resident.query.options(joinedload(Resident.family).joinedload(Family.barangay)).all():
         flags = _match_fields(registration, resident)
         score = (
             (0.55 if flags['name'] else flags['name_similarity'] * 0.55)
@@ -273,9 +280,9 @@ def _resident_match_result(registration):
                 'last_name': resident.last_name,
                 'full_name': resident.get_full_name(),
                 'birthdate': resident.date_of_birth.isoformat() if resident.date_of_birth else None,
-                'barangay': resident.barangay,
-                'address': resident.address,
-                'contact_number': resident.contact_number,
+                'barangay': resident.family.barangay.name if (resident.family and resident.family.barangay) else '',
+                'address': resident.family.address if resident.family else None,
+                'contact_number': resident.family.contact_number if resident.family else None,
             },
             'match_flags': {key: value for key, value in flags.items() if key != 'name_similarity'},
             'name_similarity': flags['name_similarity'],

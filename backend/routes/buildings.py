@@ -667,7 +667,6 @@ def get_building_details(building_id):
                 fam = families_by_id.get(res.family_id)
                 match_id = (resident_id_param and (res.id == resident_id_param or res.family_id == resident_id_param))
                 match_name = (head_name_param and (
-                    (res.household_head_name and res.household_head_name.strip().lower() == head_name_param) or
                     (fam and fam.head_name and fam.head_name.strip().lower() == head_name_param) or
                     (res.get_full_name() and res.get_full_name().strip().lower() == head_name_param)
                 ))
@@ -743,8 +742,8 @@ def get_building_details(building_id):
                 family_members_map[res.family_id].append({
                     "resident_id": res.id,
                     "full_name": res.get_full_name(),
-                    "household_head_name": res.household_head_name,
-                    "contact_number": res.contact_number,
+                    "household_head_name": fam.head_name if fam else res.get_full_name(),
+                    "contact_number": (fam.contact_number if fam else None) or res.alternate_contact,
                     "special_needs": flags,
                     "is_checked_in": a.checked_in_at is not None,
                     "checked_in_at": a.checked_in_at.isoformat() if a.checked_in_at else None,

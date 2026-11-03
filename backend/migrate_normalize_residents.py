@@ -5,13 +5,12 @@ IMPORTANT INSTRUCTIONS FOR RUNNING:
 1. STOP the backend and frontend servers before running this script.
 2. Ensure you have a recent database backup (e.g. pg_dump).
 3. RUN 1 (Dry Run):
-   Execute with the default ROLLBACK ending to preview all operations and verify
+   Execute with DRY_RUN = True (default) to preview all operations and verify
    that all safety gates pass:
        python migrate_normalize_residents.py
 4. RUN 2 (Apply Migration):
-   Only after verifying the dry run output with zero errors, edit the bottom of
-   this script to comment out `trans.rollback()` and uncomment `trans.commit()`.
-   Then re-run:
+   Only after verifying the dry run output with zero errors, change
+   `DRY_RUN = False` below and re-run:
        python migrate_normalize_residents.py
 5. Restart the backend and frontend services.
 =============================================================================
@@ -22,10 +21,16 @@ from sqlalchemy import create_engine, text
 from app import app
 from models import db
 
+# SAFETY CONTROLLER: Default is True (dry run ROLLBACK).
+# Change to False only when ready to apply live COMMIT.
+DRY_RUN = True
+
+
 def run_migration():
     with app.app_context():
         engine = db.engine
-        print("Starting migration: normalize residents and families tables...")
+        mode_str = "DRY RUN (ROLLBACK)" if DRY_RUN else "LIVE RUN (COMMIT)"
+        print(f"Starting migration [{mode_str}]: normalize residents and families tables...")
         with engine.connect() as conn:
             trans = conn.begin()
             try:
@@ -63,7 +68,7 @@ def run_migration():
                 null_family_count = conn.execute(text("SELECT COUNT(*) FROM residents WHERE family_id IS NULL;")).scalar()
                 if null_family_count > 0:
                     raise RuntimeError(f"ABORT: Found {null_family_count} residents with family_id IS NULL!")
-                print(f"  -> All residents are linked to a family (0 orphans).")
+                print("  -> All residents are linked to a family (0 orphans).")
 
                 # -------------------------------------------------------------
                 # STEP 3: Copy values from residents to families where families is empty
@@ -99,7 +104,7 @@ def run_migration():
                 """)).fetchall()
                 if head_diff:
                     raise RuntimeError(f"ABORT: {len(head_diff)} residents differ on head_name! First 5: {head_diff[:5]}")
-                print("  -> Gate passed: household_head_name matches family.head_name across 100% of residents.")
+                print("  -> Gate 1 passed: household_head_name matches family.head_name across 100% of residents.")
 
                 # Check 2: family_members vs member_count
                 count_diff = conn.execute(text("""
@@ -110,7 +115,7 @@ def run_migration():
                 """)).fetchall()
                 if count_diff:
                     raise RuntimeError(f"ABORT: {len(count_diff)} residents differ on member_count! First 5: {count_diff[:5]}")
-                print("  -> Gate passed: family_members matches family.member_count across 100% of residents.")
+                print("  -> Gate 2 passed: family_members matches family.member_count across 100% of residents.")
 
                 # Check 3: address
                 addr_diff = conn.execute(text("""
@@ -121,7 +126,7 @@ def run_migration():
                 """)).fetchall()
                 if addr_diff:
                     raise RuntimeError(f"ABORT: {len(addr_diff)} residents differ on address! First 5: {addr_diff[:5]}")
-                print("  -> Gate passed: address matches family.address across 100% of residents.")
+                print("  -> Gate 3 passed: address matches family.address across 100% of residents.")
 
                 # Check 4: vulnerable_members
                 vuln_diff = conn.execute(text("""
@@ -132,7 +137,7 @@ def run_migration():
                 """)).fetchall()
                 if vuln_diff:
                     raise RuntimeError(f"ABORT: {len(vuln_diff)} residents differ on vulnerable_members! First 5: {vuln_diff[:5]}")
-                print("  -> Gate passed: vulnerable_members matches family.vulnerable_members across 100% of residents.")
+                print("  -> Gate 4 passed: vulnerable_members matches family.vulnerable_members across 100% of residents.")
 
                 # Check 5: remarks
                 rem_diff = conn.execute(text("""
@@ -143,7 +148,7 @@ def run_migration():
                 """)).fetchall()
                 if rem_diff:
                     raise RuntimeError(f"ABORT: {len(rem_diff)} residents differ on remarks! First 5: {rem_diff[:5]}")
-                print("  -> Gate passed: remarks matches family.remarks across 100% of residents.")
+                print("  -> Gate 5 passed: remarks matches family.remarks across 100% of residents.")
 
                 # Check 6: uploaded_by
                 up_diff = conn.execute(text("""
@@ -154,7 +159,7 @@ def run_migration():
                 """)).fetchall()
                 if up_diff:
                     raise RuntimeError(f"ABORT: {len(up_diff)} residents differ on uploaded_by! First 5: {up_diff[:5]}")
-                print("  -> Gate passed: uploaded_by matches family.uploaded_by across 100% of residents.")
+                print("  -> Gate 6 passed: uploaded_by matches family.uploaded_by across 100% of residents.")
 
                 # Check 7: contact_number
                 contact_diff = conn.execute(text("""
@@ -165,7 +170,7 @@ def run_migration():
                 """)).fetchall()
                 if contact_diff:
                     raise RuntimeError(f"ABORT: {len(contact_diff)} residents differ on contact_number! First 5: {contact_diff[:5]}")
-                print("  -> Gate passed: contact_number matches family.contact_number across 100% of residents.")
+                print("  -> Gate 7 passed: contact_number matches family.contact_number across 100% of residents.")
 
                 # Check 8: roster_year_id
                 ry_diff = conn.execute(text("""
@@ -176,7 +181,7 @@ def run_migration():
                 """)).fetchall()
                 if ry_diff:
                     raise RuntimeError(f"ABORT: {len(ry_diff)} residents differ on roster_year_id! First 5: {ry_diff[:5]}")
-                print("  -> Gate passed: roster_year_id matches family.roster_year_id across 100% of residents.")
+                print("  -> Gate 8 passed: roster_year_id matches family.roster_year_id across 100% of residents.")
 
                 # Check 9: barangay text vs barangays.name via families.barangay_id
                 b_diff = conn.execute(text("""
@@ -188,7 +193,7 @@ def run_migration():
                 """)).fetchall()
                 if b_diff:
                     raise RuntimeError(f"ABORT: {len(b_diff)} residents have barangay text mismatch with families.barangay_id! First 5: {b_diff[:5]}")
-                print("  -> Gate passed: residents.barangay text matches barangays.name through families.barangay_id across 100% of residents.")
+                print("  -> Gate 9 passed: residents.barangay text matches barangays.name through families.barangay_id across 100% of residents.")
 
                 # -------------------------------------------------------------
                 # STEP 5: Row count verification before dropping
@@ -197,6 +202,9 @@ def run_migration():
                 res_count_pre = conn.execute(text("SELECT COUNT(*) FROM residents;")).scalar()
                 fam_count_pre = conn.execute(text("SELECT COUNT(*) FROM families;")).scalar()
                 print(f"  -> Pre-drop counts: {res_count_pre} residents, {fam_count_pre} families.")
+
+                if res_count_pre != 1055 or fam_count_pre != 347:
+                    raise RuntimeError(f"ABORT: Unexpected pre-drop counts! Expected (1055 residents, 347 families), found ({res_count_pre}, {fam_count_pre})")
 
                 # -------------------------------------------------------------
                 # STEP 6: Drop redundant FK constraints and columns from residents
@@ -238,22 +246,29 @@ def run_migration():
                 print(f"  -> Remaining columns on residents ({len(remaining_cols)}): {remaining_cols}")
 
                 # -------------------------------------------------------------
-                # STEP 8: Transaction completion (ROLLBACK by default)
+                # STEP 8: Transaction completion
                 # -------------------------------------------------------------
-                print("\n" + "=" * 70)
-                print("DRY RUN COMPLETE: All safety gates and verifications PASSED!")
-                print("Rolling back transaction as default safety measure.")
-                print("To permanently apply, change trans.rollback() to trans.commit() in the script.")
-                print("=" * 70)
-
-                trans.rollback()
-                # trans.commit()
+                if DRY_RUN:
+                    print("\n" + "=" * 70)
+                    print("DRY RUN COMPLETE: All 9 safety gates and verifications PASSED!")
+                    print("Rolling back transaction as default safety measure.")
+                    print("To permanently apply to the live database:")
+                    print("  1. Stop the backend server.")
+                    print("  2. Set DRY_RUN = False in migrate_normalize_residents.py.")
+                    print("  3. Run: python migrate_normalize_residents.py")
+                    print("=" * 70)
+                    trans.rollback()
+                else:
+                    trans.commit()
+                    print("\n" + "=" * 70)
+                    print("[LIVE COMMIT] Normalization transaction committed successfully.")
+                    print("=" * 70)
 
             except Exception as e:
                 trans.rollback()
                 print(f"\n[ERROR] Migration failed and was rolled back: {e}")
                 sys.exit(1)
 
+
 if __name__ == "__main__":
     run_migration()
-

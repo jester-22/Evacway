@@ -603,7 +603,7 @@ def get_building_details(building_id):
     family_ids = [r.family_id for r in residents_by_id.values() if r.family_id]
     families_by_id = {}
     if family_ids:
-        fam_list = Family.query.filter(Family.id.in_(family_ids)).all()
+        fam_list = Family.query.options(joinedload(Family.barangay)).filter(Family.id.in_(family_ids)).all()
         families_by_id = {f.id: f for f in fam_list}
 
     # Map assignments to rooms

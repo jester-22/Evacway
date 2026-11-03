@@ -566,13 +566,7 @@ def update_barangay(barangay_id):
         old_name = barangay.name
         barangay.name = new_name
 
-        if old_name != new_name:
-            family_ids = [f.id for f in Family.query.filter_by(barangay_id=barangay.id).all()]
-            if family_ids:
-                Resident.query.filter(Resident.family_id.in_(family_ids)).update(
-                    {Resident.barangay: new_name},
-                    synchronize_session=False
-                )
+
 
     if "population" in data:
         raw_pop = data.get("population")

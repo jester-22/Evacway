@@ -779,16 +779,15 @@ def get_available_families(room_id):
     if assigned_ids:
         query = query.filter(~Family.id.in_(assigned_ids))
 
-    unassigned_families = query.order_by(
+    unassigned_families = query.options(joinedload(Family.barangay)).order_by(
         Family.head_name.asc()
     ).all()
 
     result = []
     for fam in unassigned_families:
-        residents = Resident.query.filter_by(family_id=fam.id).all()
-        member_count = len(residents) if residents else (fam.member_count or 1)
-        address = next((r.address for r in residents if r.address), None)
-        contact = fam.contact_number or next((r.contact_number for r in residents if r.contact_number), None)
+        member_count = fam.member_count or 1
+        address = fam.address
+        contact = fam.contact_number
 
         result.append({
             "id": fam.id,

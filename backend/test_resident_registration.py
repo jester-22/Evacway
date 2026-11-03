@@ -72,6 +72,9 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             connection.execute(text(
                 'CREATE TABLE barangays (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, population INTEGER, geom BLOB)'
             ))
+            connection.execute(text(
+                'CREATE TABLE evacuation_centers (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, capacity INTEGER, building_material VARCHAR(50), accessibility_notes TEXT, hazard_exposure_score FLOAT, contact_number VARCHAR(20), is_active BOOLEAN DEFAULT 1, center_type VARCHAR(50), owner_name VARCHAR(150), max_rooms INTEGER, geom BLOB, entrance_geom BLOB, managed_by INTEGER, created_at DATETIME)'
+            ))
 
     @classmethod
     def tearDownClass(cls):
@@ -797,10 +800,18 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         self.assertTrue(top_match['match_flags']['barangay'])
 
     def test_family_member_count_on_add_move_remove(self):
-        """Verify member_count stays strictly accurate when residents are added, moved, and removed."""
+        """Verify member_count stays strictly accurate when residents are added, moved via existing move route, and removed."""
         brgy = Barangay(name='Poblacion')
         ry = RosterYear(year=2025, is_active=True)
         db.session.add_all([brgy, ry])
+        db.session.flush()
+
+        with db.engine.begin() as conn:
+            conn.execute(text("INSERT INTO evacuation_centers (id, name, capacity, is_active) VALUES (1, 'Test Center', 100, 1)"))
+
+        room1 = EvacuationCenterRoom(id=1, evacuation_center_id=1, room_number='101', capacity=10, is_active=True)
+        room2 = EvacuationCenterRoom(id=2, evacuation_center_id=1, room_number='102', capacity=10, is_active=True)
+        db.session.add_all([room1, room2])
         db.session.flush()
 
         fam_a = Family(
@@ -812,25 +823,14 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             contact_number='09181111111',
             address='Zone 1',
         )
-        fam_b = Family(
-            roster_year_id=ry.id,
-            barangay_id=brgy.id,
-            family_code='FAM-B',
-            head_name='Pedro Santos',
-            member_count=1,
-            contact_number='09182222222',
-            address='Zone 2',
-        )
-        db.session.add_all([fam_a, fam_b])
+        db.session.add(fam_a)
         db.session.flush()
 
         head_a = Resident(family_id=fam_a.id, first_name='Juan', last_name='Dela Cruz', is_head_of_family=True)
-        head_b = Resident(family_id=fam_b.id, first_name='Pedro', last_name='Santos', is_head_of_family=True)
-        db.session.add_all([head_a, head_b])
+        db.session.add(head_a)
         db.session.commit()
 
         self.assertEqual(fam_a.member_count, 1)
-        self.assertEqual(fam_b.member_count, 1)
 
         with patch('routes.families._serialize_family_detail', return_value={}):
             # 1. Add resident to Family A
@@ -851,34 +851,38 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             self.assertEqual(fam_a.member_count, 2)
             self.assertEqual(Resident.query.filter_by(family_id=fam_a.id).count(), 2)
 
-            # 2. Move resident (Ana) from Family A to Family B
+            # Assign family to Room 1
+            assign1 = EvacuationAssignment(resident_id=head_a.id, room_id=room1.id, evacuation_center_id=1)
+            assign2 = EvacuationAssignment(resident_id=ana_id, room_id=room1.id, evacuation_center_id=1)
+            db.session.add_all([assign1, assign2])
+            db.session.commit()
+
+            # 2. Move Family A to Room 2 using existing route POST /api/families/<id>/move
             move_res = self.client.post(
-                f'/api/families/{fam_a.id}/members/{ana_id}/move',
+                f'/api/families/{fam_a.id}/move',
                 headers=self._staff_headers(),
                 json={
-                    'target_family_id': fam_b.id,
-                    'relationship_to_head': 'Sibling',
+                    'room_id': room2.id,
+                    'center_id': 1,
                 }
             )
             self.assertEqual(move_res.status_code, 200)
 
             db.session.refresh(fam_a)
-            db.session.refresh(fam_b)
-            self.assertEqual(fam_a.member_count, 1)
-            self.assertEqual(fam_b.member_count, 2)
-            self.assertEqual(Resident.query.filter_by(family_id=fam_a.id).count(), 1)
-            self.assertEqual(Resident.query.filter_by(family_id=fam_b.id).count(), 2)
+            # member_count must remain strictly accurate (2) after room move
+            self.assertEqual(fam_a.member_count, 2)
+            self.assertEqual(Resident.query.filter_by(family_id=fam_a.id).count(), 2)
 
-            # 3. Remove resident (Ana) from Family B
+            # 3. Remove resident (Ana) from Family A
             del_res = self.client.delete(
-                f'/api/families/{fam_b.id}/members/{ana_id}',
+                f'/api/families/{fam_a.id}/members/{ana_id}',
                 headers=self._staff_headers(),
             )
             self.assertEqual(del_res.status_code, 200)
 
-            db.session.refresh(fam_b)
-            self.assertEqual(fam_b.member_count, 1)
-            self.assertEqual(Resident.query.filter_by(family_id=fam_b.id).count(), 1)
+            db.session.refresh(fam_a)
+            self.assertEqual(fam_a.member_count, 1)
+            self.assertEqual(Resident.query.filter_by(family_id=fam_a.id).count(), 1)
 
     def test_residents_query_count_constant_with_joinedload(self):
         """Verify GET /api/residents executes a fixed 3 queries (joinedload) regardless of roster size."""

@@ -216,12 +216,12 @@ def _family_query(search='', barangay_id='', assignment_status='', building_id='
             Family.family_code.ilike(pattern),
             Family.head_name.ilike(pattern),
             Family.contact_number.ilike(pattern),
+            Family.address.ilike(pattern),
             Barangay.name.ilike(pattern),
             Family.id.in_(
                 db.session.query(Resident.family_id).filter(
                     Resident.family_id.is_not(None),
                     or_(
-                        Resident.address.ilike(pattern),
                         Resident.first_name.ilike(pattern),
                         Resident.middle_name.ilike(pattern),
                         Resident.last_name.ilike(pattern),
@@ -2239,67 +2239,7 @@ def update_family_member(family_id, member_id):
 # DELETE FAMILY MEMBER
 # =========================================================
 
-# =========================================================
-# MOVE FAMILY MEMBER TO ANOTHER HOUSEHOLD
-# =========================================================
-@families_bp.route(
-    '/api/families/<int:family_id>/members/<int:member_id>/move',
-    methods=['POST']
-)
-@jwt_required()
-@role_required('admin', 'lgu_personnel')
-def move_family_member(family_id, member_id):
-    source_family = db.session.get(Family, family_id)
-    if not source_family:
-        return jsonify({"error": "Source family not found"}), 404
 
-    data = request.get_json(silent=True) or {}
-    target_family_id = data.get('target_family_id')
-    if not target_family_id:
-        return jsonify({"error": "target_family_id is required"}), 400
-
-    target_family = db.session.get(Family, int(target_family_id))
-    if not target_family:
-        return jsonify({"error": "Target family not found"}), 404
-
-    resident = Resident.query.filter_by(id=member_id, family_id=source_family.id).first()
-    if not resident:
-        return jsonify({"error": "Family member not found in source family"}), 404
-
-    source_members = Resident.query.filter_by(family_id=source_family.id).all()
-    if len(source_members) <= 1:
-        return jsonify({"error": "Cannot move the only member of a household. Delete the household instead."}), 400
-
-    if resident.is_head_of_family:
-        replacement_head_id = data.get('replacement_head_id')
-        if not replacement_head_id:
-            return jsonify({"error": "replacement_head_id is required when moving the household head"}), 400
-        replacement = next((m for m in source_members if m.id == int(replacement_head_id) and m.id != resident.id), None)
-        if not replacement:
-            return jsonify({"error": "Valid replacement household head from source household is required"}), 400
-        replacement.is_head_of_family = True
-        replacement.relationship_to_head = 'Household Head'
-        source_family.head_name = replacement.get_full_name()
-
-    resident.is_head_of_family = False
-    resident.relationship_to_head = str(data.get('relationship_to_head') or 'Family Member')
-    resident.family_id = target_family.id
-
-    db.session.flush()
-    _sync_household_and_barangay(source_family)
-    _sync_household_and_barangay(target_family)
-
-    db.session.add(SystemLog(
-        user_id=get_jwt_identity(),
-        action=f"Moved member '{resident.get_full_name()}' from family {source_family.family_code} to {target_family.family_code}"
-    ))
-    db.session.commit()
-
-    return jsonify({
-        "message": f"Moved '{resident.get_full_name()}' to family {target_family.family_code} successfully.",
-        "source_family": _serialize_family_detail(source_family),
-        "target_family": _serialize_family_detail(target_family),
-    }), 200
 
 @families_bp.route(
     '/api/families/<int:family_id>/members/<int:member_id>',

@@ -1,5 +1,13 @@
 __pycache__/
 *.pyc
+venv/
+node_modules/
+dist/
+.env
+test-screenshots/
+test-admin-diagnosis/
+test-final-viewports/
+*.dump
 token.json
 *.db
 frontend/*screenshots*/

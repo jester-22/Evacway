@@ -209,15 +209,7 @@ export default function CenterList({
           </p>
         </div>
         <div className="ec-list-controls">
-          <button
-            type="button"
-            className="ds-btn ds-btn--icon ds-btn--ghost ec-refresh-btn"
-            aria-label="Refresh centers"
-            title="Refresh centers"
-            onClick={handleRefresh}
-          >
-            <FontAwesomeIcon icon={faRotate} />
-          </button>
+          
           {isAdmin && onAddCenter && (
             <button type="button" className="ds-btn ds-btn--primary" onClick={onAddCenter}>
               <FontAwesomeIcon icon={faPlus} /> Add Center

@@ -60,7 +60,12 @@ def send_staff_push_notifications(notifications):
             continue
 
         dashboard = '/admin' if user.role == 'admin' else '/lgu'
-        tab = 'reports' if notification.resource_type == 'hazard_report' else 'rescue'
+        if notification.resource_type == 'hazard_report':
+            tab = 'reports'
+        elif notification.resource_type in ('resident_registration', 'resident_account'):
+            tab = 'registrations'
+        else:
+            tab = 'rescue'
         url = (
             f'{frontend_url}{dashboard}?tab={tab}'
             f'&notificationId={notification.id}'

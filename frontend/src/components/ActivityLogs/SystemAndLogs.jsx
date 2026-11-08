@@ -90,14 +90,16 @@ function formatRelativeTime(dateString, now = Date.now()) {
   const diffMs = now - date.getTime();
   if (Number.isNaN(diffMs)) return "";
 
-  const diffMins = Math.floor(diffMs / (1000 * 60));
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins} min ago`;
+  // Handle minor clock skew between client and server
+  if (diffMs < 60 * 1000) return "Just now";
 
-  const diffHours = Math.floor(diffMins / (1000 * 60 * 60));
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  if (diffMins < 60) return `${diffMins}m ago`;
+
+  const diffHours = Math.floor(diffMins / 60);
   if (diffHours < 24) return `${diffHours}h ago`;
 
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const diffDays = Math.floor(diffHours / 24);
   if (diffDays <= 7) return `${diffDays}d ago`;
 
   return date.toLocaleDateString(undefined, {

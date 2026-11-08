@@ -87,7 +87,18 @@ export default function EvacuationCenterManager({
       const props = feature?.properties || feature;
       const id = props?.id ?? feature?.id;
       const name = props?.name || props?.display_label || `Building #${id}`;
-      return { id, name, notes: props?.notes || null, geometry: feature?.geometry || null };
+      const is_mapped = Boolean(
+        props?.is_mapped ||
+        (feature?.geometry && feature.geometry.coordinates && feature.geometry.coordinates.length > 0)
+      );
+      return {
+        id,
+        name,
+        notes: props?.notes || null,
+        geometry: feature?.geometry || null,
+        is_mapped,
+        properties: props,
+      };
     });
   }, [centerBuildingsQuery.data]);
 
@@ -115,6 +126,19 @@ export default function EvacuationCenterManager({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  // Auto-dismiss floating notification toasts after 4.5 seconds
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(""), 4500);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(""), 4500);
+    return () => clearTimeout(t);
+  }, [notice]);
+
   // Center modals
   const [centerModalMode, setCenterModalMode] = useState(null);
   const [centerForm, setCenterForm] = useState({
@@ -132,8 +156,6 @@ export default function EvacuationCenterManager({
   const [roomForm, setRoomForm] = useState({
     room_number: "",
     capacity: "",
-    latitude: "",
-    longitude: "",
     building_id: "",
   });
   const [savingRoom, setSavingRoom] = useState(false);
@@ -202,14 +224,15 @@ export default function EvacuationCenterManager({
     ]);
   }
 
-  async function openAssignModal() {
-    if (!selectedRoom) return;
+  async function openAssignModal(targetRoom = selectedRoom) {
+    const isSingle = selectedCenter?.center_type === 'single_venue' || (!targetRoom && centerRooms.length === 0);
+    if (!targetRoom && !isSingle) return;
     setAssignModalOpen(true);
     setSelectedFamilyIdToAssign("");
     setLoadingAvailableFamilies(true);
     setError("");
     try {
-      const data = await api.getAvailableFamilies(selectedRoom.id);
+      const data = await api.getAvailableFamilies(targetRoom?.id, selectedCenter?.id);
       setAvailableFamilies(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Failed to load available families:", err);
@@ -241,9 +264,15 @@ export default function EvacuationCenterManager({
       name: "",
       barangay_ids: [],
       capacity: "",
+      center_type: "campus",
       building_material: "",
+      amenity_ids: [],
+      accessibility_feature_ids: [],
+      accessibility_id: null,
       accessibility_notes: "",
       contact_number: "",
+      owner_name: "",
+      max_rooms: "",
     });
     setCenterModalMode("add");
     setError("");
@@ -251,13 +280,21 @@ export default function EvacuationCenterManager({
 
   function openEditCenterModal(center) {
     const props = center.properties || center;
+    const featIds = props.amenity_ids || props.accessibility_feature_ids || (props.amenities || props.accessibility_features || []).map(f => f.id) || [];
     setCenterForm({
       name: props.name || "",
       barangay_ids: (props.barangays || []).map((barangay) => String(barangay.id)),
       capacity: props.capacity !== null && props.capacity !== undefined ? String(props.capacity) : "",
+      center_type: props.center_type || "campus",
+      center_type_id: props.center_type_id || 1,
       building_material: props.building_material || "",
+      building_material_id: props.building_material_id || null,
+      amenity_ids: featIds,
+      accessibility_feature_ids: featIds,
       accessibility_notes: props.accessibility_notes || "",
       contact_number: props.contact_number || "",
+      owner_name: props.owner_name || "",
+      max_rooms: props.max_rooms ? String(props.max_rooms) : "",
     });
     setSelectedCenter(normalizeCenter(center));
     setCenterModalMode("edit");
@@ -283,9 +320,16 @@ export default function EvacuationCenterManager({
         name: centerForm.name.trim(),
         barangay_ids: centerForm.barangay_ids.map(Number),
         capacity: centerForm.capacity !== "" ? Number(centerForm.capacity) : null,
-        building_material: centerForm.building_material.trim() || null,
-        accessibility_notes: centerForm.accessibility_notes.trim() || null,
-        contact_number: centerForm.contact_number.trim() || null,
+        center_type: centerForm.center_type || "campus",
+        center_type_id: centerForm.center_type_id || null,
+        building_material: centerForm.building_material?.trim() || null,
+        building_material_id: centerForm.building_material_id || null,
+        amenity_ids: centerForm.amenity_ids || centerForm.accessibility_feature_ids || [],
+        accessibility_feature_ids: centerForm.amenity_ids || centerForm.accessibility_feature_ids || [],
+        accessibility_notes: centerForm.accessibility_notes?.trim() || null,
+        contact_number: centerForm.contact_number?.trim() || null,
+        owner_name: centerForm.owner_name?.trim() || null,
+        max_rooms: centerForm.max_rooms ? Number(centerForm.max_rooms) : null,
       };
 
       if (centerModalMode === "add") {
@@ -340,8 +384,6 @@ export default function EvacuationCenterManager({
     setRoomForm({
       room_number: room.room_number || "",
       capacity: String(room.capacity || ""),
-      latitude: room.latitude !== null && room.latitude !== undefined ? String(room.latitude) : "",
-      longitude: room.longitude !== null && room.longitude !== undefined ? String(room.longitude) : "",
       building_id: room.building_id != null ? String(room.building_id) : "",
     });
     setSelectedRoom(room);
@@ -369,8 +411,6 @@ export default function EvacuationCenterManager({
         room_number: roomForm.room_number.trim(),
         capacity: Number(roomForm.capacity),
         building_id: parsedBuildingId,
-        latitude: roomForm.latitude ? Number(roomForm.latitude) : null,
-        longitude: roomForm.longitude ? Number(roomForm.longitude) : null,
       };
 
       if (roomModalMode === "add") {
@@ -472,11 +512,19 @@ export default function EvacuationCenterManager({
     );
     if (!family) return;
 
-    const remaining = selectedRoom.available ?? (selectedRoom.capacity - (selectedRoom.occupied || 0));
+    const isSingle = selectedCenter?.center_type === 'single_venue' || (!selectedRoom && centerRooms.length === 0);
     const memberCount = family.member_count || family.family_members || 1;
 
-    if (memberCount > remaining) {
-      setError(`Cannot assign: Family has ${memberCount} members, but room only has ${remaining} spaces left.`);
+    let remaining = 0;
+    if (isSingle) {
+      const assigned = Number(selectedCenter?.assigned ?? selectedCenter?.total_assigned ?? selectedCenter?.occupied ?? 0);
+      remaining = Math.max((selectedCenter?.capacity || 0) - assigned, 0);
+    } else if (selectedRoom) {
+      remaining = selectedRoom.available ?? ((selectedRoom.capacity || 0) - (selectedRoom.occupied || 0));
+    }
+
+    if ((selectedCenter?.capacity || selectedRoom?.capacity) && remaining > 0 && memberCount > remaining) {
+      setError(`Cannot assign: Family has ${memberCount} members, but only ${remaining} spaces left.`);
       return;
     }
 
@@ -486,10 +534,14 @@ export default function EvacuationCenterManager({
     try {
       await api.assignFamily(family.id, {
         center_id: selectedCenter.id,
-        room_id: selectedRoom.id,
+        room_id: isSingle ? null : (selectedRoom?.id || null),
       });
 
-      setNotice(`Family "${family.household_head_name || family.head_name}" assigned to ${formatRoomLabel(selectedRoom.room_number)}.`);
+      const locationLabel = (isSingle || !selectedRoom)
+        ? (selectedCenter?.name || "the evacuation center")
+        : formatRoomLabel(selectedRoom.room_number);
+
+      setNotice(`Family "${family.household_head_name || family.head_name}" assigned to ${locationLabel}.`);
       setAssignModalOpen(false);
 
       await invalidateFamilyAssignments();
@@ -679,20 +731,33 @@ export default function EvacuationCenterManager({
 
 
   function handleAssignHouseholdClick() {
+    const isSingle = selectedCenter?.center_type === 'single_venue' || centerRooms.length === 0;
+    if (isSingle) {
+      const assigned = Number(selectedCenter?.assigned ?? selectedCenter?.total_assigned ?? selectedCenter?.occupied ?? 0);
+      const remaining = Math.max((selectedCenter?.capacity || 0) - assigned, 0);
+      if ((selectedCenter?.capacity || 0) > 0 && remaining <= 0) {
+        setError("This evacuation center is at full capacity.");
+        return;
+      }
+      setSelectedRoom(null);
+      openAssignModal(null);
+      return;
+    }
+
     if (!selectedRoom || selectedRoom.id === "all") {
       const firstAvailable = centerRooms.find(
         (r) => r.is_active && (r.available ?? r.capacity - (r.occupied || 0)) > 0
       );
       if (firstAvailable) {
         setSelectedRoom(firstAvailable);
-        setTimeout(() => openAssignModal(), 50);
+        openAssignModal(firstAvailable);
       } else {
         setError(
           "All rooms in this evacuation center are at full capacity or inactive. Please create a new room or adjust room capacity."
         );
       }
     } else {
-      openAssignModal();
+      openAssignModal(selectedRoom);
     }
   }
 
@@ -791,17 +856,17 @@ export default function EvacuationCenterManager({
             setError("");
           }}
           onEditRoom={(room) => openEditRoomModal(room)}
-          onViewRoomMap={(room) => {
-            const lat = Number(room.latitude ?? room.lat);
-            const lng = Number(room.longitude ?? room.lng);
-            if (Number.isFinite(lat) && Number.isFinite(lng)) {
-              navigate(`${mapBasePath}?lat=${lat}&lng=${lng}&room=${room.id}`);
-            }
-          }}
           onViewBuildingMap={(building) => {
             const cId = selectedCenter?.id || selectedCenter?.properties?.id;
             if (cId && building?.id) {
               navigate(`${mapBasePath}?center=${cId}&building=${building.id}`);
+            }
+          }}
+          onPlaceBuilding={(building, mode) => {
+            const cId = selectedCenter?.id || selectedCenter?.properties?.id;
+            if (cId && building?.id) {
+              const action = typeof mode === 'string' ? mode : (mode ? 'edit_polygon' : 'place_building');
+              navigate(`${mapBasePath}?center=${cId}&building=${building.id}&mode=${action}`);
             }
           }}
           onLinkRoom={(room) => openEditRoomModal(room)}
@@ -870,7 +935,7 @@ export default function EvacuationCenterManager({
         />
       )}
       <AssignFamilyModal
-        open={assignModalOpen && !!selectedRoom}
+        open={assignModalOpen && (!!selectedRoom || selectedCenter?.center_type === 'single_venue' || centerRooms.length === 0)}
         selectedCenter={selectedCenter}
         selectedRoom={selectedRoom}
         availableFamilies={availableFamilies}

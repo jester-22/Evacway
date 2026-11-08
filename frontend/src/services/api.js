@@ -92,6 +92,18 @@ export const api = {
       method: "POST",
     }),
 
+    createResidentAccount: (payload) =>
+
+    request("/api/resident-registrations/manual-create", {
+
+      method: "POST",
+
+      body: JSON.stringify(payload),
+
+    }),
+
+
+
   requestPasswordReset: (email) =>
     request("/api/auth/password/forgot", {
       method: "POST",
@@ -198,6 +210,29 @@ export const api = {
 
   getAllowedCenterTypes: (centerId) =>
     request(`/api/evacuation-centers/${centerId}/allowed-center-types`),
+
+  getCheckInList: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, val]) => {
+      if (val !== undefined && val !== null && val !== "") {
+        searchParams.set(key, val);
+      }
+    });
+    const qs = searchParams.toString();
+    return request(`/api/evacuation-centers/check-in-list${qs ? `?${qs}` : ""}`);
+  },
+
+  updateEvacueeCheckIn: (centerId, data) =>
+    request(`/api/evacuation-centers/${centerId}/check-in`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  autoGeofenceCheckIn: (data) =>
+    request("/api/evacuation-centers/check-in/auto", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 
   patch: (path, body) =>
     request(path.startsWith("/api") ? path : `/api${path}`, {
@@ -358,10 +393,22 @@ export const api = {
 
   getPublicBarangays: () => request("/api/barangays/public"),
 
-  findMyEvacuationCenter: (name) =>
-    request(
-      `/api/residents/find-center?name=${encodeURIComponent(name)}`
-    ),
+  findMyEvacuationCenter: (param) => {
+    if (typeof param === "object" && param !== null) {
+      const cleanParams = {};
+      Object.entries(param).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== "") cleanParams[k] = v;
+      });
+      const q = new URLSearchParams(cleanParams).toString();
+      return request(`/api/residents/find-center?${q}`);
+    }
+    if (typeof param === "number") {
+      return request(`/api/residents/find-center?resident_id=${param}`);
+    }
+    return request(
+      `/api/residents/find-center?name=${encodeURIComponent(param || "")}`
+    );
+  },
 
   // -------------------------------------------------------
   // ROOMS
@@ -599,9 +646,6 @@ export const api = {
       method: "DELETE",
     }),
 
-  suggestRoomsForBuildings: (centerId) =>
-    request(`/api/evacuation-centers/${centerId}/suggest-rooms`),
-
   getBuildingDetails: (buildingId, params = {}) => {
     const searchParams = new URLSearchParams();
     Object.entries(params).forEach(([key, val]) => {
@@ -621,7 +665,92 @@ export const api = {
     request(`/api/residents/autosuggest?q=${encodeURIComponent(query)}`, {
       signal,
     }),
+
+  // -------------------------------------------------------
+  // SHELTER METADATA: CENTER TYPES, MATERIALS, AMENITIES
+  // -------------------------------------------------------
+
+  // Center Types
+  getCenterTypes: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/api/center-types${qs ? `?${qs}` : ""}`);
+  },
+  createCenterType: (data) =>
+    request("/api/center-types", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateCenterType: (id, data) =>
+    request(`/api/center-types/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  deleteCenterType: (id) =>
+    request(`/api/center-types/${id}`, {
+      method: "DELETE",
+    }),
+
+  // Building Materials
+  getBuildingMaterials: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/api/building-materials${qs ? `?${qs}` : ""}`);
+  },
+  createBuildingMaterial: (data) =>
+    request("/api/building-materials", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateBuildingMaterial: (id, data) =>
+    request(`/api/building-materials/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  deleteBuildingMaterial: (id) =>
+    request(`/api/building-materials/${id}`, {
+      method: "DELETE",
+    }),
+
+  // Amenities
+  getAmenities: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/api/amenities${qs ? `?${qs}` : ""}`);
+  },
+  createAmenity: (data) =>
+    request("/api/amenities", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateAmenity: (id, data) =>
+    request(`/api/amenities/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  deleteAmenity: (id) =>
+    request(`/api/amenities/${id}`, {
+      method: "DELETE",
+    }),
+
+  // Aliases for accessibility features
+  getAccessibilityFeatures: (params) => {
+    const qs = new URLSearchParams(params || {}).toString();
+    return request(`/api/amenities${qs ? `?${qs}` : ""}`);
+  },
+  createAccessibilityFeature: (data) =>
+    request("/api/amenities", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateAccessibilityFeature: (id, data) =>
+    request(`/api/amenities/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  deleteAccessibilityFeature: (id) =>
+    request(`/api/amenities/${id}`, {
+      method: "DELETE",
+    }),
 };
 
 
 export { BASE_URL };
+export default api;

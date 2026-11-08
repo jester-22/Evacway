@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-from flask import Flask, jsonify
+from flask import Flask, abort, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from config import Config
@@ -22,6 +22,7 @@ from routes.notifications import notifications_bp
 from routes.rescue_requests import rescue_bp
 from routes.buildings import buildings_bp
 from routes.resident_registrations import registrations_bp
+from routes.reference_options import reference_options_bp
 
 
 app = Flask(__name__)
@@ -80,6 +81,7 @@ app.register_blueprint(notifications_bp)
 app.register_blueprint(rescue_bp)
 app.register_blueprint(buildings_bp)
 app.register_blueprint(registrations_bp)
+app.register_blueprint(reference_options_bp)
 
 
 # =========================================================
@@ -93,8 +95,39 @@ def handle_500_error(e):
 
 
 # =========================================================
-# HOME
+# STATIC UPLOADS FALLBACK & HOME
 # =========================================================
+
+@app.route("/static/upload/<path:subpath>")
+@app.route("/static/uploads/<path:subpath>")
+def serve_uploaded_file(subpath):
+    static_root = os.path.join(app.root_path, "static")
+    candidates = [
+        os.path.join(static_root, "uploads", subpath),
+        os.path.join(static_root, "upload", subpath),
+        os.path.join(static_root, subpath),
+    ]
+    basename = os.path.basename(subpath)
+    if basename:
+        for base_dir in (
+            os.path.join(static_root, "uploads", "rescue"),
+            os.path.join(static_root, "uploads", "hazard"),
+            os.path.join(static_root, "uploads"),
+            os.path.join(static_root, "rescue"),
+        ):
+            if os.path.isdir(base_dir):
+                candidates.append(os.path.join(base_dir, basename))
+                for entry in os.scandir(base_dir):
+                    if entry.is_dir():
+                        candidates.append(os.path.join(entry.path, basename))
+
+    for candidate in candidates:
+        norm = os.path.normpath(candidate)
+        if norm.startswith(os.path.normpath(static_root)) and os.path.isfile(norm):
+            directory, filename = os.path.split(norm)
+            return send_from_directory(directory, filename)
+    abort(404)
+
 
 @app.route("/")
 def home():

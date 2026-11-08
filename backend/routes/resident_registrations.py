@@ -24,6 +24,7 @@ from models import (
     philippines_now,
 )
 from services.mailer import send_resident_registration_email
+from services.notifications import create_staff_notifications, send_staff_push_notifications
 from utils import role_required
 
 
@@ -336,7 +337,18 @@ def submit_resident_registration():
     )
     db.session.add(registration)
     try:
+        db.session.flush()
+        resident_name = f"{fields['first_name']} {fields['last_name']}".strip()
+        notifications = create_staff_notifications(
+            event_type='resident_registration',
+            resource_type='resident_registration',
+            resource_id=registration.id,
+            title='Pending Resident Account Registration',
+            message=f'{resident_name} from Brgy. {fields["barangay"]} registered an account and is awaiting verification.',
+            is_emergency=False,
+        )
         db.session.commit()
+        send_staff_push_notifications(notifications)
     except IntegrityError:
         db.session.rollback()
         return jsonify({'error': 'A registration with these details already exists.'}), 409
@@ -508,3 +520,154 @@ def resend_resident_registration_email(request_id):
         'message': 'Decision email sent.' if email_sent else 'Email was not sent. Check SMTP configuration and retry.',
         'email_sent': email_sent,
     }), 200
+
+# =========================================================================
+# MANUAL RESIDENT ACCOUNT CREATION (FOR ADMIN / LGU PERSONNEL)
+# =========================================================================
+@registrations_bp.route('/api/resident-registrations/manual-create', methods=['POST'])
+@role_required('admin', 'lgu_personnel')
+def manual_create_resident_account():
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'A JSON object is required.'}), 400
+
+    reviewer_id = int(get_jwt_identity())
+    resident_id = data.get('resident_id')
+    email = str(data.get('email') or '').strip().lower()
+    password = str(data.get('password') or '').strip()
+
+    if not email or not _EMAIL_RE.fullmatch(email):
+        return jsonify({'error': 'A valid email address is required.'}), 400
+    if not password or len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters.'}), 400
+
+    # Duplicate check for email across both User and ResidentAccount
+    duplicate_email = (
+        User.query.filter(func.lower(User.email) == email).first()
+        or ResidentAccount.query.filter(func.lower(ResidentAccount.email) == email).first()
+    )
+    if duplicate_email:
+        return jsonify({'error': f'An account with the email "{email}" already exists.'}), 409
+
+    resident = None
+    if resident_id:
+        try:
+            resident_id = int(resident_id)
+            resident = db.session.get(Resident, resident_id)
+        except (ValueError, TypeError):
+            resident = None
+        if not resident:
+            return jsonify({'error': 'Selected resident record was not found.'}), 404
+        if ResidentAccount.query.filter_by(resident_id=resident.id).first() or User.query.filter_by(resident_id=resident.id).first():
+            return jsonify({'error': 'This resident already has an active account.'}), 409
+    else:
+        # Create resident record
+        first_name = str(data.get('first_name') or '').strip()
+        middle_name = str(data.get('middle_name') or '').strip()
+        last_name = str(data.get('last_name') or '').strip()
+        suffix = str(data.get('suffix') or '').strip()
+        barangay_val = data.get('barangay_id') or data.get('barangay')
+        address = str(data.get('address') or '').strip()
+        contact_number = str(data.get('contact_number') or '').strip()
+        birthdate_str = str(data.get('birthdate') or data.get('date_of_birth') or '').strip()
+
+        if not first_name or not last_name:
+            return jsonify({'error': 'First name and last name are required.'}), 400
+
+        barangay_id = None
+        if barangay_val:
+            try:
+                bid = int(barangay_val)
+                brgy = db.session.get(Barangay, bid)
+                if brgy:
+                    barangay_id = brgy.id
+            except (ValueError, TypeError):
+                brgy = Barangay.query.filter(func.lower(Barangay.name) == str(barangay_val).lower().strip()).first()
+                if brgy:
+                    barangay_id = brgy.id
+
+        birthdate_obj = None
+        if birthdate_str:
+            try:
+                birthdate_obj = date.fromisoformat(birthdate_str)
+            except ValueError:
+                pass
+        if not birthdate_obj:
+            birthdate_obj = date(1990, 1, 1)
+
+        resident = Resident(
+            first_name=first_name,
+            middle_name=middle_name or None,
+            last_name=last_name,
+            suffix=suffix or None,
+            date_of_birth=birthdate_obj,
+            barangay_id=barangay_id,
+            address=address or None,
+            contact_number=contact_number or None,
+        )
+        db.session.add(resident)
+        db.session.flush()
+
+    # Create ResidentAccount
+    pwd_hash = generate_password_hash(password)
+    account = ResidentAccount(
+        resident_id=resident.id,
+        email=email,
+        password_hash=pwd_hash,
+        is_active=True,
+    )
+    db.session.add(account)
+
+    # Find or infer barangay name
+    barangay_name = ''
+    if resident.barangay:
+        barangay_name = resident.barangay.name if hasattr(resident.barangay, 'name') else str(resident.barangay)
+    elif resident.barangay_id:
+        b_row = db.session.get(Barangay, resident.barangay_id)
+        if b_row:
+            barangay_name = b_row.name
+
+    birth_dt = resident.date_of_birth or date(1990, 1, 1)
+
+    # Create matching approved ResidentRegistrationRequest for complete recordkeeping
+    reg_request = ResidentRegistrationRequest(
+        first_name=resident.first_name,
+        middle_name=resident.middle_name,
+        last_name=resident.last_name,
+        birthdate=birth_dt,
+        barangay=barangay_name or 'N/A',
+        address=resident.address or 'N/A',
+        contact_number=resident.contact_number or 'N/A',
+        email=email,
+        password_hash=pwd_hash,
+        status='approved',
+        matched_resident_id=resident.id,
+        reviewed_by=reviewer_id,
+        reviewed_at=philippines_now(),
+    )
+    db.session.add(reg_request)
+
+    full_nm = f"{resident.first_name} {resident.last_name}"
+    db.session.add(SystemLog(
+        user_id=reviewer_id,
+        action=f"Manually created resident account for {full_nm} ({email})"
+    ))
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Database conflict: email or resident record already exists.'}), 409
+
+    send_email = data.get('send_email', True)
+    email_sent = False
+    if send_email:
+        email_sent = _send_decision_email(reg_request)
+
+    return jsonify({
+        'message': f'Resident account for {full_nm} created successfully.',
+        'account': account.to_dict(),
+        'resident': resident.to_dict(),
+        'registration': reg_request.to_dict(),
+        'email_sent': email_sent,
+    }), 201

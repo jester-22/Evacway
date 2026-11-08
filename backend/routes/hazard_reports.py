@@ -2,12 +2,12 @@ import os
 import uuid
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
-from models import db, HazardReport, SystemLog, RoadSegment
+from models import db, HazardReport, SystemLog, RoadSegment, User, ResidentAccount
 from sqlalchemy import func
 from geoalchemy2 import Geography
 from geoalchemy2.shape import to_shape, from_shape
 from shapely.geometry import mapping, Point
-from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import get_jwt_identity, jwt_required, get_jwt
 from utils import role_required
 from datetime import datetime
 from services.notifications import (
@@ -92,9 +92,39 @@ def close_nearby_roads(report):
     return dedupe(closed_names)
 
 
+def _resolve_hazard_uploader_folder():
+    claims = get_jwt() or {}
+    uploader_name = (
+        request.form.get('reporter_name')
+        or request.form.get('uploader')
+        or claims.get('name')
+    )
+    if not uploader_name:
+        ident = get_jwt_identity()
+        account_type = claims.get('account_type', 'user')
+        try:
+            ident_int = int(ident) if ident is not None else None
+        except (TypeError, ValueError):
+            ident_int = None
+        if ident_int is not None:
+            if account_type == 'resident_account':
+                acct = ResidentAccount.query.get(ident_int)
+                if acct and acct.resident:
+                    uploader_name = acct.resident.get_full_name()
+                elif acct and acct.email:
+                    uploader_name = acct.email.split('@')[0]
+            else:
+                usr = User.query.get(ident_int)
+                if usr:
+                    uploader_name = usr.name or (usr.email.split('@')[0] if usr.email else None)
+    folder = secure_filename(str(uploader_name or '').strip())
+    return folder or 'anonymous'
+
+
 @reports_bp.route('/api/hazard-reports', methods=['POST'])
+@jwt_required()
 def submit_hazard_report():
-    # Residents don't log in — this is intentionally public, per the proposal.
+    # Only authenticated users (residents, LGU, admin) can submit reports.
     if 'photo' not in request.files:
         return jsonify({"error": "A photo is required"}), 400
 
@@ -110,13 +140,16 @@ def submit_hazard_report():
     if not all([description, latitude, longitude]):
         return jsonify({"error": "description, latitude, and longitude are required"}), 400
 
-    # Save the photo with a unique name so uploads never overwrite each other
+    # Save the photo under static/uploads/hazard/<uploader>/<unique_name>
+    uploader_folder = _resolve_hazard_uploader_folder()
     ext = photo.filename.rsplit('.', 1)[1].lower()
     unique_name = f"{uuid.uuid4().hex}.{ext}"
-    upload_folder = os.path.join(current_app.root_path, 'static', 'uploads')
+    upload_folder = os.path.join(
+        current_app.root_path, 'static', 'uploads', 'hazard', uploader_folder
+    )
     os.makedirs(upload_folder, exist_ok=True)
     photo.save(os.path.join(upload_folder, unique_name))
-    photo_url = f"/static/uploads/{unique_name}"
+    photo_url = f"/static/uploads/hazard/{uploader_folder}/{unique_name}"
 
     point = Point(float(longitude), float(latitude))
 
@@ -129,12 +162,14 @@ def submit_hazard_report():
     )
     db.session.add(report)
     db.session.flush()
+    claims = get_jwt() or {}
+    reporter_name = claims.get('name') or 'A resident'
     notifications = create_staff_notifications(
         event_type='hazard_report',
         resource_type='hazard_report',
         resource_id=report.id,
         title='New hazard report',
-        message=f'A resident submitted a {report_type or "hazard"} report for review.',
+        message=f'{reporter_name} submitted a {report_type or "hazard"} report for review.',
     )
     db.session.commit()
     send_staff_push_notifications(notifications)

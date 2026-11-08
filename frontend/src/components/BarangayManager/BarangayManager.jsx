@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../services/api";
@@ -42,6 +42,7 @@ import {
   faChevronRight,
   faLayerGroup,
   faHouseFlag,
+  faShieldHeart,
 } from "@fortawesome/free-solid-svg-icons";
 
 function formatHouseholdCode(idOrCode) {
@@ -157,6 +158,19 @@ function BarangayManager() {
   // Feedback banners
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+
+  // Auto-dismiss notification toasts after 4.5 seconds
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(""), 4500);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  useEffect(() => {
+    if (!successMsg) return;
+    const t = setTimeout(() => setSuccessMsg(""), 4500);
+    return () => clearTimeout(t);
+  }, [successMsg]);
 
   // Page A Search & Pagination
   const [barangaySearch, setBarangaySearch] = useState("");
@@ -454,10 +468,12 @@ function BarangayManager() {
   }
 
   function openCentersSection(centerId = null, roomId = null) {
+    const isLgu = window.location.pathname.startsWith("/lgu");
+    const targetPath = isLgu ? "/lgu" : "/admin";
     if (centerId) {
-      navigate(`/admin?tab=centers&center=${centerId}&subtab=buildings`);
+      navigate(`${targetPath}?tab=centers&center=${centerId}&subtab=buildings`);
     } else {
-      navigate("/admin?tab=centers");
+      navigate(`${targetPath}?tab=centers`);
     }
   }
 
@@ -615,12 +631,112 @@ function BarangayManager() {
   }
 
   // Assign or Transfer Household from Center/Room screens
+  function getBmRoomRemaining(r) {
+    if (!r) return 0;
+    const cap = Number(r.capacity || 0);
+    if (r.unassigned != null) return Math.max(Number(r.unassigned), 0);
+    const assigned = Number(r.assigned ?? r.assigned_count ?? r.occupied ?? 0);
+    return Math.max(cap - assigned, 0);
+  }
+
+  function getBmCenterRemaining(c) {
+    if (!c) return 0;
+    const cap = Number(c.capacity || 0);
+    if (c.unassigned != null) return Math.max(Number(c.unassigned), 0);
+    const assigned = Number(
+      c.assigned ?? c.total_assigned ?? c.occupied ?? c.current_occupancy ?? 0
+    );
+    return Math.max(cap - assigned, 0);
+  }
+
+  function isBmDirectCenter(c) {
+    if (!c) return false;
+    const cType = c.center_type || "campus";
+    if (cType === "single_venue") return true;
+    const activeRooms = (c.rooms || []).filter((r) => r.is_active !== false);
+    const totalBldgs = (c.buildings || []).length;
+    if (
+      ["covered_court", "multi_purpose_hall", "church_facility"].includes(
+        cType
+      ) &&
+      activeRooms.length === 0
+    ) {
+      return true;
+    }
+    return activeRooms.length === 0 && totalBldgs === 0;
+  }
+
+  function bmCenterHasBuildings(c) {
+    if (!c || isBmDirectCenter(c)) return false;
+    if (Array.isArray(c.buildings) && c.buildings.length > 0) return true;
+    const activeRooms = (c.rooms || []).filter((r) => r.is_active !== false);
+    return activeRooms.some((r) => r.building_id != null);
+  }
+
+  function getBmAvailableBuildings(c, needed = 1) {
+    if (!c) return [];
+    const activeRooms = (c.rooms || []).filter((r) => r.is_active !== false);
+    const bldgMap = new Map();
+    for (const b of c.buildings || []) {
+      if (b?.id != null && b.status !== "closed" && b.status !== "under_repair") {
+        bldgMap.set(String(b.id), {
+          id: String(b.id),
+          name: b.name || `Building #${b.id}`,
+          rooms: [],
+          availableSpaces: 0,
+        });
+      }
+    }
+    for (const r of activeRooms) {
+      if (r.building_id != null) {
+        const key = String(r.building_id);
+        if (!bldgMap.has(key)) {
+          bldgMap.set(key, {
+            id: key,
+            name: r.building_name || `Building #${r.building_id}`,
+            rooms: [],
+            availableSpaces: 0,
+          });
+        }
+        const rem = getBmRoomRemaining(r);
+        if (rem >= needed) {
+          const entry = bldgMap.get(key);
+          entry.rooms.push(r);
+          entry.availableSpaces += rem;
+        }
+      }
+    }
+    const list = Array.from(bldgMap.values()).filter((b) => b.rooms.length > 0);
+    const unmappedRooms = activeRooms.filter(
+      (r) => r.building_id == null && getBmRoomRemaining(r) >= needed
+    );
+    if (unmappedRooms.length > 0) {
+      const unmappedSpaces = unmappedRooms.reduce(
+        (sum, r) => sum + getBmRoomRemaining(r),
+        0
+      );
+      list.push({
+        id: "unmapped",
+        name: "Other / Unassigned Building Rooms",
+        rooms: unmappedRooms,
+        availableSpaces: unmappedSpaces,
+      });
+    }
+    return list;
+  }
+
   function openAssignHouseholdToRoomModal(center, room = null) {
     setError("");
     setRoomAssignModal({
       mode: "assign-to-room",
       familyId: "",
       centerId: center ? String(center.id) : "",
+      buildingId:
+        room?.building_id != null
+          ? String(room.building_id)
+          : room && center && bmCenterHasBuildings(center)
+            ? "unmapped"
+            : "",
       roomId: room ? String(room.id) : "",
       familyObj: null,
     });
@@ -632,6 +748,7 @@ function BarangayManager() {
       mode: "transfer-household",
       familyId: String(familyItem.family_id || familyItem.id),
       centerId: currentCenterId ? String(currentCenterId) : "",
+      buildingId: "",
       roomId: currentRoomId ? String(currentRoomId) : "",
       familyObj: familyItem,
     });
@@ -639,9 +756,26 @@ function BarangayManager() {
 
   async function handleConfirmRoomAssign(e) {
     e.preventDefault();
-    if (!roomAssignModal?.familyId || !roomAssignModal?.roomId) {
-      setError("Please select both a household and a destination room.");
+    if (!roomAssignModal?.familyId || !roomAssignModal?.centerId) {
+      setError("Please select both a household and an evacuation center.");
       return;
+    }
+
+    const selectedCenter = centers.find(
+      (c) => Number(c.id) === Number(roomAssignModal.centerId)
+    );
+    const isDirect = isBmDirectCenter(selectedCenter);
+    const hasBldgs = bmCenterHasBuildings(selectedCenter);
+
+    if (!isDirect) {
+      if (hasBldgs && !roomAssignModal.buildingId) {
+        setError("Please select a building first.");
+        return;
+      }
+      if (!roomAssignModal.roomId) {
+        setError("Please select a destination room.");
+        return;
+      }
     }
 
     try {
@@ -649,7 +783,7 @@ function BarangayManager() {
       setError("");
       const famId = Number(roomAssignModal.familyId);
       const centerId = Number(roomAssignModal.centerId);
-      const rmId = Number(roomAssignModal.roomId);
+      const rmId = isDirect ? null : Number(roomAssignModal.roomId);
 
       // Determine if household is already assigned
       const barangayFamilies = selectedBarangay?.families || [];
@@ -663,19 +797,27 @@ function BarangayManager() {
           center_id: centerId || undefined,
           room_id: rmId,
         });
-        setSuccessMsg("Household transferred to the selected room.");
+        setSuccessMsg(
+          isDirect
+            ? "Household transferred to the selected center."
+            : "Household transferred to the selected room."
+        );
       } else {
         await api.assignFamily(famId, {
           center_id: centerId || undefined,
           room_id: rmId,
         });
-        setSuccessMsg("Household assigned to the selected room.");
+        setSuccessMsg(
+          isDirect
+            ? "Household assigned to the selected center."
+            : "Household assigned to the selected room."
+        );
       }
 
       setRoomAssignModal(null);
       await invalidateEvacuationQueries(queryClient);
     } catch (err) {
-      setError(err.message || "Failed to assign household to room.");
+      setError(err.message || "Failed to assign household.");
     } finally {
       setAssigningHousehold(false);
     }
@@ -1701,16 +1843,7 @@ function BarangayManager() {
           </p>
         </div>
 
-        <div className="barangay-header-actions">
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={loadBarangays}
-            disabled={loading || detailLoading}
-          >
-            <FontAwesomeIcon icon={faRotate} spin={loading || detailLoading} /> Refresh
-          </button>
-        </div>
+        
       </div>
 
       {/* Top-Level Mode Switcher when on Landing Page */}
@@ -1787,29 +1920,74 @@ function BarangayManager() {
            PAGE A: BARANGAY MANAGEMENT LANDING PAGE
            ========================================================= */
         <div className="bm-landing">
-          {/* Summary Metric Cards (Households, Assigned, Unassigned, Barangays) */}
-          <div className="bm-stats-grid-4" style={{ marginBottom: "16px" }}>
+          {/* Elevated Summary Metric Cards */}
+          <div className="bm-stats-grid-4">
             <div className="bm-stat-card">
-              <span className="bm-stat-label">Barangays</span>
-              <strong className="bm-stat-value">{overallStats.totalBarangays}</strong>
-              <span className="bm-stat-sub">{overallStats.totalCenters} evacuation centers</span>
+              <div className="bm-stat-icon-wrapper bg-blue-50 text-blue-600">
+                <FontAwesomeIcon icon={faLocationDot} />
+              </div>
+              <div className="bm-stat-content">
+                <span className="bm-stat-label">Barangays</span>
+                <strong className="bm-stat-value">{overallStats.totalBarangays}</strong>
+                <span className="bm-stat-sub">{overallStats.totalCenters} evacuation centers</span>
+              </div>
             </div>
+
             <div className="bm-stat-card">
-              <span className="bm-stat-label">Households</span>
-              <strong className="bm-stat-value">{overallStats.totalHouseholds}</strong>
-              <span className="bm-stat-sub">{overallStats.totalResidents} residents</span>
+              <div className="bm-stat-icon-wrapper bg-indigo-50 text-indigo-600">
+                <FontAwesomeIcon icon={faHouse} />
+              </div>
+              <div className="bm-stat-content">
+                <span className="bm-stat-label">Households</span>
+                <strong className="bm-stat-value">{overallStats.totalHouseholds}</strong>
+                <span className="bm-stat-sub">{overallStats.totalResidents} registered residents</span>
+              </div>
             </div>
-            <div className="bm-stat-card accent-green">
-              <span className="bm-stat-label">Assigned</span>
-              <strong className="bm-stat-value">{overallStats.totalAssigned}</strong>
-              <span className="bm-stat-sub">Assigned to building &amp; room</span>
+
+            <div className="bm-stat-card">
+              <div className="bm-stat-icon-wrapper bg-emerald-50 text-emerald-600">
+                <FontAwesomeIcon icon={faCircleCheck} />
+              </div>
+              <div className="bm-stat-content">
+                <div className="bm-stat-header-row">
+                  <span className="bm-stat-label">Assigned</span>
+                  <span className="bm-stat-pct-pill emerald">
+                    {overallStats.totalHouseholds > 0
+                      ? Math.round((overallStats.totalAssigned / overallStats.totalHouseholds) * 100)
+                      : 0}%
+                  </span>
+                </div>
+                <strong className="bm-stat-value text-emerald-700">{overallStats.totalAssigned}</strong>
+                <div className="bm-stat-mini-progress">
+                  <div
+                    className="bm-stat-mini-fill emerald"
+                    style={{
+                      width: `${overallStats.totalHouseholds > 0 ? Math.min(100, Math.round((overallStats.totalAssigned / overallStats.totalHouseholds) * 100)) : 0}%`,
+                    }}
+                  />
+                </div>
+                <span className="bm-stat-sub">Assigned to building &amp; room</span>
+              </div>
             </div>
-            <div className={`bm-stat-card ${overallStats.totalUnassigned > 0 ? "accent-amber" : "accent-green"}`}>
-              <span className="bm-stat-label">Unassigned</span>
-              <strong className="bm-stat-value">{overallStats.totalUnassigned}</strong>
-              <span className="bm-stat-sub">
-                {overallStats.totalUnassigned > 0 ? "Awaiting room assignment" : "All households assigned"}
-              </span>
+
+            <div className="bm-stat-card">
+              <div className={`bm-stat-icon-wrapper ${overallStats.totalUnassigned > 0 ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600"}`}>
+                <FontAwesomeIcon icon={overallStats.totalUnassigned > 0 ? faTriangleExclamation : faShieldHeart} />
+              </div>
+              <div className="bm-stat-content">
+                <div className="bm-stat-header-row">
+                  <span className="bm-stat-label">Unassigned</span>
+                  {overallStats.totalUnassigned === 0 && (
+                    <span className="bm-stat-pct-pill emerald">Safe</span>
+                  )}
+                </div>
+                <strong className={`bm-stat-value ${overallStats.totalUnassigned > 0 ? "text-amber-600" : "text-emerald-700"}`}>
+                  {overallStats.totalUnassigned}
+                </strong>
+                <span className="bm-stat-sub">
+                  {overallStats.totalUnassigned > 0 ? "Awaiting room assignment" : "All households assigned"}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1874,10 +2052,10 @@ function BarangayManager() {
                   <table className="bm-table">
                     <thead>
                       <tr>
-                        <th>Barangay</th>
+                        <th>Barangay Community</th>
                         <th>Households</th>
-                        <th>Assigned</th>
-                        <th>Unassigned</th>
+                        <th>Shelter Assignment</th>
+                        <th>Status</th>
                         <th>Evacuation Centers</th>
                         <th className="bm-th-right">Actions</th>
                       </tr>
@@ -1895,41 +2073,77 @@ function BarangayManager() {
                           b.resident_count ?? b.total_residents ?? 0
                         );
                         const centerCount = Number(b.evacuation_center_count ?? 0);
+                        const assignPct = famCount > 0 ? Math.round((assignedCount / famCount) * 100) : 0;
+                        const is100 = assignPct >= 100;
 
                         return (
-                          <tr key={b.id}>
+                          <tr
+                            key={b.id}
+                            className="bm-clickable-row"
+                            onClick={() => openBarangay(b.id, "overview")}
+                          >
                             <td>
-                              <strong className="bm-cell-strong">{b.name}</strong>
-                              <div className="bm-cell-sub">{resCount} residents</div>
+                              <div className="bm-barangay-cell">
+                                <div className="bm-brgy-icon">
+                                  <FontAwesomeIcon icon={faLocationDot} />
+                                </div>
+                                <div>
+                                  <strong className="bm-cell-strong">{b.name}</strong>
+                                  <div className="bm-cell-sub">
+                                    {resCount} residents &bull; {famCount > 0 ? (resCount / famCount).toFixed(1) : 0} avg/fam
+                                  </div>
+                                </div>
+                              </div>
                             </td>
                             <td>
-                              <strong>{famCount}</strong>
-                            </td>
-                            <td>
-                              <span className="text-green" style={{ fontWeight: 600 }}>
-                                {assignedCount}
+                              <span className="bm-count-pill">
+                                <strong>{famCount}</strong>
                               </span>
                             </td>
                             <td>
+                              <div className="bm-progress-cell">
+                                <div className="bm-progress-meta">
+                                  <span className="bm-progress-numbers">
+                                    <strong>{assignedCount}</strong> of {famCount} assigned
+                                  </span>
+                                  <span className={`bm-pct-chip ${is100 ? "full" : assignPct > 0 ? "partial" : "zero"}`}>
+                                    {assignPct}%
+                                  </span>
+                                </div>
+                                <div className="bm-progress-track">
+                                  <div
+                                    className={`bm-progress-fill ${is100 ? "full" : assignPct > 0 ? "partial" : "zero"}`}
+                                    style={{ width: `${assignPct}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </td>
+                            <td>
                               {unassignedCount > 0 ? (
-                                <span className="bm-mini-badge unassigned">
-                                  {unassignedCount} Unassigned
+                                <span className="bm-status-chip warning">
+                                  <FontAwesomeIcon icon={faTriangleExclamation} /> {unassignedCount} Unassigned
                                 </span>
                               ) : (
-                                <span className="bm-muted">0</span>
+                                <span className="bm-status-chip complete">
+                                  <FontAwesomeIcon icon={faCircleCheck} /> Fully Sheltered
+                                </span>
                               )}
                             </td>
-                            <td>{centerCount}</td>
-                            <td className="bm-td-right">
-                              <div className="bm-action-group">
-                                <button
-                                  type="button"
-                                  className="btn btn-primary btn-sm"
-                                  onClick={() => openBarangay(b.id, "overview")}
-                                >
-                                  View Details
-                                </button>
-                              </div>
+                            <td>
+                              <span className="bm-centers-chip">
+                                <FontAwesomeIcon icon={faBuilding} />
+                                <span>{centerCount} {centerCount === 1 ? "center" : "centers"}</span>
+                              </span>
+                            </td>
+                            <td className="bm-td-right" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                className="bm-inspect-btn"
+                                onClick={() => openBarangay(b.id, "overview")}
+                              >
+                                <span>Manage</span>
+                                <FontAwesomeIcon icon={faChevronRight} />
+                              </button>
                             </td>
                           </tr>
                         );
@@ -2036,85 +2250,175 @@ function BarangayManager() {
            PAGE B: BARANGAY DASHBOARD
            ========================================================= */
         <div className="bm-dashboard">
-          {/* Top Breadcrumb Bar */}
-          <div className="bm-dashboard-topbar">
-            <nav className="bm-breadcrumb" aria-label="Breadcrumb">
+          {/* Executive Barangay Hero Header Banner */}
+          <div className="bm-hero-header">
+            <div className="bm-hero-topline">
               <button
                 type="button"
-                className="bm-breadcrumb-link"
+                className="bm-back-btn"
                 onClick={closeBarangay}
               >
-                Barangays
+                <FontAwesomeIcon icon={faArrowLeft} />
+                <span>Back to Barangays</span>
               </button>
-              <FontAwesomeIcon icon={faChevronRight} className="bm-breadcrumb-sep" />
-              <span className="bm-breadcrumb-current">
-                {selectedBarangay.name}
-              </span>
-            </nav>
 
-            {/* Clean Section Switcher */}
-            <div className="bm-section-nav">
+              <div className="bm-hero-chips">
+                <span className="bm-hero-chip location">
+                  <FontAwesomeIcon icon={faLocationDot} /> Sogod Municipality
+                </span>
+                <span className="bm-hero-chip census">
+                  Census Year 2026
+                </span>
+              </div>
+            </div>
+
+            <div className="bm-hero-main">
+              <div className="bm-hero-info">
+                <div className="bm-hero-title-row">
+                  <h2 className="bm-hero-title">{selectedBarangay.name}</h2>
+                  <span className={`bm-hero-badge ${selectedBarangayStats.unassignedHouseholds === 0 ? "complete" : "pending"}`}>
+                    <FontAwesomeIcon icon={selectedBarangayStats.unassignedHouseholds === 0 ? faCircleCheck : faTriangleExclamation} />
+                    {selectedBarangayStats.unassignedHouseholds === 0 ? "100% Sheltered" : `${selectedBarangayStats.unassignedHouseholds} Unassigned`}
+                  </span>
+                </div>
+                <p className="bm-hero-desc">
+                  Jurisdiction overview, registered household census, and designated emergency evacuation centers for Barangay {selectedBarangay.name}.
+                </p>
+              </div>
+
+              {/* Quick Hero Stat Badges */}
+              <div className="bm-hero-metrics">
+                <div className="bm-hero-metric">
+                  <span className="bm-hm-label">Households</span>
+                  <span className="bm-hm-val">{selectedBarangayStats.totalHouseholds}</span>
+                </div>
+                <div className="bm-hero-metric-divider" />
+                <div className="bm-hero-metric">
+                  <span className="bm-hm-label">Residents</span>
+                  <span className="bm-hm-val">{selectedBarangayStats.totalResidents}</span>
+                </div>
+                <div className="bm-hero-metric-divider" />
+                <div className="bm-hero-metric">
+                  <span className="bm-hm-label">Assigned</span>
+                  <span className="bm-hm-val text-emerald-600">{selectedBarangayStats.assignedHouseholds}</span>
+                </div>
+                <div className="bm-hero-metric-divider" />
+                <div className="bm-hero-metric">
+                  <span className="bm-hm-label">Centers</span>
+                  <span className="bm-hm-val">{selectedBarangayStats.totalCenters}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Segmented Sub-Tab Switcher */}
+            <div className="bm-segmented-tabs">
               <button
                 type="button"
-                className={barangaySection === "overview" ? "active" : ""}
+                className={`bm-segmented-tab ${barangaySection === "overview" ? "active" : ""}`}
                 onClick={() => {
                   setBarangaySection("overview");
                   setSelectedCenterId(null);
                   setSelectedRoomId(null);
                 }}
               >
-                <FontAwesomeIcon icon={faLayerGroup} /> Overview
+                <FontAwesomeIcon icon={faLayerGroup} />
+                <span>Overview</span>
               </button>
               <button
                 type="button"
-                className={barangaySection === "households" ? "active" : ""}
+                className={`bm-segmented-tab ${barangaySection === "households" ? "active" : ""}`}
                 onClick={() => openHouseholdsSection()}
               >
-                <FontAwesomeIcon icon={faPeopleGroup} /> Households ({selectedBarangayStats.totalHouseholds})
+                <FontAwesomeIcon icon={faPeopleGroup} />
+                <span>Households ({selectedBarangayStats.totalHouseholds})</span>
               </button>
               <button
                 type="button"
-                className={barangaySection === "centers" ? "active" : ""}
+                className={`bm-segmented-tab ${barangaySection === "centers" ? "active" : ""}`}
                 onClick={() => openCentersSection(null, null)}
               >
-                <FontAwesomeIcon icon={faBuilding} /> Evacuation Centers ({selectedBarangayStats.totalCenters})
+                <FontAwesomeIcon icon={faBuilding} />
+                <span>Evacuation Centers ({selectedBarangayStats.totalCenters})</span>
               </button>
             </div>
           </div>
 
           {barangaySection === "overview" && (
             <div className="bm-overview-content">
-              {/* Per-Barangay Summary Strip: Households, Assigned, Unassigned, Evacuation Centers */}
+              {/* Elevated Per-Barangay Summary Strip */}
               <div className="bm-stats-grid-4">
                 <div className="bm-stat-card">
-                  <span className="bm-stat-label">Households</span>
-                  <strong className="bm-stat-value">{selectedBarangayStats.totalHouseholds}</strong>
-                  <span className="bm-stat-sub">
-                    {selectedBarangayStats.totalResidents} registered residents
-                  </span>
+                  <div className="bm-stat-icon-wrapper bg-indigo-50 text-indigo-600">
+                    <FontAwesomeIcon icon={faHouse} />
+                  </div>
+                  <div className="bm-stat-content">
+                    <span className="bm-stat-label">Households</span>
+                    <strong className="bm-stat-value">{selectedBarangayStats.totalHouseholds}</strong>
+                    <span className="bm-stat-sub">
+                      {selectedBarangayStats.totalResidents} registered residents
+                    </span>
+                  </div>
                 </div>
-                <div className="bm-stat-card accent-green">
-                  <span className="bm-stat-label">Assigned</span>
-                  <strong className="bm-stat-value">{selectedBarangayStats.assignedHouseholds}</strong>
-                  <span className="bm-stat-sub">Assigned to building &amp; room</span>
-                </div>
-                <div className={`bm-stat-card ${selectedBarangayStats.unassignedHouseholds > 0 ? "accent-amber" : "accent-green"}`}>
-                  <span className="bm-stat-label">Unassigned</span>
-                  <strong className="bm-stat-value">
-                    {selectedBarangayStats.unassignedHouseholds}
-                  </strong>
-                  <span className="bm-stat-sub">
-                    {selectedBarangayStats.unassignedHouseholds > 0
-                      ? "Households awaiting room"
-                      : "All households sheltered"}
-                  </span>
-                </div>
+
                 <div className="bm-stat-card">
-                  <span className="bm-stat-label">Evacuation Centers</span>
-                  <strong className="bm-stat-value">{selectedBarangayStats.totalCenters}</strong>
-                  <span className="bm-stat-sub">
-                    {barangayBuildings.length} buildings &bull; {selectedBarangayStats.totalRooms} rooms
-                  </span>
+                  <div className="bm-stat-icon-wrapper bg-emerald-50 text-emerald-600">
+                    <FontAwesomeIcon icon={faCircleCheck} />
+                  </div>
+                  <div className="bm-stat-content">
+                    <div className="bm-stat-header-row">
+                      <span className="bm-stat-label">Assigned</span>
+                      <span className="bm-stat-pct-pill emerald">
+                        {selectedBarangayStats.totalHouseholds > 0
+                          ? Math.round((selectedBarangayStats.assignedHouseholds / selectedBarangayStats.totalHouseholds) * 100)
+                          : 0}%
+                      </span>
+                    </div>
+                    <strong className="bm-stat-value text-emerald-700">{selectedBarangayStats.assignedHouseholds}</strong>
+                    <div className="bm-stat-mini-progress">
+                      <div
+                        className="bm-stat-mini-fill emerald"
+                        style={{
+                          width: `${selectedBarangayStats.totalHouseholds > 0 ? Math.min(100, Math.round((selectedBarangayStats.assignedHouseholds / selectedBarangayStats.totalHouseholds) * 100)) : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="bm-stat-sub">Assigned to building &amp; room</span>
+                  </div>
+                </div>
+
+                <div className="bm-stat-card">
+                  <div className={`bm-stat-icon-wrapper ${selectedBarangayStats.unassignedHouseholds > 0 ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600"}`}>
+                    <FontAwesomeIcon icon={selectedBarangayStats.unassignedHouseholds > 0 ? faTriangleExclamation : faShieldHeart} />
+                  </div>
+                  <div className="bm-stat-content">
+                    <div className="bm-stat-header-row">
+                      <span className="bm-stat-label">Unassigned</span>
+                      {selectedBarangayStats.unassignedHouseholds === 0 && (
+                        <span className="bm-stat-pct-pill emerald">Safe</span>
+                      )}
+                    </div>
+                    <strong className={`bm-stat-value ${selectedBarangayStats.unassignedHouseholds > 0 ? "text-amber-600" : "text-emerald-700"}`}>
+                      {selectedBarangayStats.unassignedHouseholds}
+                    </strong>
+                    <span className="bm-stat-sub">
+                      {selectedBarangayStats.unassignedHouseholds > 0
+                        ? "Households awaiting room"
+                        : "All households sheltered"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="bm-stat-card">
+                  <div className="bm-stat-icon-wrapper bg-blue-50 text-blue-600">
+                    <FontAwesomeIcon icon={faBuilding} />
+                  </div>
+                  <div className="bm-stat-content">
+                    <span className="bm-stat-label">Evacuation Centers</span>
+                    <strong className="bm-stat-value">{selectedBarangayStats.totalCenters}</strong>
+                    <span className="bm-stat-sub">
+                      {barangayBuildings.length} buildings &bull; {selectedBarangayStats.totalRooms} rooms
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -2822,131 +3126,236 @@ function BarangayManager() {
       )}
 
       {/* Assign or Transfer Household Modal */}
-      {roomAssignModal && (
-        <div
-          className="modal-overlay"
-          onClick={() => !assigningHousehold && setRoomAssignModal(null)}
-        >
-          <div className="bm-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="bm-dialog-header">
-              <div>
-                <span className="bm-kicker">Room Assignment</span>
-                <h4>
-                  {roomAssignModal.mode === "transfer-household"
-                    ? "Transfer Household to Another Room"
-                    : "Assign Household to Room"}
-                </h4>
-              </div>
-              <button
-                type="button"
-                className="bm-dialog-close"
-                onClick={() => setRoomAssignModal(null)}
-              >
-                <FontAwesomeIcon icon={faXmark} />
-              </button>
-            </div>
-            <form onSubmit={handleConfirmRoomAssign}>
-              <div className="bm-dialog-body">
-                <label className="bm-form-field">
-                  <span>Household *</span>
-                  <select
-                    required
-                    value={roomAssignModal.familyId}
-                    disabled={roomAssignModal.mode === "transfer-household"}
-                    onChange={(e) =>
-                      setRoomAssignModal((p) => ({ ...p, familyId: e.target.value }))
-                    }
-                  >
-                    <option value="">Select household in {selectedBarangay?.name}</option>
-                    {(selectedBarangay?.families || []).map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {formatHouseholdCode(f.id)} — {f.head_of_family} (
-                        {f.member_count || 1} members) • {f.assignment_status}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+      {roomAssignModal && (() => {
+        const barangayFamilies = selectedBarangay?.families || [];
+        const selectedFam =
+          barangayFamilies.find(
+            (f) => String(f.id) === String(roomAssignModal.familyId)
+          ) || roomAssignModal.familyObj;
+        const needed = Number(
+          selectedFam?.member_count ?? selectedFam?.resident_count ?? 1
+        );
+        const selectedModalCenter = centers.find(
+          (c) => Number(c.id) === Number(roomAssignModal.centerId)
+        );
+        const isDirect = isBmDirectCenter(selectedModalCenter);
+        const hasBldgs = bmCenterHasBuildings(selectedModalCenter);
+        const availableBldgs = getBmAvailableBuildings(
+          selectedModalCenter,
+          needed
+        );
+        const activeRooms = (selectedModalCenter?.rooms || []).filter(
+          (r) => r.is_active !== false
+        );
+        const filteredModalRooms = activeRooms.filter((r) => {
+          const rem = getBmRoomRemaining(r);
+          if (rem < needed) return false;
+          if (!hasBldgs) return true;
+          if (!roomAssignModal.buildingId) return false;
+          if (roomAssignModal.buildingId === "unmapped")
+            return r.building_id == null;
+          return String(r.building_id) === String(roomAssignModal.buildingId);
+        });
+        const availableCenters = centers.filter(
+          (c) =>
+            c.is_active !== false &&
+            (getBmCenterRemaining(c) >= needed ||
+              String(c.id) === String(roomAssignModal.centerId))
+        );
 
-                <label className="bm-form-field">
-                  <span>Evacuation Center *</span>
-                  <select
-                    required
-                    value={roomAssignModal.centerId}
-                    onChange={(e) =>
-                      setRoomAssignModal((p) => ({
-                        ...p,
-                        centerId: e.target.value,
-                        roomId: "",
-                      }))
-                    }
-                  >
-                    <option value="">Select evacuation center</option>
-                    {centers
-                      .filter((c) => c.is_active !== false)
-                      .map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
+        return (
+          <div
+            className="modal-overlay"
+            onClick={() => !assigningHousehold && setRoomAssignModal(null)}
+          >
+            <div className="bm-dialog" onClick={(e) => e.stopPropagation()}>
+              <div className="bm-dialog-header">
+                <div>
+                  <span className="bm-kicker">Evacuation Assignment</span>
+                  <h4>
+                    {roomAssignModal.mode === "transfer-household"
+                      ? "Transfer Household"
+                      : "Assign Household"}
+                  </h4>
+                </div>
+                <button
+                  type="button"
+                  className="bm-dialog-close"
+                  onClick={() => setRoomAssignModal(null)}
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+              <form onSubmit={handleConfirmRoomAssign}>
+                <div className="bm-dialog-body">
+                  <label className="bm-form-field">
+                    <span>Household *</span>
+                    <select
+                      required
+                      value={roomAssignModal.familyId}
+                      disabled={roomAssignModal.mode === "transfer-household"}
+                      onChange={(e) =>
+                        setRoomAssignModal((p) => ({
+                          ...p,
+                          familyId: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">
+                        Select household in {selectedBarangay?.name}
+                      </option>
+                      {barangayFamilies.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {formatHouseholdCode(f.id)} —{" "}
+                          {f.head_of_family || f.head_name} (
+                          {f.member_count || f.resident_count || 1} members) •{" "}
+                          {f.assignment_status}
                         </option>
                       ))}
-                  </select>
-                </label>
+                    </select>
+                  </label>
 
-                <label className="bm-form-field">
-                  <span>Room *</span>
-                  <select
-                    required
-                    value={roomAssignModal.roomId}
-                    disabled={!roomAssignModal.centerId}
-                    onChange={(e) =>
-                      setRoomAssignModal((p) => ({ ...p, roomId: e.target.value }))
-                    }
-                  >
-                    <option value="">Select room</option>
-                    {(
-                      centers.find(
-                        (c) => Number(c.id) === Number(roomAssignModal.centerId)
-                      )?.rooms || []
-                    )
-                      .filter((r) => r.is_active !== false)
-                      .map((r) => {
-                        const cap = Number(r.capacity || 0);
-                        const occ = Number(r.occupied || 0);
-                        const avail = Math.max(0, cap - occ);
+                  <label className="bm-form-field">
+                    <span>Evacuation Center *</span>
+                    <select
+                      required
+                      value={roomAssignModal.centerId}
+                      onChange={(e) =>
+                        setRoomAssignModal((p) => ({
+                          ...p,
+                          centerId: e.target.value,
+                          buildingId: "",
+                          roomId: "",
+                        }))
+                      }
+                    >
+                      <option value="">Select evacuation center</option>
+                      {availableCenters.map((c) => {
+                        const rem = getBmCenterRemaining(c);
                         return (
-                          <option key={r.id} value={r.id} disabled={avail <= 0}>
-                            {formatRoomLabel(r.room_name || r.room_number)} ({r.room_type || "Room"}) — {avail} of {cap}{" "}
-                            available
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({rem} spaces left)
                           </option>
                         );
                       })}
-                  </select>
-                </label>
-              </div>
-              <div className="bm-dialog-footer">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={assigningHousehold}
-                  onClick={() => setRoomAssignModal(null)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={
-                    assigningHousehold ||
-                    !roomAssignModal.familyId ||
-                    !roomAssignModal.roomId
-                  }
-                >
-                  {assigningHousehold ? "Saving..." : "Confirm Assignment"}
-                </button>
-              </div>
-            </form>
+                    </select>
+                  </label>
+
+                  {selectedModalCenter && isDirect ? (
+                    <div className="bm-form-field">
+                      <span>Center Capacity</span>
+                      <p style={{ margin: "0.25rem 0 0", fontSize: "0.875rem" }}>
+                        Direct assignment to{" "}
+                        <strong>{selectedModalCenter.name}</strong> —{" "}
+                        {getBmCenterRemaining(selectedModalCenter)} of{" "}
+                        {selectedModalCenter.capacity || 0} spaces remaining.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      {hasBldgs && (
+                        <label className="bm-form-field">
+                          <span>Building *</span>
+                          <select
+                            required
+                            value={roomAssignModal.buildingId || ""}
+                            disabled={!roomAssignModal.centerId}
+                            onChange={(e) =>
+                              setRoomAssignModal((p) => ({
+                                ...p,
+                                buildingId: e.target.value,
+                                roomId: "",
+                              }))
+                            }
+                          >
+                            <option value="">
+                              {availableBldgs.length === 0
+                                ? "No buildings with available capacity"
+                                : "Select building"}
+                            </option>
+                            {availableBldgs.map((b) => (
+                              <option key={b.id} value={b.id}>
+                                {b.name} ({b.rooms.length} room
+                                {b.rooms.length === 1 ? "" : "s"},{" "}
+                                {b.availableSpaces} available)
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+
+                      <label className="bm-form-field">
+                        <span>Room *</span>
+                        <select
+                          required
+                          value={roomAssignModal.roomId}
+                          disabled={
+                            !roomAssignModal.centerId ||
+                            (hasBldgs && !roomAssignModal.buildingId)
+                          }
+                          onChange={(e) =>
+                            setRoomAssignModal((p) => ({
+                              ...p,
+                              roomId: e.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">
+                            {!roomAssignModal.centerId
+                              ? "Select a center first"
+                              : hasBldgs && !roomAssignModal.buildingId
+                                ? "Select a building first"
+                                : filteredModalRooms.length === 0
+                                  ? "No rooms with available capacity"
+                                  : "Select room"}
+                          </option>
+                          {filteredModalRooms.map((r) => {
+                            const cap = Number(r.capacity || 0);
+                            const avail = getBmRoomRemaining(r);
+                            return (
+                              <option key={r.id} value={r.id}>
+                                {formatRoomLabel(r.room_name || r.room_number)}{" "}
+                                ({r.room_type || "Room"}) — {avail} of {cap}{" "}
+                                available
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </label>
+                    </>
+                  )}
+                </div>
+                <div className="bm-dialog-footer">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={assigningHousehold}
+                    onClick={() => setRoomAssignModal(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={
+                      assigningHousehold ||
+                      !roomAssignModal.familyId ||
+                      !roomAssignModal.centerId ||
+                      (!isDirect &&
+                        ((hasBldgs && !roomAssignModal.buildingId) ||
+                          !roomAssignModal.roomId)) ||
+                      (isDirect &&
+                        getBmCenterRemaining(selectedModalCenter) < needed)
+                    }
+                  >
+                    {assigningHousehold ? "Saving..." : "Confirm Assignment"}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Confirm Unassign Household Modal */}
       {unassignTarget && (

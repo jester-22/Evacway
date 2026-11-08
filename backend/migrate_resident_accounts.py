@@ -13,6 +13,9 @@ STATEMENTS = [
     # Add last_login_at to users table
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP",
 
+    # Add last_login_at to resident_accounts table if missing
+    "ALTER TABLE resident_accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP",
+
     # Add resident_id to users table
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS resident_id INTEGER",
 

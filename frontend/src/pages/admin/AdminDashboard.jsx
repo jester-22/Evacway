@@ -15,8 +15,9 @@ import DataManagement from "../../components/DataManagement/DataManagement";
 import SystemAndLogs from "../../components/ActivityLogs/SystemAndLogs";
 import RescueRequestManager from "../../components/RescueRequestManager/RescueRequestManager";
 import ResidentRegistrations from "../../components/ResidentRegistrations/ResidentRegistrations";
+import EvacueeCheckIn from "../../components/EvacueeCheckIn/EvacueeCheckIn";
 
-const ADMIN_TABS = ["centers", "barangays", "reports", "rescue", "registrations", "users", "data-management", "settings"];
+const ADMIN_TABS = ["centers", "barangays", "reports", "rescue", "checkin", "registrations", "users", "data-management", "settings"];
 function AdminDashboard() {
   const location = useLocation();
   const requestedTab = new URLSearchParams(location.search).get("tab");
@@ -43,6 +44,13 @@ function AdminDashboard() {
       navigate("/lgu", { replace: true, state: { flashMessage: "Admins only" } });
     }
   }, [user, navigate]);
+
+  // When visiting /admin directly without a tab, redirect to operational Dashboard
+  useEffect(() => {
+    if (!requestedTab) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [requestedTab, navigate]);
 
   function handleTabChange(nextTab) {
     if (nextTab === "dashboard") {
@@ -88,12 +96,16 @@ function AdminDashboard() {
       if (!notification.is_read) {
         api.markNotificationRead(notification.id)
           .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
-          .catch(() => {});
+          .catch(() => { });
       }
       if (notification.resource_type === "hazard_report") {
         setFocusedReportId(notification.resource_id);
         setFocusedRescueId(null);
         setTab("reports");
+      } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
+        setFocusedReportId(null);
+        setFocusedRescueId(null);
+        setTab("registrations");
       } else {
         setFocusedRescueId(notification.resource_id);
         setFocusedReportId(null);
@@ -108,6 +120,10 @@ function AdminDashboard() {
       setFocusedReportId(notification.resource_id);
       setFocusedRescueId(null);
       setTab("reports");
+    } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
+      setFocusedReportId(null);
+      setFocusedRescueId(null);
+      setTab("registrations");
     } else {
       setFocusedRescueId(notification.resource_id);
       setFocusedReportId(null);
@@ -172,6 +188,10 @@ function AdminDashboard() {
 
         {tab === "rescue" && (
           <RescueRequestManager key={focusedRescueId ?? "rescue-queue"} initialRequestId={focusedRescueId} onOpenMap={openMapLocation} />
+        )}
+
+        {tab === "checkin" && (
+          <EvacueeCheckIn />
         )}
 
         {tab === "registrations" && <ResidentRegistrations />}

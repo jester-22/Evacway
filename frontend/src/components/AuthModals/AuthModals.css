@@ -1,0 +1,563 @@
+/* ==========================================================================
+   EvacWay Auth Modals (Modern Login & Resident Registration)
+   ========================================================================== */
+
+.ew-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  height: fit-content;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  width: min(460px, calc(100vw - 2rem));
+  padding: 0;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 20px;
+  color: #0f172a;
+  background: #ffffff;
+  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(15, 23, 42, 0.05);
+  z-index: 9999;
+}
+
+.ew-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(6px);
+}
+
+.ew-signup-dialog {
+  width: min(640px, calc(100vw - 1.5rem));
+  max-height: calc(100dvh - 1.5rem);
+  overflow-y: auto;
+}
+
+.ew-login {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px 26px;
+  box-sizing: border-box;
+}
+
+.ew-modern-login {
+  gap: 14px;
+  padding: 24px 26px 20px;
+}
+
+/* Header & Brand Badge */
+.ew-login-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ew-brand-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1d4ed8;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ew-brand-pill-icon {
+  font-size: 0.85rem;
+}
+
+.ew-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.ew-icon-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+/* Headings */
+.ew-login-intro {
+  margin: -2px 0 0;
+}
+
+.ew-login-heading {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.ew-login-sub {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+/* Role Tabs */
+.ew-role-tabs {
+  display: flex;
+  background: #f1f5f9;
+  padding: 4px;
+  border-radius: 12px;
+  gap: 4px;
+}
+
+.ew-role-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 160ms ease;
+}
+
+.ew-tab-icon {
+  font-size: 0.95rem;
+}
+
+.ew-role-tab:hover:not(.active) {
+  color: #0f172a;
+}
+
+.ew-role-tab.active {
+  background: #ffffff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1), 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+/* Contextual Role Banner */
+.ew-role-banner {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 0.8125rem;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.ew-role-banner p {
+  margin: 0;
+}
+
+.ew-role-banner strong {
+  color: #1e293b;
+  font-weight: 600;
+}
+
+/* Notices & Alerts */
+.ew-login-notice {
+  margin: 0;
+  padding: 10px 13px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  color: #1e40af;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.ew-notice-icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.ew-error {
+  margin: 0;
+  padding: 10px 13px;
+  font-size: 0.84rem;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-left: 4px solid #dc2626;
+  border-radius: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+.ew-error-icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: #dc2626;
+}
+
+.ew-recovery-message {
+  margin: 0;
+  padding: 10px 13px;
+  border: 1px solid #bbf7d0;
+  border-left: 4px solid #16a34a;
+  border-radius: 8px;
+  color: #166534;
+  background: #f0fdf4;
+  font-size: 0.84rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+.ew-success-icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: #16a34a;
+}
+
+/* Fields & Input Groups */
+.ew-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.ew-field-label,
+.ew-field > span {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.ew-field-split-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.ew-forgot-link {
+  background: transparent;
+  border: none;
+  color: #2563eb;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  transition: color 150ms ease;
+}
+
+.ew-forgot-link:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.ew-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.ew-input-icon {
+  position: absolute;
+  left: 13px;
+  color: #94a3b8;
+  font-size: 0.95rem;
+  pointer-events: none;
+  transition: color 150ms ease;
+}
+
+.ew-input-wrap input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 42px 10px 38px;
+  font-size: 0.92rem;
+  color: #0f172a;
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 10px;
+  box-sizing: border-box;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.ew-input-wrap input:focus {
+  outline: none;
+  background: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.ew-input-wrap:focus-within .ew-input-icon {
+  color: #2563eb;
+}
+
+.ew-eye-toggle {
+  position: absolute;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 150ms ease;
+}
+
+.ew-eye-toggle:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Submit Button */
+.ew-submit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 11px 18px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.25), 0 2px 4px -2px rgba(37, 99, 235, 0.15);
+  transition: all 150ms ease;
+}
+
+.ew-submit-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 12px -1px rgba(37, 99, 235, 0.3);
+}
+
+.ew-submit-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.ew-submit-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.ew-spin-icon {
+  font-size: 0.95rem;
+}
+
+.ew-text-back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px;
+  align-self: center;
+}
+
+.ew-text-back-btn:hover {
+  text-decoration: underline;
+}
+
+/* Resident Registration Spotlight Callout */
+.ew-signup-callout {
+  margin-top: 2px;
+  padding: 11px 13px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ew-signup-callout-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.ew-signup-callout-title {
+  font-size: 0.825rem;
+  font-weight: 700;
+  color: #166534;
+}
+
+.ew-signup-callout-desc {
+  font-size: 0.75rem;
+  color: #15803d;
+  line-height: 1.35;
+}
+
+.ew-signup-callout-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: #16a34a;
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.ew-signup-callout-btn:hover {
+  background: #15803d;
+}
+
+.ew-callout-arrow {
+  font-size: 0.72rem;
+}
+
+/* Direct Public Bypass Link */
+.ew-public-bypass {
+  text-align: center;
+  padding-top: 2px;
+}
+
+.ew-public-link {
+  font-size: 0.8rem;
+  color: #64748b;
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+
+.ew-public-link span {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.ew-public-link:hover span {
+  text-decoration: underline;
+}
+
+/* Generic Fallback Button Styles */
+.ew-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.ew-btn-primary {
+  color: #ffffff;
+  background: #2563eb;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
+}
+
+.ew-btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.ew-btn-block {
+  width: 100%;
+}
+
+.ew-text-btn {
+  min-height: 32px;
+  padding: 2px 6px;
+  border: 0;
+  color: #2563eb;
+  background: transparent;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ew-text-btn:hover {
+  text-decoration: underline;
+}
+
+/* Sign-up dialog layout */
+.ew-signup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+
+.ew-signup-wide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.ew-field-error,
+.ew-field-note {
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.ew-field-error {
+  color: #dc2626;
+  font-weight: 500;
+}
+
+.ew-field-note {
+  color: #64748b;
+}
+
+.ew-field input[aria-invalid="true"],
+.ew-field select[aria-invalid="true"] {
+  border-color: #dc2626;
+  background: #fef2f2;
+}
+
+.ew-signup-success {
+  padding-top: 24px;
+  text-align: center;
+}
+
+.ew-signup-success p {
+  color: #334155;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin: 12px 0 18px;
+}
+
+@media (max-width: 640px) {
+  .ew-signup-grid {
+    grid-template-columns: 1fr;
+  }
+  .ew-signup-callout {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .ew-signup-callout-btn {
+    justify-content: center;
+  }
+}

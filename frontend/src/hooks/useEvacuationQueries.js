@@ -31,6 +31,7 @@ export const queryKeys = {
   publicHazardReports: ["hazard-reports", "public"],
   sogodBoundary: ["sogod-boundary"],
   dashboardFamilies: ["families", "dashboard"],
+  checkInSummary: ["evacuee-check-in-list", "summary"],
   users: ["users"],
   notifications: ["notifications"],
   rescueRequests: ["rescue-requests"],
@@ -226,6 +227,11 @@ export function useDashboardSummary(isAdmin) {
   });
   const centersQuery = useEvacuationCenters(false, refreshOptions);
   const roomsQuery = useRoomsForCenters(centersQuery.data, refreshOptions);
+  const checkInQuery = useQuery({
+    queryKey: queryKeys.checkInSummary,
+    queryFn: () => api.getCheckInList({ status: "all" }),
+    ...refreshOptions,
+  });
   const usersQuery = useQuery({
     queryKey: queryKeys.users,
     queryFn: api.getUsers,
@@ -298,11 +304,14 @@ export function useDashboardSummary(isAdmin) {
     roomsQuery.error,
     usersQuery.error,
   ];
-  const isLoading = barangaysQuery.isLoading
-    || familiesQuery.isLoading
-    || centersQuery.isLoading
-    || roomsQuery.isLoading
-    || (isAdmin && usersQuery.isLoading);
+
+  // Core data is ready as soon as families and centers datasets have resolved or settled
+  const hasCoreData = Boolean(
+    familiesQuery.data ||
+    centersQuery.data ||
+    (!familiesQuery.isLoading && !centersQuery.isLoading)
+  );
+  const isLoading = !hasCoreData && (familiesQuery.isLoading || centersQuery.isLoading);
 
   const totalHouseholds = Number(
     familiesQuery.data?.household_count ?? familiesQuery.data?.total ?? 0
@@ -313,14 +322,34 @@ export function useDashboardSummary(isAdmin) {
     familiesQuery.data?.unassigned_family_count ?? Math.max(0, totalHouseholds - assignedFamilies)
   );
 
+  const checkInSummary = checkInQuery.data?.summary || null;
+  const arrivedFamilies = Number(checkInSummary?.total_checked_in ?? familiesQuery.data?.arrived_family_count ?? 0);
+  const partialFamilies = Number(checkInSummary?.total_partial ?? 0);
+  const pendingArrivalFamilies = Number(
+    checkInSummary?.total_pending ?? Math.max(0, assignedFamilies - arrivedFamilies)
+  );
+  const arrivedResidents = Number(
+    checkInSummary?.total_residents_checked_in ?? familiesQuery.data?.arrived_resident_count ?? 0
+  );
+  const assignedResidents = Number(
+    checkInSummary?.total_residents_assigned ?? centerRooms.reduce((total, center) => total + center.assignedPeople, 0)
+  );
+
   return {
-    stats: familiesQuery.data && centersQuery.data && !isLoading
+    stats: hasCoreData
       ? {
           barangays: barangays.length,
           families: totalHouseholds,
           assignedFamilies,
           unassignedFamilies,
+          arrivedFamilies,
+          partialFamilies,
+          pendingArrivalFamilies,
+          totalArrivedFamilies: arrivedFamilies + partialFamilies,
           residents: totalResidents,
+          arrivedResidents,
+          assignedResidents,
+          pendingResidents: Math.max(0, assignedResidents - arrivedResidents),
           centers: centers.length,
           totalCapacity: centerRooms.reduce((total, center) => total + center.capacity, 0),
           totalOccupiedPeople: centerRooms.reduce((total, center) => total + (center.occupiedPeople || 0), 0),
@@ -331,6 +360,8 @@ export function useDashboardSummary(isAdmin) {
           occupiedRooms,
           availableRooms: Math.max(0, totalRooms - occupiedRooms),
           centerRooms,
+          checkInSummary,
+          checkInCenters: checkInQuery.data?.centers || [],
           totalStaff: staff.filter((account) => account.role === "lgu_personnel").length,
           activeStaff: staff.filter((account) => account.role === "lgu_personnel" && account.is_active).length,
         }
@@ -340,6 +371,7 @@ export function useDashboardSummary(isAdmin) {
       || familiesQuery.isFetching
       || centersQuery.isFetching
       || roomsQuery.isFetching
+      || checkInQuery.isFetching
       || (isAdmin && usersQuery.isFetching),
     error: errors.find(Boolean) || null,
     refetch: async () => {
@@ -348,6 +380,7 @@ export function useDashboardSummary(isAdmin) {
         familiesQuery.refetch(),
         centersQuery.refetch(),
         roomsQuery.refetch(),
+        checkInQuery.refetch(),
         isAdmin ? usersQuery.refetch() : Promise.resolve(),
       ]);
     },

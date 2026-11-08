@@ -296,6 +296,10 @@ def get_logs():
             "id": log.id,
             "user_id": log.user_id,
             "action": log.action,
-            "timestamp": log.timestamp.isoformat()
+            "timestamp": (
+                log.timestamp.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+                if log.timestamp
+                else None
+            )
         } for log in logs
     ])

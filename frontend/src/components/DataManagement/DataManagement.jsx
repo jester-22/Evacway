@@ -23,11 +23,21 @@ import {
   faChevronRight,
   faUserPlus,
   faCalendarDays,
+  faSliders,
+  faEye,
+  faFileExport,
+  faFilter,
+  faWheelchair,
+  faBaby,
+  faPersonWalkingWithCane,
+  faHouseUser,
+  faNotesMedical,
 } from "@fortawesome/free-solid-svg-icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
 import { useBarangays, invalidateEvacuationQueries } from "../../hooks/useEvacuationQueries";
+import ShelterMetadataTab from "./ShelterMetadataTab";
 import "./DataManagement.css";
 
 // Case-insensitive, trimmed, whitespace-collapsed name used for duplicate checks.
@@ -58,25 +68,99 @@ function DataManagement() {
   const [successMsg, setSuccessMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
+  // Auto-dismiss notification toasts after 4.5 seconds
+  useEffect(() => {
+    if (!errorMsg) return;
+    const t = setTimeout(() => setErrorMsg(""), 4500);
+    return () => clearTimeout(t);
+  }, [errorMsg]);
+
+  useEffect(() => {
+    if (!successMsg) return;
+    const t = setTimeout(() => setSuccessMsg(""), 4500);
+    return () => clearTimeout(t);
+  }, [successMsg]);
+
   // =========================================================================
-  // SUB-TAB 3: YEARS STATE (VIEW ONLY)
+  // SUB-TAB 3: YEARS & RESIDENTS ROSTER STATE
   // =========================================================================
   const [years, setYears] = useState([]);
   const [loadingYears, setLoadingYears] = useState(false);
   const [yearsError, setYearsError] = useState("");
+  const [selectedRosterYear, setSelectedRosterYear] = useState(2026);
+  const [yearFamilies, setYearFamilies] = useState([]);
+  const [loadingYearResidents, setLoadingYearResidents] = useState(false);
+  const [yearResidentsError, setYearResidentsError] = useState("");
+  const [searchInputText, setSearchInputText] = useState("");
+  const [yearSearch, setYearSearch] = useState("");
+
+  function handleSearchInputChange(val) {
+    setSearchInputText(val);
+    setYearSearch(val);
+    setYearPage(1);
+  }
+
+  function handleSearchSubmit(e) {
+    if (e) e.preventDefault();
+    setYearPage(1);
+    setYearSearch(searchInputText.trim());
+  }
+
+  function handleSearchClear() {
+    setSearchInputText("");
+    setYearSearch("");
+    setYearPage(1);
+  }
+  const [yearBarangayFilter, setYearBarangayFilter] = useState("");
+  const [yearVulnerabilityFilter, setYearVulnerabilityFilter] = useState("all");
+  const [yearViewMode, setYearViewMode] = useState("residents"); // "residents" | "households" | "overview"
+  const [yearPage, setYearPage] = useState(1);
+  const [yearPerPage, setYearPerPage] = useState(25);
+  const [expandedHouseholdIds, setExpandedHouseholdIds] = useState(new Set());
 
   useEffect(() => {
-    if (activeSubtab === "years") {
-      fetchYears();
+    fetchYears();
+  }, []);
+
+  useEffect(() => {
+    if (activeSubtab === "years" || activeSubtab === "import") {
+      if (years.length === 0) {
+        fetchYears();
+      }
     }
   }, [activeSubtab]);
 
-  async function fetchYears() {
+  function toggleHouseholdExpand(id) {
+    setExpandedHouseholdIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function calculateAge(dob) {
+    if (!dob) return null;
+    const birth = new Date(dob);
+    if (isNaN(birth.getTime())) return null;
+    const now = new Date();
+    let age = now.getFullYear() - birth.getFullYear();
+    const m = now.getMonth() - birth.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) age--;
+    return age >= 0 ? age : null;
+  }
+
+  async function fetchYears(preferredYear = null) {
     setLoadingYears(true);
     setYearsError("");
     try {
       const data = await api.getRosterYears();
-      setYears(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      setYears(list);
+      const activeYearObj = list.find((y) => y.is_active);
+      const targetYear = preferredYear ?? selectedRosterYear ?? activeYearObj?.year ?? list[0]?.year ?? 2026;
+      setSelectedRosterYear(targetYear);
+      fetchYearFamilies(targetYear);
     } catch (err) {
       console.error("Failed to load roster years:", err);
       setYearsError(err.message || "Failed to load roster years.");
@@ -84,6 +168,179 @@ function DataManagement() {
       setLoadingYears(false);
     }
   }
+
+  async function fetchYearFamilies(targetYear) {
+    if (!targetYear && targetYear !== 0) return;
+    setLoadingYearResidents(true);
+    setYearResidentsError("");
+    try {
+      const data = await api.getFamilies({ year: targetYear, all: "true" });
+      setYearFamilies(Array.isArray(data?.items) ? data.items : []);
+    } catch (err) {
+      console.error(`Failed to load families for year ${targetYear}:`, err);
+      setYearResidentsError(err.message || `Failed to load resident roster for year ${targetYear}.`);
+    } finally {
+      setLoadingYearResidents(false);
+    }
+  }
+
+  function handleSelectYear(year) {
+    setSelectedRosterYear(year);
+    setYearPage(1);
+    fetchYearFamilies(year);
+  }
+
+  // Flatten families into individual residents for the active roster year
+  const allResidentsInYear = useMemo(() => {
+    const list = [];
+    (yearFamilies || []).forEach((family) => {
+      const members = Array.isArray(family.members) && family.members.length > 0
+        ? family.members
+        : [
+            {
+              id: `head-${family.id}`,
+              family_id: family.id,
+              full_name: family.head_name || "Head of Family",
+              relationship_to_head: "Household Head",
+              is_head_of_family: true,
+              contact_number: family.head_contact || family.contact_number,
+            },
+          ];
+      members.forEach((m) => {
+        const computedAge = m.age != null ? m.age : calculateAge(m.date_of_birth);
+        list.push({
+          ...m,
+          family_id: family.id,
+          family_code: family.family_code || `FAM-${family.id}`,
+          family_head: family.head_name,
+          family_contact: family.head_contact || family.contact_number,
+          barangay_id: family.barangay_id,
+          barangay_name: family.barangay || "",
+          address: family.address || "",
+          assignment_status: family.assignment_status || "Unassigned",
+          evacuation_center: family.evacuation_center || "",
+          buildings: family.buildings || "",
+          rooms: family.rooms || "",
+          computed_age: computedAge,
+          gender: m.gender || family.gender || "",
+          date_of_birth: m.date_of_birth || null,
+        });
+      });
+    });
+    return list;
+  }, [yearFamilies]);
+
+  // Filter individual residents
+  const filteredResidents = useMemo(() => {
+    let result = allResidentsInYear;
+    const q = (yearSearch || "").trim().toLowerCase();
+    if (q) {
+      result = result.filter(
+        (r) =>
+          (r.full_name && r.full_name.toLowerCase().includes(q)) ||
+          (r.first_name && r.first_name.toLowerCase().includes(q)) ||
+          (r.middle_name && r.middle_name.toLowerCase().includes(q)) ||
+          (r.last_name && r.last_name.toLowerCase().includes(q)) ||
+          (r.family_code && r.family_code.toLowerCase().includes(q)) ||
+          (r.family_head && r.family_head.toLowerCase().includes(q)) ||
+          (r.barangay_name && r.barangay_name.toLowerCase().includes(q)) ||
+          (r.address && r.address.toLowerCase().includes(q)) ||
+          (r.relationship_to_head && r.relationship_to_head.toLowerCase().includes(q)) ||
+          (r.contact_number && r.contact_number.toLowerCase().includes(q)) ||
+          (r.gender && r.gender.toLowerCase().includes(q)) ||
+          (r.disability_type && r.disability_type.toLowerCase().includes(q)) ||
+          (r.medical_notes && r.medical_notes.toLowerCase().includes(q))
+      );
+    }
+    if (yearBarangayFilter) {
+      result = result.filter(
+        (r) => String(r.barangay_id) === String(yearBarangayFilter) || r.barangay_name === yearBarangayFilter
+      );
+    }
+    if (yearVulnerabilityFilter === "pwd") {
+      result = result.filter((r) => r.is_pwd);
+    } else if (yearVulnerabilityFilter === "pregnant") {
+      result = result.filter((r) => r.is_pregnant || r.is_lactating);
+    } else if (yearVulnerabilityFilter === "senior") {
+      result = result.filter((r) => r.computed_age != null && r.computed_age >= 60);
+    } else if (yearVulnerabilityFilter === "assistance") {
+      result = result.filter((r) => r.needs_assistance);
+    } else if (yearVulnerabilityFilter === "any_vulnerable") {
+      result = result.filter(
+        (r) =>
+          r.is_pwd ||
+          r.is_pregnant ||
+          r.is_lactating ||
+          r.needs_assistance ||
+          (r.computed_age != null && r.computed_age >= 60)
+      );
+    }
+    return result;
+  }, [allResidentsInYear, yearSearch, yearBarangayFilter, yearVulnerabilityFilter]);
+
+  const paginatedResidents = useMemo(() => {
+    const start = (yearPage - 1) * yearPerPage;
+    return filteredResidents.slice(start, start + yearPerPage);
+  }, [filteredResidents, yearPage, yearPerPage]);
+
+  const residentTotalPages = Math.max(1, Math.ceil(filteredResidents.length / yearPerPage));
+
+  // Filter households
+  const filteredFamilies = useMemo(() => {
+    let result = yearFamilies || [];
+    const q = (yearSearch || "").trim().toLowerCase();
+    if (q) {
+      result = result.filter(
+        (f) =>
+          (f.head_name && f.head_name.toLowerCase().includes(q)) ||
+          (f.family_code && f.family_code.toLowerCase().includes(q)) ||
+          (f.barangay && f.barangay.toLowerCase().includes(q)) ||
+          (f.address && f.address.toLowerCase().includes(q)) ||
+          (Array.isArray(f.members) &&
+            f.members.some(
+              (m) =>
+                m.full_name?.toLowerCase().includes(q) ||
+                m.first_name?.toLowerCase().includes(q) ||
+                m.last_name?.toLowerCase().includes(q)
+            ))
+      );
+    }
+    if (yearBarangayFilter) {
+      result = result.filter(
+        (f) => String(f.barangay_id) === String(yearBarangayFilter) || f.barangay === yearBarangayFilter
+      );
+    }
+    if (yearVulnerabilityFilter === "pwd") {
+      result = result.filter((f) => f.members?.some((m) => m.is_pwd));
+    } else if (yearVulnerabilityFilter === "pregnant") {
+      result = result.filter((f) => f.members?.some((m) => m.is_pregnant || m.is_lactating));
+    } else if (yearVulnerabilityFilter === "senior") {
+      result = result.filter((f) =>
+        f.members?.some((m) => (m.age != null ? m.age : calculateAge(m.date_of_birth)) >= 60)
+      );
+    } else if (yearVulnerabilityFilter === "assistance") {
+      result = result.filter((f) => f.members?.some((m) => m.needs_assistance));
+    } else if (yearVulnerabilityFilter === "any_vulnerable") {
+      result = result.filter((f) =>
+        f.members?.some(
+          (m) =>
+            m.is_pwd ||
+            m.is_pregnant ||
+            m.is_lactating ||
+            m.needs_assistance ||
+            (m.age != null ? m.age : calculateAge(m.date_of_birth)) >= 60
+        )
+      );
+    }
+    return result;
+  }, [yearFamilies, yearSearch, yearBarangayFilter, yearVulnerabilityFilter]);
+
+  const paginatedFamilies = useMemo(() => {
+    const start = (yearPage - 1) * yearPerPage;
+    return filteredFamilies.slice(start, start + yearPerPage);
+  }, [filteredFamilies, yearPage, yearPerPage]);
+
+  const familyTotalPages = Math.max(1, Math.ceil(filteredFamilies.length / yearPerPage));
 
   // =========================================================================
   // SUB-TAB 1: IMPORT RESIDENTS STATE
@@ -113,6 +370,9 @@ function DataManagement() {
       invalidateEvacuationQueries(queryClient),
       queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] }),
     ]);
+    if (selectedRosterYear) {
+      fetchYearFamilies(selectedRosterYear);
+    }
   }
 
   // Stage an upload: validates the file but saves nothing to live data.
@@ -256,6 +516,9 @@ function DataManagement() {
     }
   }
 
+  const [exportingMasterlist, setExportingMasterlist] = useState(false);
+  const [showExcelPreview, setShowExcelPreview] = useState(false);
+
   async function handleDownloadTemplate() {
     try {
       setDownloadingTemplate(true);
@@ -273,6 +536,33 @@ function DataManagement() {
       setErrorMsg(err.message || "Failed to download Excel template.");
     } finally {
       setDownloadingTemplate(false);
+    }
+  }
+
+  async function handleExportMasterlist(targetYear = null) {
+    const yearToExport = targetYear || null;
+    try {
+      setExportingMasterlist(true);
+      setErrorMsg("");
+      const blob = await api.exportFamilies(yearToExport ? { year: yearToExport } : {});
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const today = new Date().toISOString().slice(0, 10);
+      const fileLabel = yearToExport ? `_${yearToExport}` : "";
+      link.setAttribute("download", `EvacWay_Resident_Masterlist${fileLabel}_${today}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setSuccessMsg(
+        `Resident masterlist ${yearToExport ? `for year ${yearToExport} ` : ""}exported successfully.`
+      );
+    } catch (err) {
+      console.error("Export masterlist failed:", err);
+      setErrorMsg(err.message || "Failed to export resident masterlist.");
+    } finally {
+      setExportingMasterlist(false);
     }
   }
 
@@ -422,6 +712,882 @@ function DataManagement() {
     return null;
   }
 
+  function renderResidentDirectorySection() {
+    return (
+      <div className="dm-resident-directory-section" style={{ display: "flex", flexDirection: "column", gap: "18px", marginTop: "24px", paddingTop: "20px", borderTop: "2px solid #e2e8f0" }}>
+        {/* Section Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", borderBottom: "1px solid var(--line, #e2e8f0)", paddingBottom: "14px" }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "var(--text-0, #0f172a)", display: "flex", alignItems: "center", gap: "8px" }}>
+              <FontAwesomeIcon icon={faUsers} style={{ color: "var(--brand, #2563eb)" }} />
+              Registered Resident Masterlist & Demographics
+            </h3>
+            <p style={{ margin: "4px 0 0", fontSize: "13px", color: "var(--muted, #64748b)" }}>
+              Viewing registered household heads and family members for Census Year {selectedRosterYear}. Filter by year, barangay, or vulnerabilities.
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="dm-btn dm-btn-primary"
+              onClick={() => handleExportMasterlist(selectedRosterYear)}
+              disabled={exportingMasterlist || loadingYearResidents}
+              title={`Export all ${selectedRosterYear || ""} residents to Excel`}
+              style={{ fontSize: "12.5px", padding: "7px 13px" }}
+            >
+              <FontAwesomeIcon icon={exportingMasterlist ? faCircleNotch : faFileExport} spin={exportingMasterlist} />
+              {exportingMasterlist ? "Exporting..." : `Export ${selectedRosterYear || ""} Masterlist (.xlsx)`}
+            </button>
+          </div>
+        </div>
+
+        {/* Year Filter & Fast Toggle Bar */}
+        <div className="dm-year-bar">
+          <div className="dm-year-selector-group">
+            <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-0, #0f172a)", display: "flex", alignItems: "center", gap: "6px" }}>
+              <FontAwesomeIcon icon={faFilter} style={{ color: "var(--brand, #2563eb)" }} />
+              Filter by Year:
+            </span>
+            <select
+              value={selectedRosterYear || ""}
+              onChange={(e) => handleSelectYear(Number(e.target.value))}
+              className="dm-form-group select"
+              style={{
+                padding: "7px 12px",
+                borderRadius: "7px",
+                border: "1px solid #cbd5e1",
+                fontWeight: 700,
+                fontSize: "13.5px",
+                color: "#0f172a",
+                background: "#ffffff",
+                cursor: "pointer",
+              }}
+              aria-label="Select roster year"
+            >
+              {years.map((y) => (
+                <option key={y.id || y.year} value={y.year}>
+                  Census Year {y.year} {y.is_active ? "(Active)" : "(Archived)"}
+                </option>
+              ))}
+            </select>
+
+            {/* Quick Year Toggle Pills */}
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginLeft: "6px" }}>
+              {years.map((y) => {
+                const isSelected = Number(selectedRosterYear) === Number(y.year);
+                return (
+                  <button
+                    key={y.id || y.year}
+                    type="button"
+                    className={`dm-year-pill ${isSelected ? "is-active" : ""}`}
+                    onClick={() => handleSelectYear(y.year)}
+                  >
+                    <FontAwesomeIcon icon={faCalendarDays} style={{ fontSize: "12px" }} />
+                    <span>{y.year}</span>
+                    {y.is_active && (
+                      <span
+                        style={{
+                          fontSize: "10.5px",
+                          padding: "1px 6px",
+                          borderRadius: "10px",
+                          background: isSelected ? "rgba(255,255,255,0.25)" : "#dcfce7",
+                          color: isSelected ? "#ffffff" : "#166534",
+                          fontWeight: 700,
+                        }}
+                      >
+                        Active
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="dm-btn dm-btn-secondary"
+            onClick={() => fetchYears(selectedRosterYear)}
+            disabled={loadingYears || loadingYearResidents}
+            style={{ fontSize: "12.5px", padding: "6px 12px" }}
+          >
+            <FontAwesomeIcon icon={faRotate} spin={loadingYears || loadingYearResidents} />
+            Refresh
+          </button>
+        </div>
+
+        {/* Quick Metrics Cards */}
+        <div className="dm-year-stats-grid">
+          <div className="dm-year-stat-card">
+            <div className="dm-year-stat-icon blue">
+              <FontAwesomeIcon icon={faHouseUser} />
+            </div>
+            <div className="dm-year-stat-info">
+              <span className="dm-year-stat-val">{yearFamilies.length.toLocaleString()}</span>
+              <span className="dm-year-stat-lbl">Households in {selectedRosterYear}</span>
+            </div>
+          </div>
+
+          <div className="dm-year-stat-card">
+            <div className="dm-year-stat-icon green">
+              <FontAwesomeIcon icon={faUsers} />
+            </div>
+            <div className="dm-year-stat-info">
+              <span className="dm-year-stat-val">{allResidentsInYear.length.toLocaleString()}</span>
+              <span className="dm-year-stat-lbl">Residents in {selectedRosterYear}</span>
+            </div>
+          </div>
+
+          <div className="dm-year-stat-card">
+            <div className="dm-year-stat-icon amber">
+              <FontAwesomeIcon icon={faWheelchair} />
+            </div>
+            <div className="dm-year-stat-info">
+              <span className="dm-year-stat-val">
+                {allResidentsInYear.filter((r) => r.is_pwd || r.is_pregnant || r.is_lactating || r.needs_assistance || (r.computed_age != null && r.computed_age >= 60)).length.toLocaleString()}
+              </span>
+              <span className="dm-year-stat-lbl">Special Needs / Vulnerable</span>
+            </div>
+          </div>
+
+          <div className="dm-year-stat-card">
+            <div className="dm-year-stat-icon purple">
+              <FontAwesomeIcon icon={faBuilding} />
+            </div>
+            <div className="dm-year-stat-info">
+              <span className="dm-year-stat-val">
+                {yearFamilies.filter((f) => f.assignment_status === "Assigned").length.toLocaleString()}
+              </span>
+              <span className="dm-year-stat-lbl">Sheltered Households</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Search, Filter & View Mode Controls */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+            flexWrap: "wrap",
+            paddingTop: "4px",
+          }}
+        >
+          <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", flex: 1 }}>
+            {/* Search Form with Input & Button */}
+            <form
+              onSubmit={handleSearchSubmit}
+              style={{ display: "flex", gap: "8px", alignItems: "center", flex: 1, minWidth: "280px", maxWidth: "420px" }}
+            >
+              <div className="dm-search-wrap" style={{ flex: 1, position: "relative" }}>
+                <FontAwesomeIcon icon={faMagnifyingGlass} className="dm-search-icon" />
+                <input
+                  type="text"
+                  className="dm-search-input"
+                  value={searchInputText}
+                  onChange={(e) => handleSearchInputChange(e.target.value)}
+                  placeholder="Search by resident name, family code, address..."
+                />
+                {searchInputText && (
+                  <button
+                    type="button"
+                    className="dm-search-clear"
+                    onClick={handleSearchClear}
+                    title="Clear search"
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                )}
+              </div>
+              <button
+                type="submit"
+                className="dm-btn dm-btn-primary"
+                style={{ padding: "8px 14px", fontSize: "13px", height: "38px", whiteSpace: "nowrap" }}
+                title="Search residents"
+              >
+                <FontAwesomeIcon icon={faMagnifyingGlass} />
+                Search
+              </button>
+            </form>
+
+            {/* Barangay Filter Dropdown */}
+            <select
+              value={yearBarangayFilter}
+              onChange={(e) => {
+                setYearPage(1);
+                setYearBarangayFilter(e.target.value);
+              }}
+              className="dm-form-group select"
+              style={{
+                padding: "8px 12px",
+                borderRadius: "8px",
+                border: "1px solid #cbd5e1",
+                fontSize: "13px",
+                color: "#334155",
+                background: "#ffffff",
+                minWidth: "160px",
+              }}
+              aria-label="Filter by barangay"
+            >
+              <option value="">All Barangays ({barangays.length})</option>
+              {barangays.map((b) => (
+                <option key={b.id} value={b.name}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+
+            {/* Vulnerability / Special Needs Filter */}
+            <select
+              value={yearVulnerabilityFilter}
+              onChange={(e) => {
+                setYearPage(1);
+                setYearVulnerabilityFilter(e.target.value);
+              }}
+              className="dm-form-group select"
+              style={{
+                padding: "8px 12px",
+                borderRadius: "8px",
+                border: "1px solid #cbd5e1",
+                fontSize: "13px",
+                color: "#334155",
+                background: "#ffffff",
+                minWidth: "180px",
+              }}
+              aria-label="Filter by vulnerability"
+            >
+              <option value="all">All Demographics</option>
+              <option value="any_vulnerable">Any Special Needs / Vulnerable</option>
+              <option value="pwd">PWD / Persons with Disability</option>
+              <option value="pregnant">Pregnant / Lactating Mothers</option>
+              <option value="senior">Senior Citizens (Age 60+)</option>
+              <option value="assistance">Requires Medical / Mobility Assistance</option>
+            </select>
+          </div>
+
+          {/* View Mode Toggle Tabs */}
+          <div className="dm-view-mode-tabs">
+            <button
+              type="button"
+              className={`dm-view-mode-btn ${yearViewMode === "residents" ? "is-active" : ""}`}
+              onClick={() => {
+                setYearPage(1);
+                setYearViewMode("residents");
+              }}
+            >
+              <FontAwesomeIcon icon={faUsers} />
+              <span>Residents ({filteredResidents.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`dm-view-mode-btn ${yearViewMode === "households" ? "is-active" : ""}`}
+              onClick={() => {
+                setYearPage(1);
+                setYearViewMode("households");
+              }}
+            >
+              <FontAwesomeIcon icon={faHouseUser} />
+              <span>Households ({filteredFamilies.length})</span>
+            </button>
+            <button
+              type="button"
+              className={`dm-view-mode-btn ${yearViewMode === "overview" ? "is-active" : ""}`}
+              onClick={() => setYearViewMode("overview")}
+            >
+              <FontAwesomeIcon icon={faCalendarDays} />
+              <span>Years Overview ({years.length})</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Error Message */}
+        {yearResidentsError && (
+          <div className="dm-alert dm-alert-error" style={{ margin: "4px 0" }}>
+            <div className="dm-alert-content">
+              <FontAwesomeIcon icon={faTriangleExclamation} />
+              <span>{yearResidentsError}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Loading Indicator */}
+        {loadingYearResidents ? (
+          <div style={{ padding: "48px 20px", textAlign: "center", color: "var(--muted, #64748b)" }}>
+            <FontAwesomeIcon icon={faCircleNotch} spin style={{ fontSize: "28px", color: "var(--brand, #2563eb)", marginBottom: "12px" }} />
+            <div style={{ fontSize: "14px", fontWeight: 600 }}>Loading residents for Census Year {selectedRosterYear}...</div>
+          </div>
+        ) : yearViewMode === "residents" ? (
+          /* VIEW 1: RESIDENTS */
+          filteredResidents.length === 0 ? (
+            <div className="dm-empty-state">
+              <FontAwesomeIcon icon={faUsers} className="dm-empty-icon" />
+              <p>No residents found matching the selected filters for year {selectedRosterYear}.</p>
+              {(yearSearch || yearBarangayFilter || yearVulnerabilityFilter !== "all") && (
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-secondary"
+                  style={{ marginTop: "10px" }}
+                  onClick={() => {
+                    setYearSearch("");
+                    setYearBarangayFilter("");
+                    setYearVulnerabilityFilter("all");
+                    setYearPage(1);
+                  }}
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="dm-table-wrapper">
+                <table className="dm-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "110px" }}>Family Code</th>
+                      <th style={{ minWidth: "170px" }}>Resident Name</th>
+                      <th style={{ minWidth: "150px" }}>Barangay & Address</th>
+                      <th style={{ width: "130px" }}>Relationship</th>
+                      <th style={{ width: "110px" }}>Age & Gender</th>
+                      <th style={{ minWidth: "180px" }}>Special Needs & Health</th>
+                      <th style={{ minWidth: "160px" }}>Shelter Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedResidents.map((r, idx) => {
+                      const isHead = Boolean(r.is_head_of_family);
+                      const isSenior = r.computed_age != null && r.computed_age >= 60;
+                      return (
+                        <tr key={r.id || `res-${idx}`}>
+                          <td>
+                            <span className="dm-meta-code-pill" style={{ fontWeight: 700 }}>
+                              {r.family_code}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <strong style={{ fontSize: "13.5px", color: "var(--text-0, #0f172a)" }}>
+                                  {r.full_name || [r.first_name, r.middle_name, r.last_name, r.suffix].filter(Boolean).join(" ") || "Unnamed"}
+                                </strong>
+                                {isHead && (
+                                  <span
+                                    className="dm-badge dm-badge-blue"
+                                    style={{ fontSize: "10.5px", padding: "1px 6px", fontWeight: 700 }}
+                                  >
+                                    HEAD
+                                  </span>
+                                )}
+                              </div>
+                              {r.contact_number && (
+                                <span style={{ fontSize: "11.5px", color: "var(--muted, #64748b)" }}>
+                                  {r.contact_number}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                              <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-0, #0f172a)" }}>
+                                {r.barangay_name || "—"}
+                              </span>
+                              {r.address && (
+                                <span style={{ fontSize: "11.5px", color: "var(--muted, #64748b)" }}>
+                                  {r.address}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <span style={{ fontSize: "13px", color: "#334155" }}>
+                              {r.relationship_to_head || (isHead ? "Household Head" : "Member")}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "1px", fontSize: "12.5px" }}>
+                              <span style={{ fontWeight: 600, color: "var(--text-0, #0f172a)" }}>
+                                {r.computed_age != null
+                                  ? `${r.computed_age} yrs old`
+                                  : r.age != null
+                                  ? `${r.age} yrs old`
+                                  : r.date_of_birth
+                                  ? `DOB: ${r.date_of_birth}`
+                                  : "—"}
+                              </span>
+                              <span style={{ fontSize: "12px", color: r.gender ? "var(--text-1, #334155)" : "var(--muted, #94a3b8)" }}>
+                                {r.gender || "Not specified"}
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                              {r.is_pwd && (
+                                <span className="dm-badge dm-badge-blue" style={{ fontSize: "11px" }}>
+                                  <FontAwesomeIcon icon={faWheelchair} style={{ marginRight: "4px" }} />
+                                  PWD{r.disability_type ? `: ${r.disability_type}` : ""}
+                                </span>
+                              )}
+                              {isSenior && (
+                                <span
+                                  className="dm-badge"
+                                  style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fde68a", fontSize: "11px" }}
+                                >
+                                  <FontAwesomeIcon icon={faPersonWalkingWithCane} style={{ marginRight: "4px" }} />
+                                  Senior (60+)
+                                </span>
+                              )}
+                              {r.is_pregnant && (
+                                <span
+                                  className="dm-badge"
+                                  style={{ background: "#fdf2f8", color: "#9d174d", borderColor: "#fbcfe8", fontSize: "11px" }}
+                                >
+                                  <FontAwesomeIcon icon={faBaby} style={{ marginRight: "4px" }} />
+                                  Pregnant
+                                </span>
+                              )}
+                              {r.is_lactating && (
+                                <span
+                                  className="dm-badge"
+                                  style={{ background: "#fdf4ff", color: "#86198f", borderColor: "#f0abfc", fontSize: "11px" }}
+                                >
+                                  Lactating
+                                </span>
+                              )}
+                              {r.needs_assistance && (
+                                <span
+                                  className="dm-badge"
+                                  style={{ background: "#fff1f2", color: "#be123c", borderColor: "#fecdd3", fontSize: "11px" }}
+                                >
+                                  Needs Assistance
+                                </span>
+                              )}
+                              {r.medical_notes && (
+                                <span
+                                  className="dm-badge"
+                                  title={r.medical_notes}
+                                  style={{ background: "#f8fafc", color: "#475569", borderColor: "#cbd5e1", fontSize: "11px" }}
+                                >
+                                  <FontAwesomeIcon icon={faNotesMedical} style={{ marginRight: "4px" }} />
+                                  Medical Notes
+                                </span>
+                              )}
+                              {!r.is_pwd && !isSenior && !r.is_pregnant && !r.is_lactating && !r.needs_assistance && !r.medical_notes && (
+                                <span style={{ fontSize: "12px", color: "var(--muted, #94a3b8)" }}>—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            {r.assignment_status === "Assigned" ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                <span className="dm-badge dm-badge-green" style={{ width: "fit-content", fontSize: "11px" }}>
+                                  <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
+                                  Assigned
+                                </span>
+                                <span style={{ fontSize: "11.5px", color: "#334155" }}>
+                                  {r.evacuation_center || "Center"} {r.rooms ? `- ${r.rooms}` : ""}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="dm-badge" style={{ color: "var(--muted, #64748b)", background: "#f1f5f9", fontSize: "11px" }}>
+                                Unassigned
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  paddingTop: "14px",
+                  borderTop: "1px solid var(--line, #e2e8f0)",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                }}
+              >
+                <div style={{ fontSize: "13px", color: "var(--muted, #64748b)" }}>
+                  Showing{" "}
+                  <strong>
+                    {filteredResidents.length > 0 ? (yearPage - 1) * yearPerPage + 1 : 0}
+                  </strong>{" "}
+                  to{" "}
+                  <strong>
+                    {Math.min(yearPage * yearPerPage, filteredResidents.length)}
+                  </strong>{" "}
+                  of <strong>{filteredResidents.length.toLocaleString()}</strong> residents
+                </div>
+
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <select
+                    value={yearPerPage}
+                    onChange={(e) => {
+                      setYearPerPage(Number(e.target.value));
+                      setYearPage(1);
+                    }}
+                    style={{
+                      padding: "5px 10px",
+                      borderRadius: "6px",
+                      border: "1px solid #cbd5e1",
+                      fontSize: "12.5px",
+                    }}
+                  >
+                    <option value={20}>20 per page</option>
+                    <option value={25}>25 per page</option>
+                    <option value={50}>50 per page</option>
+                    <option value={100}>100 per page</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-secondary"
+                    disabled={yearPage <= 1}
+                    onClick={() => setYearPage((p) => Math.max(1, p - 1))}
+                    style={{ padding: "6px 12px", fontSize: "12.5px" }}
+                  >
+                    Previous
+                  </button>
+                  <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-0, #0f172a)" }}>
+                    Page {yearPage} of {residentTotalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-secondary"
+                    disabled={yearPage >= residentTotalPages}
+                    onClick={() => setYearPage((p) => Math.min(residentTotalPages, p + 1))}
+                    style={{ padding: "6px 12px", fontSize: "12.5px" }}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </>
+          )
+        ) : yearViewMode === "households" ? (
+          /* VIEW 2: HOUSEHOLDS */
+          filteredFamilies.length === 0 ? (
+            <div className="dm-empty-state">
+              <FontAwesomeIcon icon={faHouseUser} className="dm-empty-icon" />
+              <p>No households found matching your search for year {selectedRosterYear}.</p>
+            </div>
+          ) : (
+            <>
+              <div className="dm-table-wrapper">
+                <table className="dm-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "40px" }}></th>
+                      <th style={{ width: "120px" }}>Family Code</th>
+                      <th>Head of Household</th>
+                      <th>Barangay & Address</th>
+                      <th style={{ width: "100px" }}>Members</th>
+                      <th>Special Needs</th>
+                      <th>Shelter Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedFamilies.map((f) => {
+                      const isExpanded = expandedHouseholdIds.has(f.id);
+                      const members = f.members || [];
+                      const vulnerableCount = members.filter(
+                        (m) =>
+                          m.is_pwd ||
+                          m.is_pregnant ||
+                          m.is_lactating ||
+                          m.needs_assistance ||
+                          (m.age != null && m.age >= 60)
+                      ).length;
+
+                      return (
+                        <Fragment key={f.id}>
+                          <tr
+                            onClick={() => toggleHouseholdExpand(f.id)}
+                            style={{ cursor: "pointer", background: isExpanded ? "#f8fafc" : "transparent" }}
+                          >
+                            <td>
+                              <FontAwesomeIcon
+                                icon={isExpanded ? faChevronDown : faChevronRight}
+                                style={{ color: "var(--muted, #64748b)", fontSize: "12px" }}
+                              />
+                            </td>
+                            <td>
+                              <span className="dm-meta-code-pill" style={{ fontWeight: 700 }}>
+                                {f.family_code}
+                              </span>
+                            </td>
+                            <td>
+                              <div style={{ display: "flex", flexDirection: "column" }}>
+                                <strong style={{ fontSize: "13.5px" }}>{f.head_name || "Head"}</strong>
+                                {f.head_contact && (
+                                  <span style={{ fontSize: "11.5px", color: "var(--muted, #64748b)" }}>
+                                    {f.head_contact}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td>
+                              <span style={{ fontWeight: 600 }}>{f.barangay || "—"}</span>
+                              {f.address && (
+                                <span style={{ fontSize: "11.5px", color: "var(--muted, #64748b)", display: "block" }}>
+                                  {f.address}
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <span className="dm-badge dm-badge-blue">
+                                <FontAwesomeIcon icon={faUsers} style={{ marginRight: "4px" }} />
+                                {f.member_count ?? members.length ?? 0}
+                              </span>
+                            </td>
+                            <td>
+                              {vulnerableCount > 0 ? (
+                                <span
+                                  className="dm-badge"
+                                  style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fde68a" }}
+                                >
+                                  <FontAwesomeIcon icon={faWheelchair} style={{ marginRight: "4px" }} />
+                                  {vulnerableCount} with special needs
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: "12px", color: "var(--muted, #94a3b8)" }}>None</span>
+                              )}
+                            </td>
+                            <td>
+                              {f.assignment_status === "Assigned" ? (
+                                <span className="dm-badge dm-badge-green">
+                                  <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
+                                  {f.evacuation_center || "Assigned"}
+                                </span>
+                              ) : (
+                                <span className="dm-badge" style={{ color: "var(--muted, #64748b)", background: "#f1f5f9" }}>
+                                  Unassigned
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+
+                          {/* Nested Members Row when Expanded */}
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={7} style={{ background: "#f8fafc", padding: "14px 24px" }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                                  <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-0, #0f172a)" }}>
+                                    Registered Members of Family {f.family_code} ({members.length}):
+                                  </div>
+                                  <div style={{ background: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
+                                    <table className="dm-table" style={{ fontSize: "12.5px" }}>
+                                      <thead>
+                                        <tr style={{ background: "#f1f5f9" }}>
+                                          <th>Member Name</th>
+                                          <th>Relationship</th>
+                                          <th>Age / Gender</th>
+                                          <th>Vulnerabilities & Needs</th>
+                                          <th>Medical / Remarks</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {members.map((m, mIdx) => (
+                                          <tr key={m.id || mIdx}>
+                                            <td>
+                                              <strong>
+                                                {m.full_name || [m.first_name, m.middle_name, m.last_name, m.suffix].filter(Boolean).join(" ") || "Member"}
+                                              </strong>
+                                              {m.is_head_of_family && (
+                                                <span className="dm-badge dm-badge-blue" style={{ marginLeft: "6px", fontSize: "10px" }}>
+                                                  HEAD
+                                                </span>
+                                              )}
+                                            </td>
+                                            <td>{m.relationship_to_head || "—"}</td>
+                                            <td>
+                                              {m.age != null ? `${m.age} yrs` : m.date_of_birth || "—"} {m.gender ? `• ${m.gender}` : ""}
+                                            </td>
+                                            <td>
+                                              <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                                                {m.is_pwd && (
+                                                  <span className="dm-badge dm-badge-blue" style={{ fontSize: "10.5px" }}>
+                                                    PWD{m.disability_type ? `: ${m.disability_type}` : ""}
+                                                  </span>
+                                                )}
+                                                {m.is_pregnant && (
+                                                  <span className="dm-badge" style={{ background: "#fdf2f8", color: "#9d174d", fontSize: "10.5px" }}>
+                                                    Pregnant
+                                                  </span>
+                                                )}
+                                                {m.needs_assistance && (
+                                                  <span className="dm-badge" style={{ background: "#fff1f2", color: "#be123c", fontSize: "10.5px" }}>
+                                                    Assistance
+                                                  </span>
+                                                )}
+                                                {!m.is_pwd && !m.is_pregnant && !m.needs_assistance && (
+                                                  <span style={{ color: "#94a3b8" }}>—</span>
+                                                )}
+                                              </div>
+                                            </td>
+                                            <td style={{ color: "var(--muted, #64748b)" }}>
+                                              {m.medical_notes || m.notes || "—"}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  paddingTop: "14px",
+                  borderTop: "1px solid var(--line, #e2e8f0)",
+                  flexWrap: "wrap",
+                  gap: "10px",
+                }}
+              >
+                <div style={{ fontSize: "13px", color: "var(--muted, #64748b)" }}>
+                  Showing{" "}
+                  <strong>
+                    {filteredFamilies.length > 0 ? (yearPage - 1) * yearPerPage + 1 : 0}
+                  </strong>{" "}
+                  to{" "}
+                  <strong>
+                    {Math.min(yearPage * yearPerPage, filteredFamilies.length)}
+                  </strong>{" "}
+                  of <strong>{filteredFamilies.length.toLocaleString()}</strong> households
+                </div>
+
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-secondary"
+                    disabled={yearPage <= 1}
+                    onClick={() => setYearPage((p) => Math.max(1, p - 1))}
+                    style={{ padding: "6px 12px", fontSize: "12.5px" }}
+                  >
+                    Previous
+                  </button>
+                  <span style={{ fontSize: "13px", fontWeight: 600 }}>
+                    Page {yearPage} of {familyTotalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-secondary"
+                    disabled={yearPage >= familyTotalPages}
+                    onClick={() => setYearPage((p) => Math.min(familyTotalPages, p + 1))}
+                    style={{ padding: "6px 12px", fontSize: "12.5px" }}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </>
+          )
+        ) : (
+          /* VIEW 3: YEARS OVERVIEW */
+          <div className="dm-table-wrapper">
+            <table className="dm-table">
+              <thead>
+                <tr>
+                  <th style={{ width: "180px" }}>Census Year</th>
+                  <th style={{ width: "160px" }}>System Status</th>
+                  <th style={{ width: "180px" }}>Registered Households</th>
+                  <th style={{ width: "180px" }}>Registered Residents</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {years.map((y) => {
+                  const isSelected = Number(selectedRosterYear) === Number(y.year);
+                  return (
+                    <tr
+                      key={y.id || y.year}
+                      style={{ background: isSelected ? "#f0f7ff" : "transparent" }}
+                    >
+                      <td>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <FontAwesomeIcon icon={faCalendarDays} style={{ color: isSelected ? "var(--brand, #2563eb)" : "#94a3b8" }} />
+                          <strong style={{ fontSize: "15px" }}>{y.year}</strong>
+                        </div>
+                      </td>
+                      <td>
+                        {y.is_active ? (
+                          <span className="dm-badge dm-badge-green">
+                            <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
+                            Active Census Year
+                          </span>
+                        ) : (
+                          <span className="dm-badge" style={{ color: "var(--muted, #64748b)", background: "#f1f5f9" }}>
+                            Archived Roster
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <strong style={{ fontSize: "14px" }}>
+                          {(y.households ?? y.household_count ?? 0).toLocaleString()}
+                        </strong>{" "}
+                        <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>families</span>
+                      </td>
+                      <td>
+                        <strong style={{ fontSize: "14px", color: "var(--brand, #2563eb)" }}>
+                          {(y.residents ?? y.resident_count ?? 0).toLocaleString()}
+                        </strong>{" "}
+                        <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>residents</span>
+                      </td>
+                      <td>
+                        <div style={{ display: "flex", gap: "8px" }}>
+                          <button
+                            type="button"
+                            className="dm-btn dm-btn-primary"
+                            onClick={() => {
+                              handleSelectYear(y.year);
+                              setYearViewMode("residents");
+                            }}
+                            style={{ fontSize: "12px", padding: "6px 12px" }}
+                          >
+                            <FontAwesomeIcon icon={faUsers} />
+                            Inspect {y.year} Residents
+                          </button>
+                          <button
+                            type="button"
+                            className="dm-btn dm-btn-secondary"
+                            onClick={() => handleExportMasterlist(y.year)}
+                            disabled={exportingMasterlist}
+                            style={{ fontSize: "12px", padding: "6px 12px" }}
+                          >
+                            <FontAwesomeIcon icon={faFileExport} />
+                            Export Excel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="dm-page">
       <div className="dm-root">
@@ -463,6 +1629,17 @@ function DataManagement() {
             </button>
             <button
               type="button"
+              className={`dm-subtab-btn ${activeSubtab === "shelter_metadata" ? "is-active" : ""}`}
+              onClick={() => {
+                setActiveSubtab("shelter_metadata");
+                setErrorMsg("");
+              }}
+            >
+              <FontAwesomeIcon icon={faSliders} />
+              Center Types & Amenities
+            </button>
+            <button
+              type="button"
               className={`dm-subtab-btn ${activeSubtab === "years" ? "is-active" : ""}`}
               onClick={() => {
                 setActiveSubtab("years");
@@ -476,37 +1653,41 @@ function DataManagement() {
         </div>
 
         {/* Global Notices */}
-        {successMsg && (
-          <div className="dm-alert dm-alert-success">
-            <div className="dm-alert-content">
-              <FontAwesomeIcon icon={faCircleCheck} />
-              <span>{successMsg}</span>
-            </div>
-            <button
-              type="button"
-              className="dm-alert-close"
-              onClick={() => setSuccessMsg("")}
-              aria-label="Dismiss alert"
-            >
-              <FontAwesomeIcon icon={faXmark} />
-            </button>
-          </div>
-        )}
+        {(successMsg || errorMsg) && (
+          <div className="dm-toast-container">
+            {successMsg && (
+              <div className="dm-alert dm-alert-success">
+                <div className="dm-alert-content">
+                  <FontAwesomeIcon icon={faCircleCheck} />
+                  <span>{successMsg}</span>
+                </div>
+                <button
+                  type="button"
+                  className="dm-alert-close"
+                  onClick={() => setSuccessMsg("")}
+                  aria-label="Dismiss alert"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+            )}
 
-        {errorMsg && (
-          <div className="dm-alert dm-alert-error">
-            <div className="dm-alert-content">
-              <FontAwesomeIcon icon={faTriangleExclamation} />
-              <span>{errorMsg}</span>
-            </div>
-            <button
-              type="button"
-              className="dm-alert-close"
-              onClick={() => setErrorMsg("")}
-              aria-label="Dismiss alert"
-            >
-              <FontAwesomeIcon icon={faXmark} />
-            </button>
+            {errorMsg && (
+              <div className="dm-alert dm-alert-error">
+                <div className="dm-alert-content">
+                  <FontAwesomeIcon icon={faTriangleExclamation} />
+                  <span>{errorMsg}</span>
+                </div>
+                <button
+                  type="button"
+                  className="dm-alert-close"
+                  onClick={() => setErrorMsg("")}
+                  aria-label="Dismiss alert"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -524,15 +1705,41 @@ function DataManagement() {
                 </p>
               </div>
 
-              <button
-                type="button"
-                className="dm-template-btn"
-                onClick={handleDownloadTemplate}
-                disabled={downloadingTemplate}
-              >
-                <FontAwesomeIcon icon={downloadingTemplate ? faCircleNotch : faDownload} spin={downloadingTemplate} />
-                {downloadingTemplate ? "Downloading..." : "Download Excel Template"}
-              </button>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-secondary"
+                  onClick={() => setShowExcelPreview(true)}
+                  title="View required Excel format, column definitions and sample rows"
+                  style={{ fontSize: "13px", padding: "8px 14px" }}
+                >
+                  <FontAwesomeIcon icon={faEye} />
+                  Preview Excel Format
+                </button>
+
+                <button
+                  type="button"
+                  className="dm-template-btn"
+                  onClick={handleDownloadTemplate}
+                  disabled={downloadingTemplate}
+                  title="Download blank template with guidelines"
+                >
+                  <FontAwesomeIcon icon={downloadingTemplate ? faCircleNotch : faDownload} spin={downloadingTemplate} />
+                  {downloadingTemplate ? "Downloading..." : "Download Excel Template"}
+                </button>
+
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-secondary"
+                  onClick={handleExportMasterlist}
+                  disabled={exportingMasterlist}
+                  title="Export all registered households and residents in the municipality to Excel"
+                  style={{ fontSize: "13px", padding: "8px 14px", background: "#f8fafc", borderColor: "#cbd5e1", color: "#334155" }}
+                >
+                  <FontAwesomeIcon icon={exportingMasterlist ? faCircleNotch : faFileExport} spin={exportingMasterlist} />
+                  {exportingMasterlist ? "Exporting..." : "Export Area Masterlist"}
+                </button>
+              </div>
             </div>
 
             {/* Drag & Drop File Upload Area */}
@@ -1037,6 +2244,9 @@ function DataManagement() {
                 </div>
               </>
             )}
+
+            {/* Resident Masterlist Table Data in this area */}
+            {importStep !== "review" && renderResidentDirectorySection()}
           </div>
         )}
 
@@ -1059,18 +2269,7 @@ function DataManagement() {
               </div>
 
               <div className="dm-toolbar-actions">
-                <button
-                  type="button"
-                  className="dm-btn dm-btn-secondary"
-                  onClick={() => barangaysQuery.refetch()}
-                  disabled={barangaysQuery.isLoading || barangaysQuery.isFetching}
-                >
-                  <FontAwesomeIcon
-                    icon={faRotate}
-                    spin={barangaysQuery.isLoading || barangaysQuery.isFetching}
-                  />
-                  Refresh
-                </button>
+                
                 <button
                   type="button"
                   className="dm-btn dm-btn-primary"
@@ -1230,73 +2429,204 @@ function DataManagement() {
         )}
 
         {/* =========================================================================
-            SUB-TAB 3: YEARS (VIEW ONLY)
+            SUB-TAB: SHELTER OPTIONS (CENTER TYPES, MATERIALS, AMENITIES)
+            ========================================================================= */}
+        {activeSubtab === "shelter_metadata" && (
+          <ShelterMetadataTab
+            onNotify={(msg, type) => {
+              if (type === "error") {
+                setErrorMsg(msg);
+              } else {
+                setSuccessMsg(msg);
+              }
+            }}
+          />
+        )}
+
+        {/* =========================================================================
+            SUB-TAB 3: YEARS & RESIDENT DIRECTORY
             ========================================================================= */}
         {activeSubtab === "years" && (
-          <div className="dm-card">
-            <div className="dm-card-header">
-              <div>
-                <h3 className="dm-card-title">
-                  <FontAwesomeIcon icon={faCalendarDays} style={{ color: "var(--brand, #2563eb)", marginRight: "8px" }} />
-                  Roster Years
-                </h3>
-                <p style={{ margin: "4px 0 0", fontSize: "13px", color: "var(--muted, #64748b)" }}>
-                  The active year follows the current calendar year. New years are created automatically.
-                </p>
-              </div>
-            </div>
+          <div className="dm-card" style={{ gap: "20px" }}>
+            {renderResidentDirectorySection()}
+          </div>
+        )}
 
-            {yearsError && (
-              <div className="dm-alert dm-alert-error" style={{ margin: "16px 20px 0" }}>
-                <div className="dm-alert-content">
-                  <FontAwesomeIcon icon={faTriangleExclamation} />
-                  <span>{yearsError}</span>
+        {/* =========================================================================
+            MODAL: EXCEL FORMAT PREVIEW & INSTRUCTIONS
+            ========================================================================= */}
+        {showExcelPreview && (
+          <div className="dm-modal-overlay" onClick={() => setShowExcelPreview(false)}>
+            <div
+              className="dm-modal-card"
+              onClick={(e) => e.stopPropagation()}
+              style={{ maxWidth: "1150px", width: "95vw", maxHeight: "90vh", display: "flex", flexDirection: "column" }}
+            >
+              <div className="dm-modal-header" style={{ padding: "16px 24px", borderBottom: "1px solid #e2e8f0" }}>
+                <div>
+                  <h4 className="dm-modal-title" style={{ fontSize: "17px", fontWeight: "700", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <FontAwesomeIcon icon={faFileExcel} style={{ color: "#10b981" }} />
+                    Excel Resident Roster Format & Specifications
+                  </h4>
+                  <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#64748b" }}>
+                    Structure: <strong>1 row per family member</strong>. Repeat the Family Code, Head of Family, and Address for all members of the household.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="dm-modal-close"
+                  onClick={() => setShowExcelPreview(false)}
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+
+              <div className="dm-modal-body" style={{ overflowY: "auto", padding: "20px 24px" }}>
+                {/* Column Legend */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", marginBottom: "16px", padding: "12px 16px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0", fontSize: "12.5px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "50%", background: "#ef4444" }}></span>
+                    <strong>Red:</strong> Required on every row
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "50%", background: "#0284c7" }}></span>
+                    <strong>Blue:</strong> Household Information
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ display: "inline-block", width: "10px", height: "10px", borderRadius: "50%", background: "#7c3aed" }}></span>
+                    <strong>Purple:</strong> Vulnerability & Special Needs (Matches with Shelter Amenities)
+                  </div>
+                </div>
+
+                {/* Interactive Table Preview */}
+                <div style={{ overflowX: "auto", border: "1px solid #cbd5e1", borderRadius: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", textAlign: "left", whiteSpace: "nowrap" }}>
+                    <thead>
+                      <tr style={{ background: "#f1f5f9", borderBottom: "2px solid #cbd5e1" }}>
+                        <th style={{ padding: "10px 12px", color: "#b91c1c", fontWeight: "700" }}>Family Code *</th>
+                        <th style={{ padding: "10px 12px", color: "#b91c1c", fontWeight: "700" }}>Head of Family *</th>
+                        <th style={{ padding: "10px 12px", color: "#b91c1c", fontWeight: "700" }}>Barangay *</th>
+                        <th style={{ padding: "10px 12px", color: "#0369a1", fontWeight: "600" }}>Contact Number</th>
+                        <th style={{ padding: "10px 12px", color: "#0369a1", fontWeight: "600" }}>Address</th>
+                        <th style={{ padding: "10px 12px", color: "#b91c1c", fontWeight: "700" }}>Member First Name *</th>
+                        <th style={{ padding: "10px 12px", color: "#334155", fontWeight: "600" }}>Member Middle Name</th>
+                        <th style={{ padding: "10px 12px", color: "#b91c1c", fontWeight: "700" }}>Member Last Name *</th>
+                        <th style={{ padding: "10px 12px", color: "#334155", fontWeight: "600" }}>Member Contact</th>
+                        <th style={{ padding: "10px 12px", color: "#334155", fontWeight: "600" }}>Date of Birth</th>
+                        <th style={{ padding: "10px 12px", color: "#334155", fontWeight: "600" }}>Gender</th>
+                        <th style={{ padding: "10px 12px", color: "#334155", fontWeight: "600" }}>Relationship</th>
+                        <th style={{ padding: "10px 12px", color: "#6b21a8", fontWeight: "700" }}>Is PWD</th>
+                        <th style={{ padding: "10px 12px", color: "#6b21a8", fontWeight: "700" }}>Disability Type</th>
+                        <th style={{ padding: "10px 12px", color: "#6b21a8", fontWeight: "700" }}>Is Pregnant</th>
+                        <th style={{ padding: "10px 12px", color: "#6b21a8", fontWeight: "700" }}>Is Lactating</th>
+                        <th style={{ padding: "10px 12px", color: "#6b21a8", fontWeight: "700" }}>Solo Parent</th>
+                        <th style={{ padding: "10px 12px", color: "#6b21a8", fontWeight: "700" }}>Needs Assistance</th>
+                        <th style={{ padding: "10px 12px", color: "#6b21a8", fontWeight: "700" }}>Medical Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr style={{ borderBottom: "1px solid #e2e8f0", background: "#ffffff" }}>
+                        <td style={{ padding: "8px 12px", fontWeight: "600", color: "#0f172a" }}>FAM-001</td>
+                        <td style={{ padding: "8px 12px" }}>Juan Dela Cruz</td>
+                        <td style={{ padding: "8px 12px" }}>Poblacion</td>
+                        <td style={{ padding: "8px 12px" }}>09171234567</td>
+                        <td style={{ padding: "8px 12px" }}>Purok 1</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>Juan</td>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>—</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>Dela Cruz</td>
+                        <td style={{ padding: "8px 12px" }}>09171234567</td>
+                        <td style={{ padding: "8px 12px" }}>1980-05-15</td>
+                        <td style={{ padding: "8px 12px" }}>Male</td>
+                        <td style={{ padding: "8px 12px" }}>Head</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>—</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>Hypertension maintenance</td>
+                      </tr>
+                      <tr style={{ borderBottom: "1px solid #e2e8f0", background: "#f8fafc" }}>
+                        <td style={{ padding: "8px 12px", fontWeight: "600", color: "#0f172a" }}>FAM-001</td>
+                        <td style={{ padding: "8px 12px" }}>Juan Dela Cruz</td>
+                        <td style={{ padding: "8px 12px" }}>Poblacion</td>
+                        <td style={{ padding: "8px 12px" }}>09171234567</td>
+                        <td style={{ padding: "8px 12px" }}>Purok 1</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>Maria</td>
+                        <td style={{ padding: "8px 12px" }}>Santos</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>Dela Cruz</td>
+                        <td style={{ padding: "8px 12px" }}>09187654321</td>
+                        <td style={{ padding: "8px 12px" }}>1984-08-20</td>
+                        <td style={{ padding: "8px 12px" }}>Female</td>
+                        <td style={{ padding: "8px 12px" }}>Spouse</td>
+                        <td style={{ padding: "8px 12px", color: "#7c3aed", fontWeight: "700" }}>Yes</td>
+                        <td style={{ padding: "8px 12px", color: "#7c3aed" }}>Mobility / Wheelchair</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px", color: "#7c3aed", fontWeight: "700" }}>Yes</td>
+                        <td style={{ padding: "8px 12px" }}>Uses wheelchair; requires ramp & ground floor room</td>
+                      </tr>
+                      <tr style={{ borderBottom: "1px solid #e2e8f0", background: "#ffffff" }}>
+                        <td style={{ padding: "8px 12px", fontWeight: "600", color: "#0f172a" }}>FAM-001</td>
+                        <td style={{ padding: "8px 12px" }}>Juan Dela Cruz</td>
+                        <td style={{ padding: "8px 12px" }}>Poblacion</td>
+                        <td style={{ padding: "8px 12px" }}>09171234567</td>
+                        <td style={{ padding: "8px 12px" }}>Purok 1</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>Angela</td>
+                        <td style={{ padding: "8px 12px" }}>Santos</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>Dela Cruz</td>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>—</td>
+                        <td style={{ padding: "8px 12px" }}>2024-01-10</td>
+                        <td style={{ padding: "8px 12px" }}>Female</td>
+                        <td style={{ padding: "8px 12px" }}>Daughter</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>—</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px" }}>No</td>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>—</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Guidance Banner */}
+                <div style={{ marginTop: "16px", padding: "14px 18px", background: "#eff6ff", borderRadius: "8px", border: "1px solid #bfdbfe", fontSize: "13px", color: "#1e3a8a", lineHeight: "1.6" }}>
+                  <strong>💡 Pro-Tips for Importing:</strong>
+                  <ul style={{ margin: "6px 0 0", paddingLeft: "20px" }}>
+                    <li><strong>Repeated Family Rows:</strong> If a family has 4 members, create 4 rows with the same <code>Family Code</code>, <code>Head of Family</code>, and <code>Barangay</code>.</li>
+                    <li><strong>Shelter Amenities Integration:</strong> Marking <code>Is PWD</code>, <code>Disability Type</code>, or <code>Needs Assistance</code> automatically informs the system to prioritize this household for centers that feature <em>Wheelchair Ramps</em>, <em>Ground Floor Access</em>, or <em>PWD Restrooms</em>.</li>
+                    <li><strong>Minimal Format Accepted:</strong> If you only have basic roster data, you can omit the optional vulnerability columns and upload just the first 9 columns.</li>
+                  </ul>
                 </div>
               </div>
-            )}
 
-            {loadingYears ? (
-              <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--muted, #64748b)" }}>
-                <FontAwesomeIcon icon={faCircleNotch} spin style={{ fontSize: "24px", marginBottom: "8px" }} />
-                <div>Loading roster years...</div>
+              <div className="dm-modal-footer" style={{ padding: "14px 24px", borderTop: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: "12px", color: "#64748b" }}>Supports standard Microsoft Excel (.xlsx) files.</span>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-secondary"
+                    onClick={() => setShowExcelPreview(false)}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-primary"
+                    onClick={() => {
+                      setShowExcelPreview(false);
+                      handleDownloadTemplate();
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faDownload} />
+                    Download This Template
+                  </button>
+                </div>
               </div>
-            ) : years.length === 0 ? (
-              <div className="dm-empty-state">
-                <FontAwesomeIcon icon={faCalendarDays} className="dm-empty-icon" />
-                <p>No roster years found.</p>
-              </div>
-            ) : (
-              <div className="dm-table-wrapper">
-                <table className="dm-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: "200px" }}>Year</th>
-                      <th style={{ width: "200px" }}>Status</th>
-                      <th>Households</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {years.map((y) => (
-                      <tr key={y.id || y.year}>
-                        <td>
-                          <strong>{y.year}</strong>
-                        </td>
-                        <td>
-                          {y.is_active ? (
-                            <span className="dm-badge dm-badge-green">Active</span>
-                          ) : (
-                            <span className="dm-badge" style={{ color: "var(--muted, #64748b)" }}>Inactive</span>
-                          )}
-                        </td>
-                        <td>
-                          {(y.households ?? y.household_count ?? 0).toLocaleString()}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            </div>
           </div>
         )}
 

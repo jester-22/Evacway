@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { api } from '../../services/api';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleNotch, faXmark, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { stripDigits } from './utils';
@@ -72,6 +73,36 @@ export function CenterFormModal({ mode = 'add', centerForm, onChange, barangays 
   const subtitle = mode === 'add' ? 'Create a new evacuation center' : 'Edit evacuation center details';
   const [fieldErrors, setFieldErrors] = useState({});
 
+  const [refMetadata, setRefMetadata] = useState({
+    center_type: [],
+    building_material: [],
+    amenities: [],
+  });
+
+  useEffect(() => {
+    let active = true;
+    async function loadMeta() {
+      try {
+        const [cts, mats, ams] = await Promise.all([
+          api.getCenterTypes({ active_only: true }),
+          api.getBuildingMaterials({ active_only: true }),
+          api.getAmenities({ active_only: true }),
+        ]);
+        if (active) {
+          setRefMetadata({
+            center_type: Array.isArray(cts) ? cts : [],
+            building_material: Array.isArray(mats) ? mats : [],
+            amenities: Array.isArray(ams) ? ams : [],
+          });
+        }
+      } catch (err) {
+        console.warn('Could not load dynamic shelter tables', err);
+      }
+    }
+    loadMeta();
+    return () => { active = false; };
+  }, []);
+
   const isPrivateProperty = centerForm.center_type === 'private_property';
   const isSingleVenue = centerForm.center_type === 'single_venue';
   const isCampus = centerForm.center_type === 'campus' || !centerForm.center_type;
@@ -80,10 +111,21 @@ export function CenterFormModal({ mode = 'add', centerForm, onChange, barangays 
   function setFieldError(field, message) { setFieldErrors((prev) => ({ ...prev, [field]: message })); }
   function handleSubmit(e) { e.preventDefault(); let valid = true; if (!centerForm.name || !centerForm.name.trim()) { setFieldError('name', 'Evacuation center name is required.'); valid = false; } else { clearFieldError('name'); } if (!centerForm.barangay_ids || centerForm.barangay_ids.length === 0) { setFieldError('barangays', 'Select at least one barangay served by this center.'); valid = false; } else { clearFieldError('barangays'); } if (isPrivateProperty && (!centerForm.max_rooms || Number(centerForm.max_rooms) < 1)) { setFieldError('max_rooms', 'Max rooms is required for Private Property centers (minimum 1).'); valid = false; } else { clearFieldError('max_rooms'); } if (isSingleVenue && (!centerForm.capacity || Number(centerForm.capacity) < 1)) { setFieldError('capacity', 'Capacity is required for Single Venue centers (minimum 1).'); valid = false; } else { clearFieldError('capacity'); } if (!valid) return; onSubmit(e); }
 
+  const dynamicCenterTypes = useMemo(() => {
+    if (refMetadata.center_type && refMetadata.center_type.length > 0) {
+      return refMetadata.center_type.map((t) => ({
+        value: t.code,
+        label: t.name,
+        description: t.description || '',
+      }));
+    }
+    return CENTER_TYPES;
+  }, [refMetadata.center_type]);
+
   // Determine which center types are available for selection
   const availableCenterTypes = allowedCenterTypes
-    ? CENTER_TYPES.filter(t => allowedCenterTypes[t.value]?.allowed)
-    : CENTER_TYPES;
+    ? dynamicCenterTypes.filter(t => allowedCenterTypes[t.value]?.allowed)
+    : dynamicCenterTypes;
 
   const currentTypeAllowed = centerForm.center_type && allowedCenterTypes && allowedCenterTypes[centerForm.center_type]?.allowed;
 
@@ -128,7 +170,7 @@ export function CenterFormModal({ mode = 'add', centerForm, onChange, barangays 
           )}
           {fieldErrors.center_type && <p className="field-error">{fieldErrors.center_type}</p>}
           <p className="field-hint">
-            {CENTER_TYPES.find(t => t.value === centerForm.center_type)?.description || 'Select a center type to see description.'}
+            {availableCenterTypes.find(t => t.value === centerForm.center_type)?.description || 'Select a center type to see description.'}
           </p>
         </div>
 
@@ -175,9 +217,124 @@ export function CenterFormModal({ mode = 'add', centerForm, onChange, barangays 
           </div>
         )}
 
-        <div className="form-group"><label htmlFor="center-building-material">Building Material</label><input id="center-building-material" type="text" className={fieldErrors.building_material ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. Reinforced Concrete" value={centerForm.building_material} onChange={(e) => { clearFieldError('building_material'); onChange({ ...centerForm, building_material: e.target.value }); }} />{fieldErrors.building_material && <p className="field-error">{fieldErrors.building_material}</p>}</div>
+        <div className="form-group">
+          <label htmlFor="center-building-material">Building Material</label>
+          <input
+            id="center-building-material"
+            type="text"
+            list="building-materials-list"
+            className={fieldErrors.building_material ? 'form-input is-invalid' : 'form-input'}
+            placeholder="e.g. Reinforced Concrete, Structural Steel"
+            value={centerForm.building_material || ''}
+            onChange={(e) => { clearFieldError('building_material'); onChange({ ...centerForm, building_material: e.target.value }); }}
+          />
+          <datalist id="building-materials-list">
+            {refMetadata.building_material.map((mat) => (
+              <option key={mat.id || mat.code} value={mat.name}>
+                {mat.description}
+              </option>
+            ))}
+          </datalist>
+          {refMetadata.building_material.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
+              {refMetadata.building_material.map((mat) => {
+                const isSelected = (centerForm.building_material || '').toLowerCase() === mat.name.toLowerCase();
+                return (
+                  <button
+                    key={mat.id || mat.code}
+                    type="button"
+                    style={{
+                      fontSize: '11px',
+                      padding: '3px 8px',
+                      borderRadius: '12px',
+                      border: '1px solid',
+                      borderColor: isSelected ? 'var(--brand, #2563eb)' : '#cbd5e1',
+                      background: isSelected ? '#eff6ff' : '#f8fafc',
+                      color: isSelected ? '#1d4ed8' : '#475569',
+                      cursor: 'pointer',
+                      fontWeight: isSelected ? '600' : '400',
+                    }}
+                    onClick={() => {
+                      clearFieldError('building_material');
+                      onChange({ ...centerForm, building_material: mat.name });
+                    }}
+                  >
+                    {mat.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {fieldErrors.building_material && <p className="field-error">{fieldErrors.building_material}</p>}
+        </div>
         <div className="form-group"><label htmlFor="center-contact">Contact Number</label><input id="center-contact" type="text" maxLength={20} className={fieldErrors.contact_number ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 0917-123-4567" value={centerForm.contact_number} onChange={(e) => { clearFieldError('contact_number'); onChange({ ...centerForm, contact_number: e.target.value }); }} />{fieldErrors.contact_number && <p className="field-error">{fieldErrors.contact_number}</p>}</div>
-        <div className="form-group"><label htmlFor="center-accessibility">Accessibility Notes</label><textarea id="center-accessibility" className={fieldErrors.accessibility_notes ? 'form-textarea is-invalid' : 'form-textarea'} placeholder="Ramps available, emergency generator installed..." value={centerForm.accessibility_notes} onChange={(e) => { clearFieldError('accessibility_notes'); onChange({ ...centerForm, accessibility_notes: e.target.value }); }} />{fieldErrors.accessibility_notes && <p className="field-error">{fieldErrors.accessibility_notes}</p>}</div>
+        <div className="form-group">
+          <label htmlFor="center-amenities">Amenities & Facilities (Multiple Selection)</label>
+          {refMetadata.amenities && refMetadata.amenities.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+              {refMetadata.amenities.map((item) => {
+                const currentIds = centerForm.amenity_ids || centerForm.accessibility_feature_ids || [];
+                const text = centerForm.accessibility_notes || '';
+                const isIncluded = currentIds.includes(item.id) || text.toLowerCase().includes(item.name.toLowerCase());
+                return (
+                  <button
+                    key={item.id || item.code}
+                    type="button"
+                    style={{
+                      fontSize: '11.5px',
+                      padding: '4px 10px',
+                      borderRadius: '14px',
+                      border: '1.5px solid',
+                      borderColor: isIncluded ? '#059669' : '#cbd5e1',
+                      background: isIncluded ? '#ecfdf5' : '#ffffff',
+                      color: isIncluded ? '#065f46' : '#475569',
+                      cursor: 'pointer',
+                      fontWeight: isIncluded ? '700' : '500',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      transition: 'all 0.15s ease',
+                      boxShadow: isIncluded ? '0 1px 3px rgba(16, 185, 129, 0.2)' : 'none',
+                    }}
+                    onClick={() => {
+                      clearFieldError('accessibility_notes');
+                      let currentNotes = (centerForm.accessibility_notes || '').trim();
+                      let updatedIds;
+                      let updatedNotes;
+
+                      if (isIncluded) {
+                        updatedIds = currentIds.filter(id => id !== item.id);
+                        const regex = new RegExp(`(^|,\\s*)${item.name}(,\\s*|$)`, 'i');
+                        updatedNotes = currentNotes.replace(regex, '$2').replace(/^,\s*|,\s*$/g, '').trim();
+                      } else {
+                        updatedIds = currentIds.includes(item.id) ? currentIds : [...currentIds, item.id];
+                        updatedNotes = currentNotes ? `${currentNotes}, ${item.name}` : item.name;
+                      }
+
+                      onChange({
+                        ...centerForm,
+                        amenity_ids: updatedIds,
+                        accessibility_feature_ids: updatedIds,
+                        accessibility_notes: updatedNotes,
+                      });
+                    }}
+                  >
+                    <span style={{ fontWeight: 800 }}>{isIncluded ? '✓' : '+'}</span>
+                    {item.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <textarea
+            id="center-amenities"
+            className={fieldErrors.accessibility_notes ? 'form-textarea is-invalid' : 'form-textarea'}
+            placeholder="e.g. Wheelchair accessible, backup generator, emergency clinic, potable water..."
+            value={centerForm.accessibility_notes || ''}
+            onChange={(e) => { clearFieldError('accessibility_notes'); onChange({ ...centerForm, accessibility_notes: e.target.value }); }}
+          />
+          {fieldErrors.accessibility_notes && <p className="field-error">{fieldErrors.accessibility_notes}</p>}
+        </div>
 
         {/* Owner name field - useful for private_property */}
         <div className="form-group">
@@ -222,8 +379,6 @@ export function CenterRoomModal({ mode = 'add', selectedCenter, selectedRoom, ro
         <div className="form-group"><label htmlFor="room-number">Room Number / Name <span>*</span></label><input id="room-number" type="text" className={fieldErrors.room_number ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. Room 101, Ground Floor" value={roomForm.room_number} onChange={(e) => { clearFieldError('room_number'); onChange({ ...roomForm, room_number: e.target.value }); }} />{fieldErrors.room_number && <p className="field-error">{fieldErrors.room_number}</p>}</div>
         <div className="form-group"><label htmlFor="room-capacity">Room Capacity <span>*</span> <span className="hint">(Max people)</span></label><input id="room-capacity" type="number" min="1" className={fieldErrors.capacity ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 30" value={roomForm.capacity} onChange={(e) => { clearFieldError('capacity'); onChange({ ...roomForm, capacity: e.target.value }); }} />{mode === 'edit' && selectedRoom?.occupied > 0 && (<p className="field-error">Currently assigned: {selectedRoom.occupied}. Capacity cannot be less than this.</p>)} {fieldErrors.capacity && <p className="field-error">{fieldErrors.capacity}</p>}</div>
         <div className="form-group"><label htmlFor="room-building">Building <span className="hint">(Optional)</span></label><select id="room-building" className={fieldErrors.building_id ? 'form-input is-invalid' : 'form-input'} value={roomForm.building_id} onChange={(e) => { clearFieldError('building_id'); onChange({ ...roomForm, building_id: e.target.value }); }}><option value="">No building / Unassigned</option>{buildingOptions.map((b) => (<option key={b.id} value={String(b.id)}>{b.name}</option>))}</select>{fieldErrors.building_id && <p className="field-error">{fieldErrors.building_id}</p>}</div>
-        <div className="form-group"><label htmlFor="room-latitude">Latitude</label><input id="room-latitude" type="number" step="any" className={fieldErrors.latitude ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 10.3860" value={roomForm.latitude} onChange={(e) => { clearFieldError('latitude'); onChange({ ...roomForm, latitude: e.target.value }); }} />{fieldErrors.latitude && <p className="field-error">{fieldErrors.latitude}</p>}</div>
-        <div className="form-group"><label htmlFor="room-longitude">Longitude</label><input id="room-longitude" type="number" step="any" className={fieldErrors.longitude ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 124.9818" value={roomForm.longitude} onChange={(e) => { clearFieldError('longitude'); onChange({ ...roomForm, longitude: e.target.value }); }} />{fieldErrors.longitude && <p className="field-error">{fieldErrors.longitude}</p>}</div>
       </form>
     </ModalShell>
   );
@@ -248,44 +403,40 @@ export function AddBuildingModal({ open = false, buildingForm, onChange, saving 
 }
 
 export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, availableFamilies = [], loadingAvailableFamilies = false, selectedFamilyIdToAssign = '', assigningFamily = false, onClose, onFamilyChange, onConfirm }) {
-  const isSingleVenue = selectedCenter?.center_type === 'single_venue'
+  const isSingleVenue = selectedCenter?.center_type === 'single_venue' || (!selectedRoom && (!selectedCenter?.rooms || selectedCenter.rooms.length === 0));
 
-  // For single_venue, we don't need a room - just the center
+  // For single_venue or centers without rooms, we don't need a room - just the center
   if (!open || (!selectedRoom && !isSingleVenue)) return null;
 
   const selectedFamily = availableFamilies.find((f) => String(f.id) === String(selectedFamilyIdToAssign)) || null;
   const memCount = selectedFamily ? selectedFamily.member_count || selectedFamily.family_members || 1 : 0;
 
-  // For single_venue, use center capacity
-  const isOverCapacity = selectedFamily && memCount > (isSingleVenue
-    ? Math.max((selectedCenter.capacity || 0) - (selectedCenter.occupied || selectedCenter.current_occupancy || 0), 0)
-    : (selectedRoom?.available ?? (selectedRoom?.capacity - (selectedRoom?.occupied || 0)))
-  );
+  const centerAssigned = Number(selectedCenter?.assigned ?? selectedCenter?.total_assigned ?? selectedCenter?.occupied ?? selectedCenter?.current_occupancy ?? 0);
+  const remaining = isSingleVenue || !selectedRoom
+    ? Math.max((selectedCenter?.capacity || 0) - centerAssigned, 0)
+    : (selectedRoom?.available ?? ((selectedRoom?.capacity || 0) - (selectedRoom?.occupied || 0)));
 
-  const title = isSingleVenue
+  const isOverCapacity = selectedFamily && (selectedCenter?.capacity || selectedRoom?.capacity) && memCount > remaining;
+
+  const title = isSingleVenue || !selectedRoom
     ? 'Assign Household to ' + (selectedCenter?.name || 'the venue')
     : 'Assign Household to ' + formatRoomLabel(selectedRoom?.room_number);
   const subtitle = selectedCenter?.name || '';
-
-  // Calculate remaining capacity
-  const remaining = isSingleVenue
-    ? Math.max((selectedCenter.capacity || 0) - (selectedCenter.occupied || selectedCenter.current_occupancy || 0), 0)
-    : (selectedRoom?.available ?? (selectedRoom?.capacity - (selectedRoom?.occupied || 0)));
 
   return (
     <ModalShell open={open} title={title} subtitle={subtitle} onClose={onClose} onPrimary={onConfirm} loading={assigningFamily} primaryLabel={assigningFamily ? 'Assigning...' : 'Confirm Assignment'} primaryDisabled={!selectedFamilyIdToAssign || assigningFamily}>
       <p className="intro">Select an unassigned registered household. EvacWay verifies capacity before allocating.</p>
       <div className="form-group"><label htmlFor="assign-household">Select Unassigned Household</label><select id="assign-household" className="form-select" value={selectedFamilyIdToAssign} onChange={(e) => onFamilyChange(e.target.value)} disabled={loadingAvailableFamilies}><option value="">{loadingAvailableFamilies ? 'Loading unassigned households...' : availableFamilies.length === 0 ? 'No unassigned households available' : 'Choose household...'}</option>{availableFamilies.map((f) => (<option key={f.id} value={f.id}>{displayEntityName(f.household_head_name || f.head_name)} ({f.family_code}) · {f.member_count || f.family_members || 1} members · {f.barangay || 'No barangay'}</option>))}</select></div>
-      {isSingleVenue ? (
+      {isSingleVenue || !selectedRoom ? (
         <div className="form-group"><label>Venue</label><p className="room-value">{selectedCenter?.name}</p></div>
       ) : (
         <div className="form-group"><label>Room</label><p className="room-value">{formatRoomLabel(selectedRoom?.room_number)}</p></div>
       )}
       <div className="capacity-summary">
-        {isSingleVenue ? (
+        {isSingleVenue || !selectedRoom ? (
           <>
             <div className="capacity-row"><span className="capacity-label">Venue capacity</span><span className="capacity-value">{selectedCenter?.capacity || 0} people</span></div>
-            <div className="capacity-row"><span className="capacity-label">Currently assigned</span><span className="capacity-value">{selectedCenter?.occupied || selectedCenter?.current_occupancy || 0} people</span></div>
+            <div className="capacity-row"><span className="capacity-label">Currently assigned</span><span className="capacity-value">{centerAssigned} people</span></div>
             <div className="capacity-row"><span className="capacity-label">Remaining capacity</span><span className="capacity-value" style={{ color: isOverCapacity ? 'var(--ew-danger-text)' : 'var(--ew-safe-text)' }}>{remaining} spaces left</span></div>
           </>
         ) : (

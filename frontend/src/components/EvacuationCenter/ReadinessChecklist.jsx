@@ -1,9 +1,20 @@
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import {
+  faCircleCheck,
+  faTriangleExclamation,
+  faMinus,
+  faListCheck,
+  faArrowRight,
+  faLocationDot,
+  faDoorOpen,
+  faBuilding,
+  faMapPin,
+  faPhone,
+  faWheelchair,
+} from '@fortawesome/free-solid-svg-icons'
 
 /**
- * ReadinessChecklist - Shows readiness items for a center
- * For single_venue centers, "Rooms added" and "Buildings" are NOT required
- * For private_property centers, "Rooms added" IS required but "Buildings" is NOT
- * For campus centers, both "Rooms added" and "Buildings" are required
+ * ReadinessChecklist - High-elevation operational readiness checklist for evacuation centers
  */
 export default function ReadinessChecklist({
   center,
@@ -21,12 +32,15 @@ export default function ReadinessChecklist({
   const isCampus = center.center_type === 'campus' || !center.center_type
 
   // Determine room/building readiness based on center type
-  const hasRooms = Number(center.room_count || 0) > 0
-  const hasBuildings = Number(center.building_count || 0) > 0
+  const roomCount = Number(
+    center.room_count ?? center.total_rooms ?? center.rooms?.length ?? 0
+  )
+  const buildingCount = Number(
+    center.building_count ?? center.buildings?.length ?? 0
+  )
+  const hasRooms = roomCount > 0
+  const hasBuildings = buildingCount > 0
 
-  // For single_venue: neither rooms nor buildings required
-  // For private_property: rooms required, buildings NOT required
-  // For campus: both rooms and buildings required
   const roomsRequired = !isSingleVenue
   const buildingsRequired = isCampus
 
@@ -36,94 +50,175 @@ export default function ReadinessChecklist({
   const items = [
     {
       key: 'mapped',
-      label: 'Mapped on map',
+      label: 'Mapped on Map',
+      icon: faLocationDot,
       ok: Boolean(center.has_map),
+      exempt: false,
       fix: onPlaceOnMap,
-      hint: 'Place this center on the map so it can be routed to.',
+      actionLabel: 'Place on map',
+      hint: 'Position center on the municipal map for routing and evacuee navigation.',
     },
     {
       key: 'rooms',
-      label: 'Rooms defined',
+      label: 'Rooms Defined',
+      icon: faDoorOpen,
       ok: roomsOk,
+      exempt: !roomsRequired,
       fix: roomsRequired && !roomsOk ? onAddRooms : undefined,
+      actionLabel: 'Add room',
       hint: isSingleVenue
-        ? 'Not required for single venue centers.'
-        : isPrivateProperty
-          ? 'Add at least one room for household assignments.'
-          : 'Add at least one room so households can be assigned.',
+        ? 'Not required — single venue allocates directly to the center.'
+        : hasRooms
+          ? `${roomCount} active room${roomCount === 1 ? '' : 's'} configured for evacuee allocation.`
+          : isPrivateProperty
+            ? 'Add rooms to assign evacuee households.'
+            : 'Add rooms to begin allocating evacuee families.',
     },
     {
       key: 'buildings',
-      label: 'Buildings defined',
+      label: 'Buildings Defined',
+      icon: faBuilding,
       ok: buildingsOk,
+      exempt: !buildingsRequired && !hasBuildings,
       fix: buildingsRequired && !buildingsOk ? onAddBuilding : undefined,
+      actionLabel: 'Add building',
       hint: isSingleVenue
-        ? 'Not required for single venue centers.'
+        ? 'Not required for single venue facilities.'
         : isPrivateProperty
-          ? 'Not required for private property centers.'
-          : 'Add at least one building to organize rooms.',
+          ? 'Not required for private properties.'
+          : hasBuildings
+            ? `${buildingCount} building${buildingCount === 1 ? '' : 's'} configured to organize rooms and structures.`
+            : 'Define buildings to organize rooms and structures.',
     },
     {
       key: 'entrance',
-      label: 'Entrance point set',
+      label: 'Entrance Point Set',
+      icon: faMapPin,
       ok: Boolean(center.entrancePoint || center.has_map),
+      exempt: false,
       fix: onSetEntrance,
-      hint: 'Set a recommended entrance point for responders.',
+      actionLabel: 'Set entrance',
+      hint: 'Mark recommended access gateway for emergency responders.',
     },
     {
       key: 'contact',
-      label: 'Contact number',
+      label: 'Contact Number',
+      icon: faPhone,
       ok: Boolean(center.contact_number),
+      exempt: false,
       fix: onEditContact,
-      hint: 'Add a contact number for the center manager.',
+      actionLabel: 'Add contact',
+      hint: 'Designate on-duty phone line for center administrator.',
     },
     {
       key: 'accessibility',
-      label: 'Accessibility info',
+      label: 'Accessibility Info',
+      icon: faWheelchair,
       ok: Boolean(center.accessibility_notes),
+      exempt: false,
       fix: onEditAccessibility,
-      hint: 'Record accessibility notes for the venue.',
+      actionLabel: 'Add notes',
+      hint: 'Record ramps, rails, and accessibility accommodations.',
     },
   ]
 
+  const readyCount = items.filter((item) => item.ok).length
+  const totalCount = items.length
+  const percent = Math.round((readyCount / totalCount) * 100)
+  const allReady = readyCount === totalCount
+
   return (
-    <div className="ds-card">
-      <h3 style={{ fontSize: 'var(--text-lg)', fontFamily: 'var(--font-display)', marginBottom: 'var(--space-3)' }}>
-        Readiness checklist
-      </h3>
-      {items.map((item) => (
-        <div
-          key={item.key}
-          className="ec-readiness-item"
-          role="listitem"
-          style={{ opacity: item.ok === true && item.fix === undefined ? 0.6 : 1 }}
-        >
-          <span
-            className={`ds-badge ds-badge--${item.ok ? 'success' : 'warning'}`}
-            style={{ fontSize: 'var(--text-xs)' }}
-          >
-            {item.ok ? 'Yes' : item.fix === undefined ? 'N/A' : 'No'} {item.label}
-          </span>
-          {!item.ok && item.fix && (
-            <a
-              href="#"
-              onClick={(ev) => {
-                ev.preventDefault()
-                item.fix()
-              }}
-              className="ec-readiness-link"
-              style={{ marginLeft: 'auto', padding: 0 }}
-            >
-              {item.hint}
-            </a>
-          )}
-          {item.ok === true && item.fix === undefined && (
-            <span className="ec-readiness-na" style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', color: 'var(--muted)' }}>
-              Not required
-            </span>
-          )}
+    <div className="ec-readiness-card">
+      <div className="ec-readiness-header">
+        <div className="ec-readiness-title-wrap">
+          <div className={`ec-readiness-icon-bubble ${allReady ? 'is-complete' : ''}`}>
+            <FontAwesomeIcon icon={faListCheck} />
+          </div>
+          <div>
+            <h3 className="ec-readiness-title">Readiness Checklist</h3>
+            <p className="ec-readiness-sub">Operational status for disaster mobilization</p>
+          </div>
         </div>
-      ))}
+
+        <div className="ec-readiness-score-box">
+          <div className="ec-readiness-score-text">
+            <span className="ec-readiness-score-num">{readyCount} of {totalCount}</span>
+            <span className="ec-readiness-score-label">{allReady ? 'Fully Ready' : 'In Progress'}</span>
+          </div>
+          <div className="ec-readiness-track">
+            <div
+              className={`ec-readiness-bar ${allReady ? 'is-complete' : ''}`}
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="ec-readiness-list" role="list">
+        {items.map((item) => {
+          const isExempt = Boolean(item.exempt)
+          const isPending = !item.ok && !isExempt
+          const isReady = item.ok && !isExempt
+
+          return (
+            <div
+              key={item.key}
+              className={`ec-readiness-item ${isReady ? 'is-ready' : isPending ? 'is-pending' : 'is-exempt'}`}
+              role="listitem"
+            >
+              <div className="ec-readiness-left">
+                <div className="ec-readiness-status-icon" aria-hidden="true">
+                  {isReady && <FontAwesomeIcon icon={faCircleCheck} className="icon-ready" />}
+                  {isPending && <FontAwesomeIcon icon={faTriangleExclamation} className="icon-pending" />}
+                  {isExempt && <FontAwesomeIcon icon={faMinus} className="icon-exempt" />}
+                </div>
+
+                <div className="ec-readiness-content">
+                  <div className="ec-readiness-label-row">
+                    <span className="ec-readiness-label">{item.label}</span>
+                    {isExempt && (
+                      <span className="ec-readiness-tag is-exempt">Exempt</span>
+                    )}
+                    {isReady && (
+                      <span className="ec-readiness-tag is-ready">Verified</span>
+                    )}
+                    {isPending && (
+                      <span className="ec-readiness-tag is-pending">Action Needed</span>
+                    )}
+                  </div>
+                  <p className="ec-readiness-hint">{item.hint}</p>
+                </div>
+              </div>
+
+              <div className="ec-readiness-right">
+                {isPending && item.fix && (
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.preventDefault()
+                      item.fix()
+                    }}
+                    className="ec-readiness-btn"
+                  >
+                    <span>{item.actionLabel || 'Configure'}</span>
+                    <FontAwesomeIcon icon={faArrowRight} size="xs" />
+                  </button>
+                )}
+                {isReady && (
+                  <span className="ec-readiness-pill is-ok">
+                    Ready
+                  </span>
+                )}
+                {isExempt && (
+                  <span className="ec-readiness-pill is-na">
+                    Not required
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -145,7 +145,12 @@ export default function ManageProfile() {
       if (!confirmLeave) return;
     }
     const path = isAdmin ? "/admin" : "/lgu";
-    const tab = notification.resource_type === "hazard_report" ? "reports" : "rescue";
+    let tab = "rescue";
+    if (notification.resource_type === "hazard_report") {
+      tab = "reports";
+    } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
+      tab = "registrations";
+    }
     navigate(`${path}?tab=${tab}&notificationId=${notification.id}`);
   }
 

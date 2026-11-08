@@ -1,10 +1,13 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowsRotate,
   faArrowRight,
   faCircleCheck,
+  faUserCheck,
+  faPersonWalking,
+  faDoorOpen,
   faClock,
   faHouseFlag,
   faLifeRing,
@@ -12,8 +15,17 @@ import {
   faPeopleGroup,
   faTriangleExclamation,
   faUsers,
+  faMapLocationDot,
+  faChartPie,
+  faShieldHalved,
+  faBolt,
+  faMagnifyingGlass,
+  faBell,
+  faXmark,
+  faSpinner,
 } from "@fortawesome/free-solid-svg-icons";
 import { useAuth } from "../../context/AuthContext";
+import { api } from "../../services/api";
 import {
   useDashboardSummary,
   useBarangays,
@@ -24,6 +36,32 @@ import LoadingState from "../LoadingState/LoadingState";
 import Sidebar from "../Sidebar/Sidebar";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import "./Dashboard.css";
+
+function decodeVapidKey(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(window.atob(base64), (character) => character.charCodeAt(0));
+}
+
+async function getOrRegisterServiceWorker() {
+  if (!("serviceWorker" in navigator)) return null;
+  let reg = await navigator.serviceWorker.getRegistration();
+  if (!reg) {
+    reg = await navigator.serviceWorker.register("/sw.js");
+  }
+  if (reg.active) return reg;
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(reg), 1500);
+    navigator.serviceWorker.ready.then((readyReg) => {
+      clearTimeout(timer);
+      resolve(readyReg);
+    }).catch(() => {
+      clearTimeout(timer);
+      resolve(reg);
+    });
+  });
+}
 
 function formatCount(value) {
   return Number(value || 0).toLocaleString();
@@ -52,9 +90,10 @@ function getReadinessStatus({
   totalAssignedPeople = 0,
   unassignedFamilies = 0,
   pendingHazardCount = 0,
+  pendingArrivalFamilies = 0,
 }) {
   const totalRemaining = Math.max(0, totalCapacity - totalAssignedPeople);
-  const isCapacityLow = totalCapacity > 0 && (totalRemaining / totalCapacity) < 0.10;
+  const isCapacityLow = totalCapacity > 0 && totalRemaining / totalCapacity < 0.1;
 
   if (openRescueCount > 0 || isCapacityLow) {
     const reasons = [];
@@ -63,20 +102,23 @@ function getReadinessStatus({
     }
     if (isCapacityLow) {
       const remainingPercent = Math.round((totalRemaining / totalCapacity) * 100);
-      reasons.push(`Remaining capacity below 10% (${remainingPercent}%)`);
+      reasons.push(`Remaining shelter capacity below 10% (${remainingPercent}%)`);
     }
     return {
       status: "action_needed",
-      label: "Action needed",
+      label: "Critical Action Needed",
       badgeClass: "ds-badge ds-badge--danger",
-      dotColor: "ds-badge--danger",
-      barColor: "ds-badge--danger",
+      dotColor: "bg-red-500",
+      barColor: "bg-red-500",
       reason: reasons.join(", "),
     };
   }
 
-  if (unassignedFamilies > 0 || pendingHazardCount > 0) {
+  if (unassignedFamilies > 0 || pendingHazardCount > 0 || pendingArrivalFamilies > 0) {
     const reasons = [];
+    if (pendingArrivalFamilies > 0) {
+      reasons.push(`${formatCount(pendingArrivalFamilies)} family arrival${pendingArrivalFamilies > 1 ? "s" : ""} pending`);
+    }
     if (unassignedFamilies > 0) {
       reasons.push(`${formatCount(unassignedFamilies)} unassigned household${unassignedFamilies > 1 ? "s" : ""}`);
     }
@@ -85,136 +127,256 @@ function getReadinessStatus({
     }
     return {
       status: "monitoring",
-      label: "Monitoring",
+      label: "Active Monitoring",
       badgeClass: "ds-badge ds-badge--warning",
-      dotColor: "ds-badge--warning",
-      barColor: "ds-badge--warning",
+      dotColor: "bg-amber-500",
+      barColor: "bg-amber-500",
       reason: reasons.join(", "),
     };
   }
 
   return {
     status: "ready",
-    label: "Ready",
+    label: "All Shelters Ready",
     badgeClass: "ds-badge ds-badge--success",
-    dotColor: "ds-badge--success",
-    barColor: "ds-badge--success",
-    reason: "All operations ready and within capacity",
+    dotColor: "bg-emerald-500",
+    barColor: "bg-emerald-500",
+    reason: "All assigned evacuees verified on site & within headroom",
   };
 }
 
-function StatCard({ label, value, description, icon, accentColor }) {
-  return (
-    <article className="dashboard-card p-4 sm:p-6 flex flex-col justify-between">
-      <div>
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-xs sm:text-sm font-semibold text-slate-600 truncate">{label}</p>
-          <span
-            className="grid size-9 sm:size-11 shrink-0 place-items-center rounded-xl"
-            style={{ backgroundColor: `${accentColor}15`, color: accentColor }}
-          >
-            <FontAwesomeIcon icon={icon} className="text-base sm:text-lg" aria-hidden="true" />
-          </span>
-        </div>
-        <p className="dashboard-mono mt-2 sm:mt-3 text-2xl font-extrabold text-slate-900 tracking-tight sm:text-4xl">
-          {formatCount(value)}
-        </p>
-      </div>
-
-      <div className="mt-3 sm:mt-4 pt-2.5 sm:pt-3 border-t border-slate-100">
-        <p className="text-[11px] sm:text-xs text-slate-500 truncate">{description}</p>
-      </div>
-    </article>
-  );
-}
-
-function RoomDonut({ total, assigned, unassigned }) {
-  const radius = 43;
+/* -------------------------------------------------------------
+   SVG CIRCULAR RADIAL GAUGE
+   ------------------------------------------------------------- */
+function CircularRadialGauge({ percent = 0, strokeColor = "#10b981", label = "Arrived", size = 104 }) {
+  const radius = 40;
   const circumference = 2 * Math.PI * radius;
-  const assignedArc = total ? (assigned / total) * circumference : 0;
-  const unassignedArc = total ? (unassigned / total) * circumference : 0;
+  const clamped = Math.min(100, Math.max(0, percent));
+  const offset = circumference - (clamped / 100) * circumference;
 
   return (
-    <div className="flex flex-col items-center gap-6 sm:flex-row sm:justify-center sm:gap-8">
-      <div
-        className="relative size-36 sm:size-44 shrink-0"
-        role="img"
-        aria-label={`Room Distribution: ${assigned} of ${total} rooms in use`}
-      >
-        <svg className="size-full -rotate-90" viewBox="0 0 120 120" aria-hidden="true">
-          <circle cx="60" cy="60" r={radius} fill="none" stroke="#f1f5f9" strokeWidth="12" />
-          {total > 0 && (
-            <>
-              <circle
-                cx="60"
-                cy="60"
-                r={radius}
-                fill="none"
-                stroke="#2563eb"
-                strokeWidth="12"
-                strokeLinecap="round"
-                strokeDasharray={`${assignedArc} ${circumference}`}
-              />
-              {unassigned > 0 && (
-                <circle
-                  cx="60"
-                  cy="60"
-                  r={radius}
-                  fill="none"
-                  stroke="#cbd5e1"
-                  strokeWidth="12"
-                  strokeLinecap="round"
-                  strokeDasharray={`${unassignedArc} ${circumference}`}
-                  strokeDashoffset={-assignedArc}
-                />
-              )}
-            </>
-          )}
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center px-2 text-center">
-          {total > 0 ? (
-            <>
-              <strong className="dashboard-mono text-lg font-extrabold text-slate-900 sm:text-2xl">
-                {formatCount(assigned)} of {formatCount(total)}
-              </strong>
-              <span className="mt-0.5 text-[11px] sm:text-xs font-medium text-slate-500 uppercase tracking-wider">
-                rooms assigned
-              </span>
-            </>
-          ) : (
-            <span className="text-xs font-medium text-slate-500">No rooms configured</span>
-          )}
-        </div>
-      </div>
-
-      <div className="w-full max-w-xs space-y-3">
-        {[
-          { label: "Assigned", value: assigned, color: "bg-blue-600", desc: "Sheltering families" },
-          { label: "Unassigned", value: unassigned, color: "bg-slate-300", desc: "Ready for assignment" },
-        ].map((item) => (
-          <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-100" key={item.label}>
-            <div className="flex items-center gap-2.5">
-              <span className={`size-3 rounded-full ${item.color} shadow-sm`} />
-              <div>
-                <span className="text-sm font-semibold text-slate-800 block">{item.label}</span>
-                <span className="text-xs text-slate-400">{item.desc}</span>
-              </div>
-            </div>
-            <div className="text-right">
-              <span className="dashboard-mono text-sm font-bold text-slate-900">
-                {formatCount(item.value)}
-              </span>
-              <span className="text-xs text-slate-500 block">
-                {percentage(item.value, total)}%
-              </span>
-            </div>
-          </div>
-        ))}
+    <div
+      className="relative shrink-0 flex items-center justify-center"
+      style={{ width: size, height: size }}
+    >
+      <svg className="size-full dashboard-donut-ring" viewBox="0 0 100 100">
+        <circle
+          cx="50"
+          cy="50"
+          r={radius}
+          fill="none"
+          stroke="#e2e8f0"
+          strokeWidth="8"
+        />
+        <circle
+          cx="50"
+          cy="50"
+          r={radius}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          className="dashboard-gauge-arc"
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <span className="dashboard-mono text-lg font-black text-slate-900 leading-none">
+          {clamped}%
+        </span>
+        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mt-1">
+          {label}
+        </span>
       </div>
     </div>
   );
 }
 
+/* -------------------------------------------------------------
+   SLICK EXECUTIVE KPI CARD
+   ------------------------------------------------------------- */
+function ExecutiveKpiCard({
+  title,
+  value,
+  subtext,
+  icon,
+  accentColor,
+  trendText,
+  trendType = "neutral",
+  onClick,
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="dashboard-kpi-card text-left flex flex-col justify-between group cursor-pointer w-full focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+    >
+      <div
+        className="dashboard-kpi-glow"
+        style={{ backgroundColor: accentColor }}
+      />
+      <div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
+            {title}
+          </span>
+          <span
+            className="grid size-9 shrink-0 place-items-center rounded-xl transition-transform duration-200 group-hover:scale-110"
+            style={{ backgroundColor: `${accentColor}18`, color: accentColor }}
+          >
+            <FontAwesomeIcon icon={icon} className="text-sm" />
+          </span>
+        </div>
+
+        <p className="dashboard-mono mt-2 text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+          {formatCount(value)}
+        </p>
+      </div>
+
+      <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs">
+        <span className="text-slate-500 truncate font-medium">{subtext}</span>
+        {trendText && (
+          <span
+            className={`dashboard-mono text-[11px] font-bold shrink-0 px-2 py-0.5 rounded-full ${
+              trendType === "danger"
+                ? "bg-red-50 text-red-700 border border-red-200"
+                : trendType === "warning"
+                ? "bg-amber-50 text-amber-700 border border-amber-200"
+                : trendType === "success"
+                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            {trendText}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+/* -------------------------------------------------------------
+   ROOM UTILIZATION DONUT CHART
+   ------------------------------------------------------------- */
+function RoomDonutChart({ total = 0, assigned = 0, unassigned = 0, onManage }) {
+  const percent = total > 0 ? Math.round((assigned / total) * 100) : 0;
+  const radius = 40;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (percent / 100) * circumference;
+
+  return (
+    <div className="flex flex-col justify-between h-full space-y-4">
+      <div className="flex items-center gap-5 p-3.5 rounded-2xl bg-slate-50/70 border border-slate-100">
+        <div className="relative size-24 shrink-0 flex items-center justify-center">
+          <svg className="size-full dashboard-donut-ring" viewBox="0 0 100 100">
+            <defs>
+              <linearGradient id="roomDonutGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#4f46e5" />
+                <stop offset="100%" stopColor="#6366f1" />
+              </linearGradient>
+            </defs>
+            <circle
+              cx="50"
+              cy="50"
+              r={radius}
+              fill="none"
+              stroke="#e2e8f0"
+              strokeWidth="10"
+            />
+            {total > 0 && (
+              <circle
+                cx="50"
+                cy="50"
+                r={radius}
+                fill="none"
+                stroke="url(#roomDonutGrad)"
+                strokeWidth="10"
+                strokeLinecap="round"
+                strokeDasharray={circumference}
+                strokeDashoffset={strokeDashoffset}
+                className="dashboard-gauge-arc"
+              />
+            )}
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+            <span className="dashboard-mono text-base font-black text-slate-900 leading-none">
+              {percent}%
+            </span>
+            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">
+              Allocated
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+            Room Inventory
+          </span>
+          <p className="dashboard-mono text-lg font-black text-slate-900 leading-tight">
+            {formatCount(assigned)}{" "}
+            <span className="text-xs font-semibold text-slate-400">of {formatCount(total)} in use</span>
+          </p>
+          <p className="text-[11px] text-slate-500 font-medium">
+            Rooms sheltering registered evacuee households
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-white">
+          <div className="flex items-center gap-2.5">
+            <span className="size-2.5 rounded-full bg-indigo-600 shadow-xs" />
+            <div>
+              <span className="text-xs font-bold text-slate-800 block">Assigned Rooms</span>
+              <span className="text-[10px] text-slate-400">Housing verified families</span>
+            </div>
+          </div>
+          <div className="text-right">
+            <span className="dashboard-mono text-xs font-bold text-slate-900 block">
+              {formatCount(assigned)}
+            </span>
+            <span className="dashboard-mono text-[10px] text-slate-400 font-medium">
+              {percent}% load
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-white">
+          <div className="flex items-center gap-2.5">
+            <span className="size-2.5 rounded-full bg-emerald-500 shadow-xs" />
+            <div>
+              <span className="text-xs font-bold text-slate-800 block">Available Rooms</span>
+              <span className="text-[10px] text-slate-400">Vacant & ready for intake</span>
+            </div>
+          </div>
+          <div className="text-right">
+            <span className="dashboard-mono text-xs font-bold text-emerald-700 block">
+              {formatCount(unassigned)}
+            </span>
+            <span className="dashboard-mono text-[10px] text-emerald-600 font-medium">
+              {percentage(unassigned, total)}% free
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={onManage}
+        className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-700 transition"
+      >
+        <FontAwesomeIcon icon={faDoorOpen} className="text-slate-500 text-xs" />
+        <span>Manage Shelter Facilities</span>
+        <FontAwesomeIcon icon={faArrowRight} className="text-[10px] text-slate-400 ml-1" />
+      </button>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------
+   MAIN COMPONENT
+   ------------------------------------------------------------- */
 function Dashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -232,7 +394,79 @@ function Dashboard() {
   const { data: rescueRequestsData, refetch: refetchRescueRequests } = useRescueRequests(refreshOptions);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [barangayMetric, setBarangayMetric] = useState("households"); // "households" | "residents"
+  const [barangayMetric, setBarangayMetric] = useState("households");
+  const [barangaySearch, setBarangaySearch] = useState("");
+  const [centerFilter, setCenterFilter] = useState("all"); // "all" | "arrived" | "high" | "available"
+  const [activeFeedTab, setActiveFeedTab] = useState("rescue"); // "rescue" | "hazards"
+
+  const [pushStatus, setPushStatus] = useState("checking");
+  const [pushStripDismissed, setPushStripDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem("evacway_push_strip_dismissed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [pushActivating, setPushActivating] = useState(false);
+  const [pushSuccess, setPushSuccess] = useState(false);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      setPushStatus("unsupported");
+      return;
+    }
+    if (Notification.permission === "denied") {
+      setPushStatus("denied");
+      return;
+    }
+    getOrRegisterServiceWorker().then((reg) => {
+      if (!reg) {
+        setPushStatus("inactive");
+        return;
+      }
+      reg.pushManager.getSubscription().then((sub) => {
+        if (sub) {
+          setPushStatus("active");
+        } else {
+          setPushStatus("inactive");
+        }
+      }).catch(() => setPushStatus("inactive"));
+    }).catch(() => setPushStatus("inactive"));
+  }, []);
+
+  const handleActivatePushFromDashboard = useCallback(async () => {
+    setPushActivating(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setPushStatus("denied");
+        return;
+      }
+      const reg = await getOrRegisterServiceWorker();
+      if (!reg) return;
+
+      const config = await api.getVapidPublicKey();
+      if (!config.enabled || !config.public_key) return;
+
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: decodeVapidKey(config.public_key),
+        });
+      }
+      await api.savePushSubscription(sub.toJSON());
+      setPushStatus("active");
+      setPushSuccess(true);
+      setTimeout(() => {
+        setPushSuccess(false);
+      }, 2500);
+    } catch (err) {
+      console.warn("Failed to activate push notifications:", err);
+    } finally {
+      setPushActivating(false);
+    }
+  }, []);
 
   async function handleRefreshAll() {
     setIsRefreshing(true);
@@ -268,7 +502,12 @@ function Dashboard() {
 
   function handleNotificationSelect(notification) {
     const path = isAdmin ? "/admin" : "/lgu";
-    const tab = notification.resource_type === "hazard_report" ? "reports" : "rescue";
+    let tab = "rescue";
+    if (notification.resource_type === "hazard_report") {
+      tab = "reports";
+    } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
+      tab = "registrations";
+    }
     navigate(`${path}?tab=${tab}&notificationId=${notification.id}`);
   }
 
@@ -276,15 +515,31 @@ function Dashboard() {
     return new Date().toLocaleDateString("en-US", {
       weekday: "long",
       year: "numeric",
-      month: "long",
+      month: "short",
       day: "numeric",
     });
   }, []);
 
-  // Assigned Families Rate
-  const assignedFamiliesRate = percentage(stats?.assignedFamilies || 0, stats?.families || 0);
+  // Family Arrival Metrics
+  const arrivedFamilies = Number(stats?.arrivedFamilies || 0);
+  const partialFamilies = Number(stats?.partialFamilies || 0);
+  const totalArrivedFamilies = Number(stats?.totalArrivedFamilies || arrivedFamilies + partialFamilies);
+  const assignedFamilies = Number(stats?.assignedFamilies || 0);
+  const pendingArrivalFamilies = Number(stats?.pendingArrivalFamilies || Math.max(0, assignedFamilies - totalArrivedFamilies));
+  const unassignedFamilies = Number(stats?.unassignedFamilies || 0);
+  const totalFamilies = Number(stats?.families || 0);
 
-  // Open rescue requests & pending hazard reports
+  // Resident Headcount Arrival Metrics
+  const arrivedResidents = Number(stats?.arrivedResidents || 0);
+  const assignedResidents = Number(stats?.assignedResidents || 0);
+  const pendingResidents = Number(stats?.pendingResidents || Math.max(0, assignedResidents - arrivedResidents));
+
+  // Key Arrival Rates
+  const familyArrivalRate = percentage(totalArrivedFamilies, assignedFamilies);
+  const residentArrivalRate = percentage(arrivedResidents, assignedResidents);
+  const assignedFamiliesRate = percentage(assignedFamilies, totalFamilies);
+
+  // Incidents
   const rescueList = useMemo(() => {
     return Array.isArray(rescueRequestsData) ? rescueRequestsData : [];
   }, [rescueRequestsData]);
@@ -301,146 +556,174 @@ function Dashboard() {
     return hazardList.filter((h) => h.status === "pending").length;
   }, [hazardList]);
 
-  // Operational metrics for action cards
-  const unassignedFamilies = Number(stats?.unassignedFamilies || 0);
+  // Operational metrics
   const totalCapacity = Number(stats?.totalCapacity || 0);
-  const totalAssignedPeople = Number(stats?.totalAssignedPeople || 0);
-  const totalRemainingCapacity = Math.max(0, totalCapacity - totalAssignedPeople);
+  const totalRemainingCapacity = Math.max(0, totalCapacity - (stats?.totalOccupiedPeople || 0));
   const remainingPercent = totalCapacity > 0 ? Math.round((totalRemainingCapacity / totalCapacity) * 100) : 0;
+  const capacityUsedPercent = totalCapacity > 0 ? Math.min(100, Math.round(((stats?.totalOccupiedPeople || 0) / totalCapacity) * 100)) : 0;
 
-  const rescueNumberColorClass = openRescueCount > 0 ? "text-red-600" : "text-slate-900";
-  const remainingColorClass =
-    totalCapacity > 0 && remainingPercent < 10
-      ? "text-red-600"
-      : totalCapacity > 0 && remainingPercent < 20
-      ? "text-amber-600"
-      : "text-slate-900";
-
-  // Overall readiness status derived via rule helper
+  // Overall readiness status
   const readiness = useMemo(() => {
     return getReadinessStatus({
       openRescueCount,
       totalCapacity,
-      totalAssignedPeople,
+      totalAssignedPeople: stats?.totalAssignedPeople || 0,
       unassignedFamilies,
       pendingHazardCount,
+      pendingArrivalFamilies,
     });
-  }, [openRescueCount, totalCapacity, totalAssignedPeople, unassignedFamilies, pendingHazardCount]);
+  }, [openRescueCount, totalCapacity, stats, unassignedFamilies, pendingHazardCount, pendingArrivalFamilies]);
 
-  // Needs Attention List
-  const needsAttentionItems = useMemo(() => {
+  // Center Check-In Map
+  const checkInCenterMap = useMemo(() => {
+    const map = new Map();
+    (stats?.checkInCenters || []).forEach((c) => {
+      map.set(String(c.id), c);
+    });
+    return map;
+  }, [stats?.checkInCenters]);
+
+  // Center Occupancy List
+  const centersProcessed = useMemo(() => {
+    const list = Array.isArray(stats?.centerRooms) ? [...stats.centerRooms] : [];
+    return list
+      .map((center) => {
+        const checkInData = checkInCenterMap.get(String(center.id));
+        const capacity = Number(center.capacity || checkInData?.capacity || 0);
+        const checkedInCount = Number(checkInData?.checked_in ?? center.occupiedPeople ?? 0);
+        const assignedCount = Number(checkInData?.assigned ?? center.assignedPeople ?? 0);
+        const occupiedPercent = capacity > 0 ? Math.min(100, Math.round((checkedInCount / capacity) * 100)) : 0;
+        const assignedPercent = capacity > 0 ? Math.min(100, Math.round((assignedCount / capacity) * 100)) : 0;
+        const arrivalPercent = assignedCount > 0 ? Math.min(100, Math.round((checkedInCount / assignedCount) * 100)) : 0;
+
+        return {
+          ...center,
+          capacity,
+          checkedInCount,
+          assignedCount,
+          occupiedPercent,
+          assignedPercent,
+          arrivalPercent,
+        };
+      })
+      .sort((a, b) => b.checkedInCount - a.checkedInCount || b.assignedPercent - a.assignedPercent || a.name.localeCompare(b.name));
+  }, [stats, checkInCenterMap]);
+
+  const filteredCenters = useMemo(() => {
+    if (centerFilter === "arrived") {
+      return centersProcessed.filter((c) => c.checkedInCount > 0);
+    }
+    if (centerFilter === "high") {
+      return centersProcessed.filter((c) => c.occupiedPercent >= 70);
+    }
+    if (centerFilter === "available") {
+      return centersProcessed.filter((c) => c.occupiedPercent < 70);
+    }
+    return centersProcessed;
+  }, [centersProcessed, centerFilter]);
+
+  // Consolidated Priority Triage Items
+  const urgentActionItems = useMemo(() => {
     if (!stats) return [];
     const items = [];
 
-    // 1. Open rescue requests
+    // Pending arrivals need attention
+    if (pendingArrivalFamilies > 0) {
+      items.push({
+        id: "pending-arrivals",
+        severity: "warning",
+        icon: faPersonWalking,
+        title: `${formatCount(pendingArrivalFamilies)} Household${pendingArrivalFamilies > 1 ? "s" : ""} En Route / Awaiting Intake`,
+        subtitle: `${formatCount(pendingResidents)} residents assigned but not yet verified at shelter desk`,
+        tab: "checkin",
+        action: "Check-In Desk",
+      });
+    }
+
     if (openRescueCount > 0) {
       items.push({
         id: "open-rescues",
         severity: "danger",
-        badge: "Rescue Alert",
-        title: `${openRescueCount} Open Rescue Request${openRescueCount > 1 ? "s" : ""}`,
-        desc: "Urgent citizen distress calls requiring immediate emergency dispatch.",
-        actionLabel: "View Rescue",
+        icon: faLifeRing,
+        title: `${openRescueCount} Citizen Distress Rescue Call${openRescueCount > 1 ? "s" : ""}`,
+        subtitle: "Immediate field response required",
         tab: "rescue",
+        action: "Respond Now",
       });
     }
 
-    // 2. Pending hazard reports
     if (pendingHazardCount > 0) {
       items.push({
         id: "pending-hazards",
         severity: "warning",
-        badge: "Hazard Review",
-        title: `${pendingHazardCount} Pending Hazard Report${pendingHazardCount > 1 ? "s" : ""}`,
-        desc: "Submitted community hazard reports awaiting field verification.",
-        actionLabel: "Review Reports",
+        icon: faTriangleExclamation,
+        title: `${pendingHazardCount} Pending Hazard Obstacle Report${pendingHazardCount > 1 ? "s" : ""}`,
+        subtitle: "Awaiting field verification",
         tab: "reports",
+        action: "Review",
       });
     }
 
-    // 3. Unassigned households
-    if (stats.unassignedFamilies > 0) {
+    if (unassignedFamilies > 0) {
       items.push({
         id: "unassigned-households",
-        severity: "warning",
-        badge: "Assignment Gap",
-        title: `${formatCount(stats.unassignedFamilies)} Unassigned Household${stats.unassignedFamilies > 1 ? "s" : ""}`,
-        desc: "Registered families awaiting room assignment in active evacuation centers.",
-        actionLabel: "Assign Families",
+        severity: "info",
+        icon: faPeopleGroup,
+        title: `${formatCount(unassignedFamilies)} Unassigned Household${unassignedFamilies > 1 ? "s" : ""}`,
+        subtitle: "Awaiting shelter room assignment",
         tab: "barangays",
+        action: "Assign",
       });
     }
 
-    // 4. Low remaining capacity below 10% in a center
     const centersList = Array.isArray(stats.centerRooms) ? stats.centerRooms : [];
     centersList.forEach((center) => {
       const cap = Number(center.capacity || 0);
       const assigned = Number(center.assignedPeople || 0);
       const remaining = Math.max(0, cap - assigned);
-      if (cap > 0 && (remaining / cap) < 0.10) {
-        const remainingPercent = Math.round((remaining / cap) * 100);
+      if (cap > 0 && remaining / cap < 0.1) {
         items.push({
           id: `low-capacity-${center.id}`,
           severity: "danger",
-          badge: "Low Capacity",
-          title: `${center.name} (${remainingPercent}% capacity left)`,
-          desc: `Only ${formatCount(remaining)} of ${formatCount(cap)} remaining capacity across configured rooms.`,
-          actionLabel: "View Centers",
+          icon: faHouseFlag,
+          title: `${center.name} Near Full (<10% headroom)`,
+          subtitle: `Only ${formatCount(remaining)} spaces available`,
           tab: "centers",
+          action: "Inspect",
         });
       }
     });
 
     return items;
-  }, [stats, openRescueCount, pendingHazardCount]);
+  }, [stats, pendingArrivalFamilies, pendingResidents, openRescueCount, pendingHazardCount, unassignedFamilies]);
 
-  // Occupancy by Center Data (sorted highest to lowest occupancy)
-  const occupancyByCenter = useMemo(() => {
-    const list = Array.isArray(stats?.centerRooms) ? [...stats.centerRooms] : [];
-    return list
-      .map((center) => {
-        const capacity = Number(center.capacity || 0);
-        const occupied = Number(center.occupiedPeople || 0);
-        const assigned = Number(center.assignedPeople || 0);
-        const rate = capacity > 0 ? occupied / capacity : 0;
-        const percent = capacity > 0 ? Math.round((occupied / capacity) * 100) : 0;
-        const assignedPercent = capacity > 0 ? Math.min(100, Math.round((assigned / capacity) * 100)) : 0;
-        return {
-          ...center,
-          capacity,
-          occupied,
-          assigned,
-          rate,
-          percent,
-          assignedPercent,
-        };
-      })
-      .sort((a, b) => b.rate - a.rate || b.assigned - a.assigned || a.name.localeCompare(b.name));
-  }, [stats]);
-
-  // Top 8 Barangays Demographic Data
-  const topBarangays = useMemo(() => {
+  // All Barangays Demographic Data (Ranked & Filterable)
+  const allBarangays = useMemo(() => {
     const list = Array.isArray(barangaysData) ? [...barangaysData] : [];
     if (!list.length) return [];
     const metricKey = barangayMetric === "residents" ? "resident_count" : "household_count";
-    list.sort((a, b) => (b[metricKey] || 0) - (a[metricKey] || 0));
-    return list.slice(0, 8);
+    return list
+      .map((b) => ({
+        ...b,
+        val: Number(b[metricKey] || 0),
+      }))
+      .sort((a, b) => b.val - a.val || a.name.localeCompare(b.name))
+      .map((b, index) => ({
+        ...b,
+        rank: index + 1,
+      }));
   }, [barangaysData, barangayMetric]);
 
+  const filteredBarangays = useMemo(() => {
+    if (!barangaySearch.trim()) return allBarangays;
+    const q = barangaySearch.trim().toLowerCase();
+    return allBarangays.filter((b) => b.name?.toLowerCase().includes(q));
+  }, [allBarangays, barangaySearch]);
+
   const maxBarangayVal = useMemo(() => {
-    if (!topBarangays.length) return 1;
-    const metricKey = barangayMetric === "residents" ? "resident_count" : "household_count";
-    return Math.max(...topBarangays.map((b) => b[metricKey] || 0), 1);
-  }, [topBarangays, barangayMetric]);
-
-  // Recent Activity Data (5 each)
-  const recentHazardReports = useMemo(() => {
-    return hazardList.slice(0, 5);
-  }, [hazardList]);
-
-  const recentRescueRequests = useMemo(() => {
-    return rescueList.slice(0, 5);
-  }, [rescueList]);
+    if (!allBarangays.length) return 1;
+    return Math.max(...allBarangays.map((b) => b.val || 0), 1);
+  }, [allBarangays]);
 
   return (
     <div className="dashboard-layout">
@@ -454,703 +737,779 @@ function Dashboard() {
         unmappedCentersCount={0}
       />
 
-      <main className="dashboard-content dashboard-page bg-slate-50">
+      <main className="dashboard-content dashboard-page">
         <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 space-y-6">
-          {isLoading && !stats && (
-            <div className="dashboard-loading-wrap">
-              <LoadingState message="Loading dashboard data…" size="lg" />
+          {/* Push Notification Activation Prompt (Hides once activated) */}
+          {(pushStatus === "inactive" || pushSuccess) && !pushStripDismissed && (
+            <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-2xl border text-xs font-semibold transition ${
+              pushSuccess
+                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                : "bg-blue-50/90 border-blue-200 text-blue-900 shadow-2xs"
+            }`}>
+              <div className="flex items-center gap-2.5">
+                <FontAwesomeIcon
+                  icon={pushSuccess ? faCircleCheck : faBell}
+                  className={`text-sm ${pushSuccess ? "text-emerald-600" : "text-blue-600 animate-pulse"}`}
+                />
+                <span>
+                  {pushSuccess
+                    ? "✓ Push notifications activated! Real-time alerts are now enabled."
+                    : "Push notifications are currently inactive on this device. Allow notifications to receive instant alerts for resident accounts and emergency rescues."}
+                </span>
+              </div>
+              {!pushSuccess && (
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleActivatePushFromDashboard}
+                    disabled={pushActivating}
+                    className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {pushActivating ? (
+                      <>
+                        <FontAwesomeIcon icon={faSpinner} spin className="text-[11px]" />
+                        <span>Activating...</span>
+                      </>
+                    ) : (
+                      <span>Allow & Activate</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPushStripDismissed(true);
+                      try { sessionStorage.setItem("evacway_push_strip_dismissed", "true"); } catch {}
+                    }}
+                    className="p-1.5 text-blue-400 hover:text-blue-700 rounded-lg transition cursor-pointer"
+                    title="Dismiss"
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
-          {/* 1. HEADER */}
-          <header className="dashboard-card p-4 sm:p-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          {/* 1. EXECUTIVE COMMAND HEADER */}
+          <header className="dashboard-card p-5 sm:p-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                {todayFormatted}
-              </p>
-              <h1 className="dashboard-heading mt-1 text-2xl font-bold text-slate-900 sm:text-3xl">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <FontAwesomeIcon icon={faClock} className="text-slate-400 text-[11px]" />
+                <span>{todayFormatted}</span>
+                <span className="text-slate-300">•</span>
+                <span className="text-blue-600 font-bold">Sogod Command Center</span>
+              </div>
+              <h1 className="dashboard-heading mt-1 text-2xl font-black text-slate-900 sm:text-3xl tracking-tight">
                 Welcome back, {user?.name || "Officer"}
               </h1>
-              <p className="mt-1 text-sm text-slate-500">
-                Sogod Disaster Preparedness & Evacuation Operations Center
+              <p className="mt-0.5 text-xs sm:text-sm text-slate-500 font-medium">
+                Live evacuation arrival tracking, shelter capacity management, and incident dispatch
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm min-h-[44px]">
-                <span className={`size-2.5 rounded-full ${isFetching ? "bg-amber-500 animate-ping" : "bg-emerald-500"}`} />
-                <span>{isFetching ? "Syncing data..." : "Auto-updates every 30s"}</span>
-              </div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleSectionChange("checkin")}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-700 shadow-xs transition"
+              >
+                <FontAwesomeIcon icon={faUserCheck} />
+                <span>Evacuee Check-In Desk</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSectionChange("map")}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-blue-700 shadow-xs transition"
+              >
+                <FontAwesomeIcon icon={faMapLocationDot} />
+                <span>Map Operations</span>
+              </button>
 
               <button
                 type="button"
                 onClick={handleRefreshAll}
-                disabled={isRefreshing || isFetching}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 active:bg-blue-800 transition disabled:opacity-50 min-h-[44px]"
-                title="Refresh dashboard metrics"
+                disabled={isRefreshing}
+                title="Sync all metrics now"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition shadow-2xs"
               >
                 <FontAwesomeIcon
                   icon={faArrowsRotate}
-                  className={isRefreshing || isFetching ? "animate-spin" : ""}
+                  className={`text-slate-500 ${isRefreshing || isFetching ? "fa-spin text-blue-600" : ""}`}
                 />
-                <span>Refresh</span>
+                <span>{isRefreshing || isFetching ? "Syncing..." : "Sync"}</span>
               </button>
             </div>
           </header>
 
-          {/* ERROR STATE */}
+          {/* ERROR ALERT */}
           {error && !isLoading && (
-            <section
-              className="flex flex-col justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 p-6 text-red-800 sm:flex-row sm:items-center shadow-sm"
+            <div
+              className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800 shadow-xs"
               role="alert"
             >
               <div>
-                <h2 className="text-base font-bold flex items-center gap-2">
+                <p className="font-bold flex items-center gap-2 text-sm">
                   <FontAwesomeIcon icon={faTriangleExclamation} />
-                  Could not load dashboard data
-                </h2>
-                <p className="mt-1 text-sm text-red-700">{error?.message || String(error)}</p>
+                  Failed to synchronize operational metrics
+                </p>
+                <p className="mt-1 text-xs text-red-700">{error?.message || String(error)}</p>
               </div>
               <button
                 type="button"
-                className="inline-flex items-center justify-center rounded-xl bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-red-700 transition min-h-[44px]"
+                className="shrink-0 px-4 py-2 rounded-xl bg-red-600 text-white text-xs font-bold hover:bg-red-700 transition"
                 onClick={handleRefreshAll}
               >
-                Try Again
+                Retry Sync
               </button>
-            </section>
+            </div>
           )}
 
-          {/* LOADING SKELETON - shows while loading and no stats yet */}
-          {isLoading && !stats ? (
-            <div className="space-y-6" aria-label="Loading dashboard" aria-busy="true">
-              <div className="dashboard-skeleton h-36 rounded-2xl border border-slate-200 bg-white p-6" />
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                {Array.from({ length: 4 }, (_, index) => (
-                  <div className="dashboard-skeleton h-36 rounded-2xl border border-slate-200 bg-white p-6" key={index} />
-                ))}
-              </div>
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-                <div className="lg:col-span-8 dashboard-skeleton h-80 rounded-2xl border border-slate-200 bg-white p-6" />
-                <div className="lg:col-span-4 dashboard-skeleton h-80 rounded-2xl border border-slate-200 bg-white p-6" />
-              </div>
-            </div>
-          ) : stats ? (
+          {/* MAIN CONTENT AREA */}
+          {stats ? (
             <>
-              {/* 2. EVACUATION READINESS HERO BANNER */}
-              <section className="dashboard-card p-4 sm:p-6 border-l-4 border-l-blue-600" aria-label="Evacuation readiness status">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                        Operational Status
-                      </span>
-                      <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-0.5 text-xs font-bold ${readiness.badgeClass}`}>
-                        <span className={`size-2 rounded-full ${readiness.dotColor}`} />
-                        {readiness.label}
-                      </span>
-                      {readiness.reason && (
-                        <span className="text-xs font-medium text-slate-600">
-                          ({readiness.reason})
+              {/* 2. EVACUEE ARRIVAL & SHELTERING COMMAND HERO */}
+              <section className="dashboard-hero-banner p-5 sm:p-6" aria-label="Evacuation arrival and sheltering status">
+                <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between relative z-10">
+                  <div className="flex-1 min-w-0 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`ds-badge ${readiness.badgeClass}`}>
+                          <span
+                            className={`size-2 rounded-full ${readiness.dotColor} ${
+                              readiness.status !== "ready" ? "beacon-pulse" : ""
+                            }`}
+                          />
+                          {readiness.label}
                         </span>
-                      )}
+                        {readiness.reason && (
+                          <span className="text-xs font-semibold text-slate-600">
+                            {readiness.reason}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <h2 className="dashboard-heading text-xl font-bold text-slate-900 sm:text-2xl">
-                      Evacuation Sheltering Readiness
-                    </h2>
-                    <p className="text-sm text-slate-600 max-w-2xl">
-                      {formatCount(stats.assignedFamilies)} of {formatCount(stats.families)} registered households are assigned to evacuation rooms.
-                    </p>
-                  </div>
 
-                  <div className="sm:text-right shrink-0">
-                    <span className="dashboard-mono text-3xl font-extrabold text-blue-600 sm:text-4xl">
-                      {assignedFamiliesRate}%
-                    </span>
-                    <span className="text-xs text-slate-400 block font-medium">Assigned Rate</span>
-                  </div>
-                </div>
-
-                <div className="mt-5">
-                  <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100 shadow-inner" role="progressbar" aria-valuenow={assignedFamiliesRate} aria-valuemin={0} aria-valuemax={100}>
-                    <div
-                      className={`h-full rounded-full transition-all duration-700 ${readiness.barColor}`}
-                      style={{ width: `${Math.min(100, Math.max(0, assignedFamiliesRate))}%` }}
-                    />
-                  </div>
-                </div>
-              </section>
-
-              {/* ACTION CARDS ROW (4 clickable action cards directly under readiness hero, above stat cards) */}
-              <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4" aria-label="Operational action cards">
-                {/* 1. Pending hazard reports */}
-                <button
-                  type="button"
-                  onClick={() => handleSectionChange("reports", { status: "pending" })}
-                  className="dashboard-card p-4 flex flex-col justify-between text-left hover:border-amber-400 hover:shadow-md hover:bg-amber-50/20 transition-all cursor-pointer min-h-[56px] group focus:outline-none focus:ring-2 focus:ring-amber-500/50"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-xs font-bold text-slate-700 group-hover:text-amber-700 transition truncate">
-                      Pending Hazard Reports
-                    </span>
-                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-amber-100 text-amber-700 text-xs">
-                      <FontAwesomeIcon icon={faTriangleExclamation} />
-                    </span>
-                  </div>
-                  <div className="mt-2">
-                    <p className="dashboard-mono text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-                      {formatCount(pendingHazardCount)}
-                    </p>
-                    <p className="mt-1 text-[11px] sm:text-xs text-slate-500 truncate">
-                      Awaiting review & dispatch
-                    </p>
-                  </div>
-                </button>
-
-                {/* 2. Open rescue requests */}
-                <button
-                  type="button"
-                  onClick={() => handleSectionChange("rescue")}
-                  className="dashboard-card p-4 flex flex-col justify-between text-left hover:border-red-400 hover:shadow-md hover:bg-red-50/20 transition-all cursor-pointer min-h-[56px] group focus:outline-none focus:ring-2 focus:ring-red-500/50"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-xs font-bold text-slate-700 group-hover:text-red-700 transition truncate">
-                      Open Rescue Requests
-                    </span>
-                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-red-100 text-red-700 text-xs">
-                      <FontAwesomeIcon icon={faLifeRing} />
-                    </span>
-                  </div>
-                  <div className="mt-2">
-                    <p className={`dashboard-mono text-2xl sm:text-3xl font-extrabold tracking-tight ${rescueNumberColorClass}`}>
-                      {formatCount(openRescueCount)}
-                    </p>
-                    <p className="mt-1 text-[11px] sm:text-xs text-slate-500 truncate">
-                      {openRescueCount > 0 ? "Requires emergency response" : "All distress calls resolved"}
-                    </p>
-                  </div>
-                </button>
-
-                {/* 3. Unassigned households */}
-                <button
-                  type="button"
-                  onClick={() => handleSectionChange("barangays", { subtab: "families", status: "unassigned" })}
-                  className="dashboard-card p-4 flex flex-col justify-between text-left hover:border-indigo-400 hover:shadow-md hover:bg-indigo-50/20 transition-all cursor-pointer min-h-[56px] group focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-xs font-bold text-slate-700 group-hover:text-indigo-700 transition truncate">
-                      Unassigned Households
-                    </span>
-                    <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-indigo-100 text-indigo-700 text-xs">
-                      <FontAwesomeIcon icon={faPeopleGroup} />
-                    </span>
-                  </div>
-                  <div className="mt-2">
-                    <p className="dashboard-mono text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-                      {formatCount(unassignedFamilies)}
-                    </p>
-                    <p className="mt-1 text-[11px] sm:text-xs text-slate-500 truncate">
-                      Awaiting room placement
-                    </p>
-                  </div>
-                </button>
-
-                {/* 4. Remaining capacity */}
-                <button
-                  type="button"
-                  onClick={() => handleSectionChange("centers")}
-                  className={`dashboard-card p-4 flex flex-col justify-between text-left hover:border-blue-400 hover:shadow-md transition-all cursor-pointer min-h-[56px] group focus:outline-none focus:ring-2 ${
-                    remainingPercent < 10
-                      ? "hover:bg-red-50/20 focus:ring-red-500/50"
-                      : remainingPercent < 20
-                      ? "hover:bg-amber-50/20 focus:ring-amber-500/50"
-                      : "hover:bg-blue-50/20 focus:ring-blue-500/50"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-xs font-bold text-slate-700 group-hover:text-blue-700 transition truncate">
-                      Remaining Capacity
-                    </span>
-                    <span className={`grid size-7 shrink-0 place-items-center rounded-lg text-xs ${
-                      remainingPercent < 10
-                        ? "bg-red-100 text-red-700"
-                        : remainingPercent < 20
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-blue-100 text-blue-700"
-                    }`}>
-                      <FontAwesomeIcon icon={faHouseFlag} />
-                    </span>
-                  </div>
-                  <div className="mt-2">
-                    <div className="flex items-baseline gap-1.5 flex-wrap">
-                      <p className={`dashboard-mono text-2xl sm:text-3xl font-extrabold tracking-tight ${remainingColorClass}`}>
-                        {formatCount(totalRemainingCapacity)}
+                    <div>
+                      <h2 className="dashboard-heading text-lg sm:text-xl font-black text-slate-900 tracking-tight">
+                        Evacuee Arrival &amp; Shelter Check-In Status
+                      </h2>
+                      <p className="text-xs sm:text-sm text-slate-600 font-medium mt-1 leading-relaxed">
+                        <span className="dashboard-mono font-black text-emerald-700">
+                          {formatCount(totalArrivedFamilies)}
+                        </span>{" "}
+                        of{" "}
+                        <span className="dashboard-mono font-bold text-slate-900">
+                          {formatCount(assignedFamilies)}
+                        </span>{" "}
+                        assigned households have verified safe arrival across evacuation centers (
+                        <span className="font-bold text-emerald-700">{familyArrivalRate}% verified on-site</span>
+                        ).{" "}
+                        {pendingArrivalFamilies > 0 ? (
+                          <span className="font-bold text-amber-700">
+                            {formatCount(pendingArrivalFamilies)} households are currently en route or awaiting intake.
+                          </span>
+                        ) : (
+                          <span className="font-bold text-emerald-700">
+                            All assigned families have arrived safely!
+                          </span>
+                        )}
                       </p>
-                      <span className={`dashboard-mono text-xs font-bold ${remainingColorClass}`}>
-                        ({remainingPercent}% left)
+                    </div>
+
+                    {/* High-Impact Arrival Metric Badges */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="p-3 rounded-xl bg-white/95 border border-slate-200/80 shadow-2xs flex flex-col justify-between">
+                        <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider truncate">
+                          Arrived Families
+                        </span>
+                        <span className="dashboard-mono text-lg font-black text-emerald-700 mt-1">
+                          {formatCount(totalArrivedFamilies)}
+                        </span>
+                        <span className="text-[11px] text-slate-500 font-medium mt-0.5 truncate">
+                          {formatCount(arrivedResidents)} residents
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-white/95 border border-slate-200/80 shadow-2xs flex flex-col justify-between">
+                        <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider truncate">
+                          Pending Arrival
+                        </span>
+                        <span className="dashboard-mono text-lg font-black text-amber-600 mt-1">
+                          {formatCount(pendingArrivalFamilies)}
+                        </span>
+                        <span className="text-[11px] text-slate-500 font-medium mt-0.5 truncate">
+                          {formatCount(pendingResidents)} residents
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-white/95 border border-slate-200/80 shadow-2xs flex flex-col justify-between">
+                        <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider truncate">
+                          Assigned Total
+                        </span>
+                        <span className="dashboard-mono text-lg font-black text-blue-700 mt-1">
+                          {formatCount(assignedFamilies)}
+                        </span>
+                        <span className="text-[11px] text-slate-500 font-medium mt-0.5 truncate">
+                          {assignedFamiliesRate}% of municipality
+                        </span>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-white/95 border border-slate-200/80 shadow-2xs flex flex-col justify-between">
+                        <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider truncate">
+                          Unassigned
+                        </span>
+                        <span className="dashboard-mono text-lg font-black text-slate-700 mt-1">
+                          {formatCount(unassignedFamilies)}
+                        </span>
+                        <span className="text-[11px] text-slate-500 font-medium mt-0.5 truncate">
+                          Needs allocation
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Progress Spectrum Bar */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-slate-500">
+                        <span>Evacuee Arrival Distribution</span>
+                        <span className="dashboard-mono shrink-0">
+                          {familyArrivalRate}% Arrived · {100 - familyArrivalRate}% Pending
+                        </span>
+                      </div>
+                      <div className="h-2.5 w-full rounded-full bg-slate-200/80 overflow-hidden flex shadow-inner">
+                        <div
+                          className="h-full bg-emerald-500 transition-all duration-700"
+                          style={{ width: `${familyArrivalRate}%` }}
+                          title={`Arrived: ${formatCount(totalArrivedFamilies)} families`}
+                        />
+                        <div
+                          className="h-full bg-amber-400 transition-all duration-700"
+                          style={{ width: `${Math.max(0, 100 - familyArrivalRate)}%` }}
+                          title={`Pending: ${formatCount(pendingArrivalFamilies)} families`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Dual Radial Gauges */}
+                  <div className="flex items-center justify-center gap-6 sm:gap-8 shrink-0 bg-white/95 px-6 py-5 rounded-2xl border border-slate-200/80 shadow-2xs">
+                    <div className="flex flex-col items-center text-center">
+                      <CircularRadialGauge
+                        percent={familyArrivalRate}
+                        strokeColor={familyArrivalRate >= 80 ? "#10b981" : familyArrivalRate >= 40 ? "#3b82f6" : "#f59e0b"}
+                        label="Arrived"
+                        size={104}
+                      />
+                      <span className="text-xs font-bold text-slate-700 mt-2">
+                        Arrival Rate
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-medium">
+                        {formatCount(totalArrivedFamilies)} / {formatCount(assignedFamilies)} families
                       </span>
                     </div>
-                    <p className="mt-1 text-[11px] sm:text-xs text-slate-500 truncate">
-                      {formatCount(stats?.totalOccupiedPeople ?? 0)} of {formatCount(totalCapacity)} here · {formatCount(totalAssignedPeople)} assigned
-                    </p>
+
+                    <div className="h-20 w-px bg-slate-200/80" />
+
+                    <div className="flex flex-col items-center text-center">
+                      <CircularRadialGauge
+                        percent={capacityUsedPercent}
+                        strokeColor={capacityUsedPercent > 90 ? "#ef4444" : "#4f46e5"}
+                        label="Capacity"
+                        size={104}
+                      />
+                      <span className="text-xs font-bold text-slate-700 mt-2">
+                        Shelter Load
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-medium">
+                        {formatCount(stats?.totalOccupiedPeople || 0)} / {formatCount(totalCapacity)} on-site
+                      </span>
+                    </div>
                   </div>
-                </button>
+                </div>
               </section>
 
-              {/* 3. STAT CARDS (4 cards: 2x2 on mobile, 4 across on desktop) */}
-              <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6" aria-label="Summary statistics">
-                <StatCard
-                  label="Barangays"
-                  value={stats.barangays}
-                  description="Registered Sogod communities"
-                  icon={faLocationDot}
-                  accentColor="#2563eb"
+              {/* 3. EXECUTIVE KPI METRICS (4 Actionable Command Tiles) */}
+              <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4" aria-label="Executive KPI tiles">
+                {/* 1. Verified Arrived Families */}
+                <ExecutiveKpiCard
+                  title="Families Arrived"
+                  value={totalArrivedFamilies}
+                  subtext={`${formatCount(arrivedResidents)} residents on-site`}
+                  icon={faUserCheck}
+                  accentColor="#10b981"
+                  trendText={`${familyArrivalRate}% arrived`}
+                  trendType={familyArrivalRate >= 70 ? "success" : "warning"}
+                  onClick={() => handleSectionChange("checkin")}
                 />
-                <StatCard
-                  label="Households"
-                  value={stats.families}
-                  description={`${formatCount(stats.assignedFamilies)} assigned to rooms`}
-                  icon={faPeopleGroup}
-                  accentColor="#4f46e5"
+
+                {/* 2. Pending Arrival (En Route) */}
+                <ExecutiveKpiCard
+                  title="Pending Arrival"
+                  value={pendingArrivalFamilies}
+                  subtext={`${formatCount(pendingResidents)} residents en route`}
+                  icon={faPersonWalking}
+                  accentColor="#f59e0b"
+                  trendText={pendingArrivalFamilies > 0 ? "Awaiting Intake" : "None Pending"}
+                  trendType={pendingArrivalFamilies > 0 ? "warning" : "success"}
+                  onClick={() => handleSectionChange("checkin")}
                 />
-                <StatCard
-                  label="Residents"
-                  value={stats.residents}
-                  description={`Across ${formatCount(stats.families)} households`}
-                  icon={faUsers}
-                  accentColor="#0d9488"
+
+                {/* 3. Available Headroom */}
+                <ExecutiveKpiCard
+                  title="Available Headroom"
+                  value={totalRemainingCapacity}
+                  subtext={`of ${formatCount(totalCapacity)} total capacity`}
+                  icon={faDoorOpen}
+                  accentColor={remainingPercent < 15 ? "#ef4444" : "#3b82f6"}
+                  trendText={`${remainingPercent}% free`}
+                  trendType={remainingPercent < 15 ? "danger" : "success"}
+                  onClick={() => handleSectionChange("centers")}
                 />
-                <StatCard
-                  label="Evacuation Centers"
-                  value={stats.centers}
-                  description="Active shelter facilities"
-                  icon={faHouseFlag}
-                  accentColor="#059669"
+
+                {/* 4. Emergency Alerts & Incidents */}
+                <ExecutiveKpiCard
+                  title="Emergency Alerts"
+                  value={openRescueCount + pendingHazardCount}
+                  subtext={`${openRescueCount} Rescues · ${pendingHazardCount} Hazards`}
+                  icon={faLifeRing}
+                  accentColor={openRescueCount > 0 ? "#ef4444" : pendingHazardCount > 0 ? "#f59e0b" : "#64748b"}
+                  trendText={openRescueCount > 0 ? "Needs Rescue" : pendingHazardCount > 0 ? "Needs Review" : "All Clear"}
+                  trendType={openRescueCount > 0 ? "danger" : pendingHazardCount > 0 ? "warning" : "success"}
+                  onClick={() => handleSectionChange(openRescueCount > 0 ? "rescue" : "reports")}
                 />
               </section>
 
-              {/* 4. NEEDS ATTENTION + QUICK ACTIONS */}
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
-                {/* Needs Attention List (8 cols) */}
-                <section className="dashboard-card p-4 sm:p-6 lg:col-span-8 flex flex-col justify-between" aria-label="Action items requiring attention">
+              {/* 4. SHELTER OPERATIONS & ARRIVAL BREAKDOWN PER CENTER */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Left 8 cols: Center Arrival & Capacity Matrix */}
+                <section className="dashboard-card p-5 sm:p-6 lg:col-span-8 flex flex-col justify-between" aria-label="Center arrivals matrix">
+                  <div>
+                    {/* Header + Filter controls */}
+                    <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <FontAwesomeIcon icon={faHouseFlag} className="text-blue-600 text-sm" />
+                          <h2 className="dashboard-heading text-lg font-black text-slate-900 tracking-tight">
+                            Center Arrival & Capacity Matrix
+                          </h2>
+                        </div>
+                        <p className="text-xs text-slate-500 font-medium mt-0.5">
+                          Verified evacuee arrivals vs assigned household rosters across shelters
+                        </p>
+                      </div>
+
+                      {/* Filter Pills */}
+                      <div className="flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200/60 text-xs font-bold">
+                        <button
+                          type="button"
+                          onClick={() => setCenterFilter("all")}
+                          className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                            centerFilter === "all"
+                              ? "bg-white text-blue-700 shadow-2xs font-extrabold"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          All ({centersProcessed.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCenterFilter("arrived")}
+                          className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                            centerFilter === "arrived"
+                              ? "bg-white text-emerald-700 shadow-2xs font-extrabold"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          Arrived (&gt;0)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCenterFilter("high")}
+                          className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                            centerFilter === "high"
+                              ? "bg-white text-amber-700 shadow-2xs font-extrabold"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          High Load
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCenterFilter("available")}
+                          className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                            centerFilter === "available"
+                              ? "bg-white text-emerald-700 shadow-2xs font-extrabold"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          Headroom Available
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Matrix list */}
+                    {filteredCenters.length > 0 ? (
+                      <div className="dashboard-scrollbar max-h-96 space-y-3.5 overflow-y-auto pr-1.5">
+                        {filteredCenters.map((center) => {
+                          const isHigh = center.occupiedPercent >= 85;
+                          const isMed = center.occupiedPercent >= 60;
+                          return (
+                            <div
+                              key={center.id}
+                              className="p-3.5 rounded-xl border border-slate-200/80 bg-white hover:border-blue-300 hover:bg-slate-50/50 transition"
+                            >
+                              <div className="flex items-baseline justify-between gap-2">
+                                <div className="flex items-center gap-2 truncate">
+                                  <span className="font-bold text-sm text-slate-900 truncate">
+                                    {center.name}
+                                  </span>
+                                  {center.barangay && (
+                                    <span className="text-[10px] font-semibold text-slate-500 px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200/60 truncate max-w-xs">
+                                      {center.barangay}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="dashboard-mono text-xs shrink-0 text-right">
+                                  <span className="text-emerald-700 font-black">
+                                    {formatCount(center.checkedInCount)} arrived
+                                  </span>
+                                  <span className="text-slate-400 font-semibold ml-1">
+                                    · {formatCount(center.assignedCount)} assigned / {formatCount(center.capacity)} cap
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Multi-tier progress bar */}
+                              <div className="mt-2.5">
+                                <div className="h-2.5 w-full rounded-full bg-slate-100 relative overflow-hidden flex">
+                                  {/* Assigned bar */}
+                                  <div
+                                    className="h-full bg-indigo-300/60 rounded-full transition-all duration-500 absolute top-0 left-0"
+                                    style={{ width: `${center.assignedPercent}%` }}
+                                  />
+                                  {/* Verified arrived bar */}
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-500 relative z-10 ${
+                                      isHigh ? "bg-red-500" : isMed ? "bg-amber-500" : "bg-emerald-500"
+                                    }`}
+                                    style={{ width: `${center.occupiedPercent}%` }}
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="mt-1.5 flex items-center justify-between text-[11px] font-medium text-slate-500">
+                                <div className="flex items-center gap-3">
+                                  <span className="flex items-center gap-1">
+                                    <span className={`size-1.5 rounded-full ${isHigh ? "bg-red-500" : isMed ? "bg-amber-500" : "bg-emerald-500"}`} />
+                                    <span>Verified on-site: {center.occupiedPercent}% cap</span>
+                                  </span>
+                                  <span className="flex items-center gap-1">
+                                    <span className="size-1.5 rounded-full bg-indigo-400" />
+                                    <span>Assigned roster: {center.assignedPercent}% cap</span>
+                                  </span>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleSectionChange("checkin", { center_id: center.id })}
+                                  className="text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1 transition"
+                                >
+                                  <span>Check-In Desk</span>
+                                  <FontAwesomeIcon icon={faArrowRight} className="text-[9px]" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="rounded-xl bg-slate-50 px-4 py-10 text-center text-xs text-slate-500 font-medium">
+                        No evacuation centers match the selected filter.
+                      </p>
+                    )}
+                  </div>
+                </section>
+
+                {/* Right 4 cols: Room Distribution Donut */}
+                <section className="dashboard-card p-5 sm:p-6 lg:col-span-4 flex flex-col justify-between" aria-label="Room distribution chart">
                   <div>
                     <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
                       <div>
-                        <h2 className="dashboard-heading text-lg font-bold text-slate-900">
-                          Needs Attention
-                        </h2>
-                        <p className="text-xs text-slate-500">
-                          Prioritized operational bottlenecks and alert items
+                        <div className="flex items-center gap-2">
+                          <FontAwesomeIcon icon={faChartPie} className="text-indigo-600 text-sm" />
+                          <h2 className="dashboard-heading text-lg font-black text-slate-900 tracking-tight">
+                            Room Distribution
+                          </h2>
+                        </div>
+                        <p className="text-xs text-slate-500 font-medium mt-0.5">
+                          Shelter room allocation ratio
                         </p>
                       </div>
+                    </div>
+
+                    <RoomDonutChart
+                      total={stats.totalRooms}
+                      assigned={stats.occupiedRooms}
+                      unassigned={Math.max(0, (stats.totalRooms || 0) - (stats.occupiedRooms || 0))}
+                      onManage={() => handleSectionChange("centers")}
+                    />
+                  </div>
+                </section>
+              </div>
+
+              {/* 5. INCIDENT COMMAND & OPERATIONS HUB */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Left 6 cols: Priority Attention & Action */}
+                <section className="dashboard-card p-5 sm:p-6 lg:col-span-6 flex flex-col justify-between" aria-label="Operations priority triage">
+                  <div>
+                    <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <FontAwesomeIcon icon={faBolt} className="text-amber-600 text-sm" />
+                          <h2 className="dashboard-heading text-lg font-black text-slate-900 tracking-tight">
+                            Operations Priority Triage
+                          </h2>
+                        </div>
+                        <p className="text-xs text-slate-500 font-medium mt-0.5">
+                          Critical bottlenecks requiring immediate coordination
+                        </p>
+                      </div>
+
                       <span className="dashboard-mono text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">
-                        {needsAttentionItems.length} {needsAttentionItems.length === 1 ? "Item" : "Items"}
+                        {urgentActionItems.length} {urgentActionItems.length === 1 ? "Item" : "Items"}
                       </span>
                     </div>
 
-                    {needsAttentionItems.length > 0 ? (
-                      <div className="space-y-3 dashboard-scrollbar max-h-80 overflow-y-auto pr-1">
-                        {needsAttentionItems.map((item) => (
+                    {urgentActionItems.length > 0 ? (
+                      <div className="space-y-3">
+                        {urgentActionItems.map((item) => (
                           <div
                             key={item.id}
-                            className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border ${
+                            className={`flex items-center justify-between gap-3 p-3.5 rounded-xl border ${
                               item.severity === "danger"
-                                ? "bg-red-50/60 border-red-200"
+                                ? "bg-red-50/70 border-red-200/80"
                                 : item.severity === "warning"
-                                ? "bg-amber-50/60 border-amber-200"
-                                : "bg-blue-50/60 border-blue-200"
+                                ? "bg-amber-50/70 border-amber-200/80"
+                                : "bg-blue-50/70 border-blue-200/80"
                             }`}
                           >
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className={`text-[10px] uppercase tracking-wider font-extrabold px-2 py-0.5 rounded ${
-                                    item.severity === "danger"
-                                      ? "bg-red-200 text-red-900"
-                                      : item.severity === "warning"
-                                      ? "bg-amber-200 text-amber-900"
-                                      : "bg-blue-200 text-blue-900"
-                                  }`}
-                                >
-                                  {item.badge}
-                                </span>
-                                <h3 className="text-sm font-bold text-slate-900">{item.title}</h3>
+                            <div className="flex items-center gap-3 min-w-0">
+                              <span
+                                className={`grid size-9 shrink-0 place-items-center rounded-xl text-sm ${
+                                  item.severity === "danger"
+                                    ? "bg-red-200/70 text-red-800"
+                                    : item.severity === "warning"
+                                    ? "bg-amber-200/70 text-amber-800"
+                                    : "bg-blue-200/70 text-blue-800"
+                                }`}
+                              >
+                                <FontAwesomeIcon icon={item.icon} />
+                              </span>
+                              <div className="min-w-0">
+                                <h3 className="text-xs font-bold text-slate-900 truncate">{item.title}</h3>
+                                <p className="text-[11px] text-slate-500 truncate">{item.subtitle}</p>
                               </div>
-                              <p className="text-xs text-slate-600">{item.desc}</p>
                             </div>
 
                             <button
                               type="button"
                               onClick={() => handleSectionChange(item.tab)}
-                              className="shrink-0 inline-flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 shadow-sm transition min-h-[44px]"
+                              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-800 hover:bg-slate-50 shadow-2xs transition"
                             >
-                              <span>{item.actionLabel}</span>
+                              <span>{item.action}</span>
                               <FontAwesomeIcon icon={faArrowRight} className="text-[10px]" />
                             </button>
                           </div>
                         ))}
                       </div>
                     ) : (
-                      <div className="flex items-center gap-2.5 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-semibold">
-                        <FontAwesomeIcon icon={faCircleCheck} className="text-emerald-600 text-base shrink-0" />
-                        <span>Nothing needs attention right now.</span>
-                      </div>
-                    )}
-                  </div>
-                </section>
-
-                {/* Quick Actions (4 cols) */}
-                <section className="dashboard-card p-4 sm:p-6 lg:col-span-4 flex flex-col justify-between" aria-label="Quick operations">
-                  <div>
-                    <div className="mb-4 border-b border-slate-100 pb-3">
-                      <h2 className="dashboard-heading text-lg font-bold text-slate-900">
-                        Quick Actions
-                      </h2>
-                      <p className="text-xs text-slate-500">
-                        Frequently accessed operational consoles
-                      </p>
-                    </div>
-
-                    <div className="space-y-3">
-                      <button
-                        type="button"
-                        onClick={() => handleSectionChange("reports")}
-                        className="w-full flex items-center justify-between p-3.5 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 transition group text-left min-h-[44px]"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="grid size-9 place-items-center rounded-lg bg-amber-100 text-amber-700">
-                            <FontAwesomeIcon icon={faTriangleExclamation} />
-                          </span>
-                          <div>
-                            <span className="text-sm font-bold text-slate-800 block group-hover:text-blue-700">
-                              Hazard Reports
-                            </span>
-                            <span className="text-xs text-slate-500">Citizen submissions</span>
-                          </div>
-                        </div>
-                        {pendingHazardCount > 0 ? (
-                          <span className="dashboard-mono text-xs font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white">
-                            {pendingHazardCount}
-                          </span>
-                        ) : (
-                          <FontAwesomeIcon icon={faArrowRight} className="text-slate-300 text-xs group-hover:text-blue-500" />
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSectionChange("rescue")}
-                        className="w-full flex items-center justify-between p-3.5 rounded-xl border border-slate-200 hover:border-red-300 hover:bg-red-50/50 transition group text-left min-h-[44px]"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="grid size-9 place-items-center rounded-lg bg-red-100 text-red-700">
-                            <FontAwesomeIcon icon={faLifeRing} />
-                          </span>
-                          <div>
-                            <span className="text-sm font-bold text-slate-800 block group-hover:text-red-700">
-                              Rescue Requests
-                            </span>
-                            <span className="text-xs text-slate-500">Emergency dispatches</span>
-                          </div>
-                        </div>
-                        {openRescueCount > 0 ? (
-                          <span className="dashboard-mono text-xs font-bold px-2 py-0.5 rounded-full bg-red-600 text-white animate-pulse">
-                            {openRescueCount}
-                          </span>
-                        ) : (
-                          <FontAwesomeIcon icon={faArrowRight} className="text-slate-300 text-xs group-hover:text-red-500" />
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSectionChange("barangays")}
-                        className="w-full flex items-center justify-between p-3.5 rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition group text-left min-h-[44px]"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="grid size-9 place-items-center rounded-lg bg-indigo-100 text-indigo-700">
-                            <FontAwesomeIcon icon={faPeopleGroup} />
-                          </span>
-                          <div>
-                            <span className="text-sm font-bold text-slate-800 block group-hover:text-indigo-700">
-                              Household Directory
-                            </span>
-                            <span className="text-xs text-slate-500">Family & resident records</span>
-                          </div>
-                        </div>
-                        <FontAwesomeIcon icon={faArrowRight} className="text-slate-300 text-xs group-hover:text-indigo-500" />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSectionChange("centers")}
-                        className="w-full flex items-center justify-between p-3.5 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/50 transition group text-left min-h-[44px]"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="grid size-9 place-items-center rounded-lg bg-emerald-100 text-emerald-700">
-                            <FontAwesomeIcon icon={faHouseFlag} />
-                          </span>
-                          <div>
-                            <span className="text-sm font-bold text-slate-800 block group-hover:text-emerald-700">
-                              Evacuation Centers
-                            </span>
-                            <span className="text-xs text-slate-500">Facility rooms & beds</span>
-                          </div>
-                        </div>
-                        <FontAwesomeIcon icon={faArrowRight} className="text-slate-300 text-xs group-hover:text-emerald-500" />
-                      </button>
-                    </div>
-                  </div>
-                </section>
-              </div>
-
-              {/* 5. RECENT ACTIVITY: LATEST HAZARD REPORTS & RESCUE REQUESTS */}
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 items-start">
-                {/* Recent Hazard Reports */}
-                <section className="dashboard-card p-4 sm:p-6" aria-label="Latest hazard reports">
-                  <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <span className="grid size-8 place-items-center rounded-lg bg-amber-100 text-amber-700">
-                        <FontAwesomeIcon icon={faTriangleExclamation} />
-                      </span>
-                      <div>
-                        <h2 className="dashboard-heading text-lg font-bold text-slate-900">
-                          Latest Hazard Reports
-                        </h2>
-                        <p className="text-xs text-slate-500">Recent environmental & road obstacles</p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleSectionChange("reports")}
-                      className="inline-flex items-center justify-center text-xs font-semibold text-blue-600 hover:text-blue-800 min-h-[44px] px-2"
-                    >
-                      View all
-                    </button>
-                  </div>
-
-                  {recentHazardReports.length > 0 ? (
-                    <div className="space-y-3">
-                      {recentHazardReports.map((report) => (
-                        <div
-                          key={report.id}
-                          onClick={() => handleSectionChange("reports")}
-                          className="flex items-start justify-between gap-3 p-3 rounded-xl border border-slate-100 hover:border-blue-200 hover:bg-slate-50/70 transition cursor-pointer min-h-[44px]"
-                        >
-                          <div className="space-y-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider">
-                                {report.report_type || "Hazard"}
-                              </span>
-                              <span className="text-slate-300">•</span>
-                              <span className="text-xs text-slate-400 flex items-center gap-1">
-                                <FontAwesomeIcon icon={faClock} className="text-[10px]" />
-                                {formatTimeAgo(report.submitted_at)}
-                              </span>
-                            </div>
-                            <p className="text-xs text-slate-600 truncate max-w-sm">
-                              {report.description || "No description provided."}
-                            </p>
-                          </div>
-
-                          <span
-                            className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                              report.status === "validated"
-                                ? "bg-blue-100 text-blue-800 border-blue-200"
-                                : report.status === "resolved"
-                                ? "bg-emerald-100 text-emerald-800 border-emerald-200"
-                                : "bg-amber-100 text-amber-800 border-amber-200"
-                            }`}
-                          >
-                            {report.status || "Pending"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-xs text-slate-500">
-                      No recent hazard reports recorded.
-                    </p>
-                  )}
-                </section>
-
-                {/* Recent Rescue Requests */}
-                <section className="dashboard-card p-4 sm:p-6" aria-label="Latest rescue requests">
-                  <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <span className="grid size-8 place-items-center rounded-lg bg-red-100 text-red-700">
-                        <FontAwesomeIcon icon={faLifeRing} />
-                      </span>
-                      <div>
-                        <h2 className="dashboard-heading text-lg font-bold text-slate-900">
-                          Latest Rescue Requests
-                        </h2>
-                        <p className="text-xs text-slate-500">Emergency citizen distress dispatches</p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleSectionChange("rescue")}
-                      className="inline-flex items-center justify-center text-xs font-semibold text-blue-600 hover:text-blue-800 min-h-[44px] px-2"
-                    >
-                      View all
-                    </button>
-                  </div>
-
-                  {recentRescueRequests.length > 0 ? (
-                    <div className="space-y-3">
-                      {recentRescueRequests.map((rescue) => (
-                        <div
-                          key={rescue.id}
-                          onClick={() => handleSectionChange("rescue")}
-                          className="flex items-start justify-between gap-3 p-3 rounded-xl border border-slate-100 hover:border-red-200 hover:bg-slate-50/70 transition cursor-pointer min-h-[44px]"
-                        >
-                          <div className="space-y-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[11px] font-bold text-slate-900 truncate">
-                                {rescue.location_description || `Incident #${rescue.id}`}
-                              </span>
-                              <span className="text-slate-300">•</span>
-                              <span className="text-xs text-slate-400 flex items-center gap-1">
-                                <FontAwesomeIcon icon={faClock} className="text-[10px]" />
-                                {formatTimeAgo(rescue.created_at)}
-                              </span>
-                            </div>
-                            <p className="text-xs text-slate-600 truncate max-w-sm">
-                              {rescue.description || "Emergency rescue request."}
-                            </p>
-                          </div>
-
-                          <span
-                            className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                              rescue.status === "resolved"
-                                ? "bg-emerald-100 text-emerald-800 border-emerald-200"
-                                : rescue.status === "responding"
-                                ? "bg-blue-100 text-blue-800 border-blue-200"
-                                : rescue.status === "acknowledged"
-                                ? "bg-amber-100 text-amber-800 border-amber-200"
-                                : "bg-red-100 text-red-800 border-red-200"
-                            }`}
-                          >
-                            {rescue.status || "Pending"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-xs text-slate-500">
-                      No emergency rescue requests recorded.
-                    </p>
-                  )}
-                </section>
-              </div>
-
-              {/* 6. OCCUPANCY BY CENTER + ROOMS DONUT */}
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
-                {/* Occupancy by Center (7 cols) */}
-                <section className="dashboard-card p-4 sm:p-6 lg:col-span-7 flex flex-col justify-between" aria-label="Occupancy by center">
-                  <div>
-                    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
-                      <div>
-                        <h2 className="dashboard-heading text-lg font-bold text-slate-900">
-                          Occupancy by Center
-                        </h2>
-                        <p className="text-xs text-slate-500">
-                          People assigned compared with facility capacity
+                      <div className="flex flex-col items-center justify-center p-8 rounded-xl bg-emerald-50/60 border border-emerald-200/80 text-center">
+                        <span className="grid size-12 place-items-center rounded-full bg-emerald-100 text-emerald-600 text-xl mb-2">
+                          <FontAwesomeIcon icon={faCircleCheck} />
+                        </span>
+                        <h3 className="text-sm font-bold text-emerald-900">All Operations Clear</h3>
+                        <p className="text-xs text-emerald-700 max-w-xs mt-1">
+                          All assigned families have arrived safely. No open distress rescues or unverified hazards.
                         </p>
                       </div>
-                      <span className="dashboard-mono text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">
-                        {occupancyByCenter.length} {occupancyByCenter.length === 1 ? "Center" : "Centers"}
-                      </span>
-                    </div>
-
-                    {occupancyByCenter.length > 0 ? (
-                      <div className="dashboard-scrollbar max-h-80 space-y-4 overflow-y-auto pr-1">
-                        {occupancyByCenter.map((center) => (
-                          <div key={center.id} className="space-y-1.5">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <span className="min-w-0 truncate font-semibold text-sm text-slate-800" title={`${center.name} (${center.barangay})`}>
-                                {center.name}
-                                <span className="ml-2 text-xs font-normal text-slate-500">
-                                  {center.barangay}
-                                </span>
-                              </span>
-                              <span className="dashboard-mono shrink-0 text-xs font-semibold text-slate-700">
-                                {formatCount(center.occupied)} of {formatCount(center.capacity)} here · {formatCount(center.assigned)} assigned
-                              </span>
-                            </div>
-
-                            <div
-                              className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100 flex relative"
-                              role="progressbar"
-                              aria-valuenow={center.percent}
-                              aria-valuemin={0}
-                              aria-valuemax={100}
-                              aria-label={`${center.name}: ${center.occupied} of ${center.capacity} here, ${center.assigned} assigned`}
-                            >
-                              {center.assignedPercent > 0 && (
-                                <div
-                                  className="h-full bg-slate-400/45 rounded-full transition-all duration-500 absolute top-0 left-0"
-                                  style={{ width: `${Math.min(100, Math.max(0, center.assignedPercent))}%` }}
-                                />
-                              )}
-                              <div
-                                className="h-full bg-emerald-600 rounded-full transition-all duration-500 relative z-10"
-                                style={{ width: `${Math.min(100, Math.max(0, center.percent))}%` }}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                        No evacuation center rooms recorded yet.
-                      </p>
                     )}
                   </div>
                 </section>
 
-                {/* Rooms Donut (5 cols) */}
-                <section className="dashboard-card p-4 sm:p-6 lg:col-span-5 flex flex-col justify-between" aria-label="Room status">
+                {/* Right 6 cols: Live Incident & Activity Stream */}
+                <section className="dashboard-card p-5 sm:p-6 lg:col-span-6 flex flex-col justify-between" aria-label="Incident feed">
                   <div>
-                    <div className="mb-4 border-b border-slate-100 pb-3">
-                      <h2 className="dashboard-heading text-lg font-bold text-slate-900">
-                        Room Distribution
-                      </h2>
-                      <p className="text-xs text-slate-500">
-                        Shelter rooms currently assigned vs unassigned
-                      </p>
+                    {/* Header + Stream Selector Tabs */}
+                    <div className="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <FontAwesomeIcon icon={faShieldHalved} className="text-blue-600 text-sm" />
+                          <h2 className="dashboard-heading text-lg font-black text-slate-900 tracking-tight">
+                            Live Emergency Stream
+                          </h2>
+                        </div>
+                        <p className="text-xs text-slate-500 font-medium mt-0.5">
+                          Chronological citizen requests and hazard obstacles
+                        </p>
+                      </div>
+
+                      {/* Feed selector */}
+                      <div className="flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200/60 text-xs font-bold">
+                        <button
+                          type="button"
+                          onClick={() => setActiveFeedTab("rescue")}
+                          className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                            activeFeedTab === "rescue"
+                              ? "bg-white text-red-700 shadow-2xs font-extrabold"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          Rescues ({rescueList.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveFeedTab("hazards")}
+                          className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                            activeFeedTab === "hazards"
+                              ? "bg-white text-amber-700 shadow-2xs font-extrabold"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          Hazards ({hazardList.length})
+                        </button>
+                      </div>
                     </div>
 
-                    <RoomDonut
-                      total={stats.totalRooms}
-                      assigned={stats.occupiedRooms}
-                      unassigned={Math.max(0, (stats.totalRooms || 0) - (stats.occupiedRooms || 0))}
-                    />
+                    {/* Feed Content */}
+                    <div className="dashboard-scrollbar max-h-72 space-y-3 overflow-y-auto pr-1">
+                      {activeFeedTab === "rescue" ? (
+                        rescueList.length > 0 ? (
+                          rescueList.slice(0, 5).map((rescue) => (
+                            <div
+                              key={rescue.id}
+                              onClick={() => handleSectionChange("rescue")}
+                              className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-100 bg-white hover:border-red-200 hover:bg-slate-50/70 transition cursor-pointer"
+                            >
+                              <div className="min-w-0 space-y-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-slate-900 truncate">
+                                    {rescue.location_description || `Rescue Request #${rescue.id}`}
+                                  </span>
+                                  <span className="text-slate-300">•</span>
+                                  <span className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
+                                    <FontAwesomeIcon icon={faClock} className="text-[9px]" />
+                                    {formatTimeAgo(rescue.created_at)}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-600 truncate max-w-md">
+                                  {rescue.description || "Citizen reported distress at location."}
+                                </p>
+                              </div>
+
+                              <span
+                                className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                  rescue.status === "resolved"
+                                    ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                    : rescue.status === "responding"
+                                    ? "bg-blue-50 text-blue-800 border-blue-200"
+                                    : "bg-red-50 text-red-800 border-red-200"
+                                }`}
+                              >
+                                {rescue.status || "Pending"}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-xs text-slate-500 font-medium">
+                            No emergency rescue requests on record.
+                          </p>
+                        )
+                      ) : hazardList.length > 0 ? (
+                        hazardList.slice(0, 5).map((hazard) => (
+                          <div
+                            key={hazard.id}
+                            onClick={() => handleSectionChange("reports")}
+                            className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-100 bg-white hover:border-amber-200 hover:bg-slate-50/70 transition cursor-pointer"
+                          >
+                            <div className="min-w-0 space-y-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-900 truncate uppercase">
+                                  {hazard.report_type || "Hazard Obstacle"}
+                                </span>
+                                <span className="text-slate-300">•</span>
+                                <span className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
+                                  <FontAwesomeIcon icon={faClock} className="text-[9px]" />
+                                  {formatTimeAgo(hazard.submitted_at)}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-600 truncate max-w-md">
+                                {hazard.description || "Field obstacle reported by community."}
+                              </p>
+                            </div>
+
+                            <span
+                              className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                hazard.status === "validated"
+                                  ? "bg-blue-50 text-blue-800 border-blue-200"
+                                  : hazard.status === "resolved"
+                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                  : "bg-amber-50 text-amber-800 border-amber-200"
+                              }`}
+                            >
+                              {hazard.status || "Pending"}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-xs text-slate-500 font-medium">
+                          No hazard reports on record.
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </section>
               </div>
 
-              {/* 7. DEMOGRAPHICS BY BARANGAY (TOP 8) */}
-              <section className="dashboard-card p-4 sm:p-6 flex flex-col justify-between" aria-label="Top 8 barangays demographic breakdown">
-                <div>
-                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
-                    <div>
-                      <h2 className="dashboard-heading text-lg font-bold text-slate-900">
-                        Demographics by Barangay (Top 8)
+              {/* 6. DEMOGRAPHICS BY BARANGAY COMPARATIVE ANALYTICS (ALL BARANGAYS) */}
+              <section className="dashboard-card p-5 sm:p-6" aria-label="Demographic distribution">
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <FontAwesomeIcon icon={faLocationDot} className="text-blue-600 text-sm" />
+                      <h2 className="dashboard-heading text-lg font-black text-slate-900 tracking-tight">
+                        Demographics & Evacuee Density by Barangay
                       </h2>
-                      <p className="text-xs text-slate-500">
-                        Highest registered volume of evacuees across Sogod
-                      </p>
+                    </div>
+                    <p className="text-xs text-slate-500 font-medium mt-0.5">
+                      All {allBarangays.length} registered communities across Sogod, Southern Leyte
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {/* Live Search input */}
+                    <div className="relative">
+                      <FontAwesomeIcon
+                        icon={faMagnifyingGlass}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"
+                      />
+                      <input
+                        type="text"
+                        value={barangaySearch}
+                        onChange={(e) => setBarangaySearch(e.target.value)}
+                        placeholder="Search barangay..."
+                        className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:bg-white w-40 sm:w-48 transition"
+                      />
                     </div>
 
-                    <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+                    {/* Metric Switch */}
+                    <div className="flex items-center p-1 rounded-xl bg-slate-100 border border-slate-200/60 text-xs font-bold">
                       <button
                         type="button"
                         onClick={() => setBarangayMetric("households")}
-                        className={`px-3 py-1.5 rounded-md font-semibold transition min-h-[44px] inline-flex items-center justify-center ${
+                        className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
                           barangayMetric === "households"
-                            ? "bg-white text-blue-700 shadow-sm"
+                            ? "bg-white text-blue-700 shadow-2xs font-extrabold"
                             : "text-slate-600 hover:text-slate-900"
                         }`}
                       >
@@ -1159,9 +1518,9 @@ function Dashboard() {
                       <button
                         type="button"
                         onClick={() => setBarangayMetric("residents")}
-                        className={`px-3 py-1.5 rounded-md font-semibold transition min-h-[44px] inline-flex items-center justify-center ${
+                        className={`px-3 py-1.5 rounded-lg transition cursor-pointer ${
                           barangayMetric === "residents"
-                            ? "bg-white text-blue-700 shadow-sm"
+                            ? "bg-white text-blue-700 shadow-2xs font-extrabold"
                             : "text-slate-600 hover:text-slate-900"
                         }`}
                       >
@@ -1169,42 +1528,37 @@ function Dashboard() {
                       </button>
                     </div>
                   </div>
+                </div>
 
-                  {topBarangays.length > 0 ? (
-                    <div className="space-y-3.5">
-                      {topBarangays.map((barangay, index) => {
-                        const val = barangayMetric === "residents"
-                          ? Number(barangay.resident_count || 0)
-                          : Number(barangay.household_count || 0);
-                        const barWidth = Math.round((val / maxBarangayVal) * 100);
+                {filteredBarangays.length > 0 ? (
+                  <div className="dashboard-scrollbar max-h-[520px] overflow-y-auto pr-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {filteredBarangays.map((barangay) => {
+                        const barWidth = Math.round((barangay.val / maxBarangayVal) * 100);
 
                         return (
-                          <div key={barangay.id || index} className="space-y-1">
-                            <div className="flex items-center justify-between text-xs font-semibold text-slate-800">
+                          <div
+                            key={barangay.id || barangay.rank}
+                            className="p-3 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50/90 hover:border-blue-200 transition"
+                          >
+                            <div className="flex items-center justify-between text-xs font-bold text-slate-800">
                               <span className="flex items-center gap-2 truncate">
-                                <span className="dashboard-mono size-5 rounded bg-slate-100 grid place-items-center text-[10px] text-slate-500">
-                                  {index + 1}
+                                <span className="dashboard-mono size-5 rounded-md bg-white border border-slate-200 grid place-items-center text-[10px] text-slate-600 font-black shrink-0">
+                                  #{barangay.rank}
                                 </span>
-                                <span className="truncate">{barangay.name}</span>
+                                <span className="truncate" title={barangay.name}>{barangay.name}</span>
                               </span>
-                              <span className="dashboard-mono text-slate-900 shrink-0">
-                                {formatCount(val)}{" "}
-                                <span className="font-normal text-slate-400">
+                              <span className="dashboard-mono text-slate-900 shrink-0 font-extrabold ml-1">
+                                {formatCount(barangay.val)}{" "}
+                                <span className="font-normal text-[10px] text-slate-400">
                                   {barangayMetric === "residents" ? "residents" : "households"}
                                 </span>
                               </span>
                             </div>
 
-                            <div
-                              className="h-2 w-full overflow-hidden rounded-full bg-slate-100"
-                              role="progressbar"
-                              aria-valuenow={barWidth}
-                              aria-valuemin={0}
-                              aria-valuemax={100}
-                              aria-label={`${barangay.name}: ${val} ${barangayMetric}`}
-                            >
+                            <div className="mt-2 h-2 w-full rounded-full bg-slate-200/70 overflow-hidden">
                               <div
-                                className="h-full rounded-full bg-indigo-600 transition-all duration-500"
+                                className="h-full rounded-full bg-linear-to-r from-blue-600 to-indigo-600 transition-all duration-500"
                                 style={{ width: `${barWidth}%` }}
                               />
                             </div>
@@ -1212,39 +1566,60 @@ function Dashboard() {
                         );
                       })}
                     </div>
-                  ) : (
-                    <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                      No barangay records available.
-                    </p>
-                  )}
-                </div>
-              </section>
+                  </div>
+                ) : (
+                  <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-xs text-slate-500 font-medium">
+                    {barangaySearch ? `No barangays found matching "${barangaySearch}".` : "No barangay census records registered yet."}
+                  </p>
+                )}
 
-              {/* 8. STAFF CARD (AT BOTTOM OF PAGE) */}
-              {isAdmin && (
-                <section className="dashboard-card p-4 sm:p-6" aria-labelledby="dashboard-staff-heading">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                    <div>
-                      <h2 id="dashboard-staff-heading" className="dashboard-heading text-lg font-bold text-slate-900">
-                        LGU Staff Accounts
-                      </h2>
-                      <p className="mt-1 text-sm text-slate-600">
-                        Active accounts <span className="dashboard-mono font-bold text-slate-900">{formatCount(stats.activeStaff)} of {formatCount(stats.totalStaff)}</span>
-                      </p>
+                {isAdmin && (
+                  <div className="mt-6 pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 font-medium">
+                    <div className="flex items-center gap-2">
+                      <span className="size-2 rounded-full bg-emerald-500" />
+                      <span>
+                        LGU Personnel System:{" "}
+                        <strong className="text-slate-800 font-bold">
+                          {formatCount(stats.activeStaff)} active
+                        </strong>{" "}
+                        of {formatCount(stats.totalStaff)} total staff accounts
+                      </span>
                     </div>
+
                     <button
                       type="button"
                       onClick={() => handleSectionChange("users")}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 hover:text-blue-600 transition min-h-[44px]"
+                      className="text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1.5 transition"
                     >
-                      <span>Manage Users</span>
-                      <FontAwesomeIcon icon={faArrowRight} className="text-xs" />
+                      <span>Manage Personnel Accounts</span>
+                      <FontAwesomeIcon icon={faArrowRight} className="text-[10px]" />
                     </button>
                   </div>
-                </section>
-              )}
+                )}
+              </section>
             </>
-          ) : null}
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center p-12 text-center bg-white rounded-2xl border border-slate-200 shadow-xs my-6">
+              <div className="size-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mb-4">
+                <FontAwesomeIcon icon={faTriangleExclamation} className="text-xl" />
+              </div>
+              <h3 className="text-base font-bold text-slate-800">Operational Metrics Unavailable</h3>
+              <p className="mt-1 text-xs text-slate-500 max-w-md">
+                {error?.message || "Could not retrieve live dashboard analytics. Please verify connectivity and retry."}
+              </p>
+              <button
+                type="button"
+                onClick={handleRefreshAll}
+                className="mt-4 px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 transition shadow-xs"
+              >
+                Retry Loading
+              </button>
+            </div>
+          ) : (
+            <div className="dashboard-loading-wrap">
+              <LoadingState message="Loading command analytics…" size="lg" />
+            </div>
+          )}
         </div>
       </main>
     </div>

@@ -206,7 +206,7 @@ def _sync_household_and_barangay(family, old_barangay_id=None):
     return residents
 
 
-def _family_query(search='', barangay_id='', assignment_status='', building_id=''):
+def _family_query(search='', barangay_id='', assignment_status='', building_id='', roster_year_id='', year=''):
     query = Family.query.join(Barangay, Family.barangay_id == Barangay.id)
     search = str(search or '').strip()
 
@@ -287,6 +287,20 @@ def _family_query(search='', barangay_id='', assignment_status='', building_id='
                 ))
             except (TypeError, ValueError):
                 query = query.filter(false())
+
+    raw_year = str(year or '').strip()
+    raw_ry_id = str(roster_year_id or '').strip()
+    if raw_ry_id:
+        try:
+            query = query.filter(Family.roster_year_id == int(raw_ry_id))
+        except (TypeError, ValueError):
+            pass
+    elif raw_year:
+        try:
+            target_year = int(raw_year)
+            query = query.join(RosterYear, Family.roster_year_id == RosterYear.id).filter(RosterYear.year == target_year)
+        except (TypeError, ValueError):
+            pass
 
     return query
 
@@ -381,6 +395,7 @@ def _family_list_rows(families):
             'barangay': family.barangay.name if family.barangay else None,
             'member_count': len(family_members),
             'resident_count': len(family_members),
+            'members': [m.to_dict() for m in family_members],
             'contact_number': family.contact_number or (first_member.contact_number if first_member else None),
             'alternate_contact': next((m.alternate_contact for m in family_members if m.alternate_contact), None),
             'address': next((member.address for member in family_members if member.address), None),
@@ -429,7 +444,14 @@ def list_families():
     }
     sort_column = allowed_sorts.get(sort_by, Family.family_code)
     order = sort_column.desc() if direction == 'desc' else sort_column.asc()
-    query = _family_query(search, barangay_id, assignment_status, building_id)
+    query = _family_query(
+        search,
+        barangay_id,
+        assignment_status,
+        building_id,
+        roster_year_id=request.args.get('roster_year_id', ''),
+        year=request.args.get('year', ''),
+    )
 
     matching_ids_subq = query.with_entities(Family.id).subquery()
     total = (
@@ -448,6 +470,21 @@ def list_families():
         .scalar()
     ) or 0
     unassigned_family_count = max(total - assigned_family_count, 0)
+    arrived_family_count = (
+        db.session.query(func.count(func.distinct(Family.id)))
+        .join(Resident, Resident.family_id == Family.id)
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+        .filter(EvacuationAssignment.checked_in_at.isnot(None))
+        .filter(Family.id.in_(db.session.query(matching_ids_subq.c.id)))
+        .scalar()
+    ) or 0
+    arrived_resident_count = (
+        db.session.query(func.count(func.distinct(Resident.id)))
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+        .filter(EvacuationAssignment.checked_in_at.isnot(None))
+        .filter(Resident.family_id.in_(db.session.query(matching_ids_subq.c.id)))
+        .scalar()
+    ) or 0
 
     if request.args.get('all') == 'true':
         families = query.order_by(order, Family.id.asc()).all()
@@ -458,6 +495,8 @@ def list_families():
             'resident_count': resident_count,
             'assigned_family_count': assigned_family_count,
             'unassigned_family_count': unassigned_family_count,
+            'arrived_family_count': arrived_family_count,
+            'arrived_resident_count': arrived_resident_count,
         })
 
     try:
@@ -474,6 +513,8 @@ def list_families():
         'resident_count': resident_count,
         'assigned_family_count': assigned_family_count,
         'unassigned_family_count': unassigned_family_count,
+            'arrived_family_count': arrived_family_count,
+            'arrived_resident_count': arrived_resident_count,
         'page': page,
         'per_page': per_page,
         'pages': (total + per_page - 1) // per_page,
@@ -483,23 +524,112 @@ def list_families():
 @families_bp.route('/api/families/export', methods=['GET'])
 @role_required('admin', 'lgu_personnel')
 def export_families():
+    export_format = request.args.get('format', 'xlsx').strip().lower()
     query = _family_query(
         request.args.get('search', ''),
         request.args.get('barangay_id', ''),
         request.args.get('assignment_status', ''),
         request.args.get('building_id', ''),
+        roster_year_id=request.args.get('roster_year_id', ''),
+        year=request.args.get('year', ''),
     )
     families = query.order_by(Family.family_code.asc(), Family.id.asc()).all()
     rows = _family_list_rows(families)
-    output = io.StringIO(newline='')
-    writer = csv.DictWriter(output, fieldnames=FAMILY_EXPORT_FIELDS)
-    writer.writeheader()
+
+    if export_format == 'csv':
+        output = io.StringIO(newline='')
+        writer = csv.DictWriter(output, fieldnames=FAMILY_EXPORT_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key) or '' for key in FAMILY_EXPORT_FIELDS})
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv; charset=utf-8',
+            headers={'Content-Disposition': 'attachment; filename="evacway-masterlist.csv"'},
+        )
+
+    # Default to Excel (.xlsx)
+    wb = Workbook()
+
+    # Sheet 1: Individual Residents
+    ws_residents = wb.active
+    ws_residents.title = 'Residents'
+    res_headers = [
+        'Family Code', 'Head of Family', 'Barangay', 'Household Contact', 'Address',
+        'Member Name', 'Relationship', 'Date of Birth', 'Gender',
+        'Is PWD', 'Disability Type', 'Is Pregnant', 'Is Lactating',
+        'Solo Parent', 'Needs Assistance', 'Medical Notes',
+        'Evacuation Center', 'Building', 'Room', 'Evacuation Status'
+    ]
+    ws_residents.append(res_headers)
+
     for row in rows:
-        writer.writerow({key: row.get(key) or '' for key in FAMILY_EXPORT_FIELDS})
+        members = row.get('members') or []
+        f_code = row.get('family_code') or ''
+        h_name = row.get('head_name') or ''
+        b_name = row.get('barangay') or ''
+        f_contact = row.get('contact_number') or ''
+        f_addr = row.get('address') or ''
+        evac_center = row.get('evacuation_center') or 'Unassigned'
+        buildings = row.get('buildings') or ''
+        rooms = row.get('rooms') or ''
+        status = row.get('evacuation_status') or 'unassigned'
+
+        if members:
+            for m in members:
+                m_name = f"{m.get('first_name', '')} {m.get('middle_name', '') or ''} {m.get('last_name', '')} {m.get('suffix', '') or ''}".strip()
+                ws_residents.append([
+                    f_code, h_name, b_name, f_contact, f_addr,
+                    m_name,
+                    m.get('relationship_to_head') or ('Head' if m.get('is_head_of_family') else 'Member'),
+                    str(m.get('date_of_birth') or ''),
+                    m.get('gender') or '',
+                    'Yes' if m.get('is_pwd') else 'No',
+                    m.get('disability_type') or '',
+                    'Yes' if m.get('is_pregnant') else 'No',
+                    'Yes' if m.get('is_lactating') else 'No',
+                    'Yes' if m.get('is_solo_parent') else 'No',
+                    'Yes' if m.get('needs_assistance') else 'No',
+                    m.get('medical_notes') or '',
+                    evac_center, buildings, rooms, status
+                ])
+        else:
+            ws_residents.append([
+                f_code, h_name, b_name, f_contact, f_addr,
+                h_name, 'Head', '', '',
+                'No', '', 'No', 'No', 'No', 'No', '',
+                evac_center, buildings, rooms, status
+            ])
+
+    # Sheet 2: Households Summary
+    ws_households = wb.create_sheet('Households Summary')
+    hh_headers = [
+        'Family Code', 'Head of Family', 'Barangay', 'Contact Number', 'Address',
+        'Total Members', 'Assigned Members', 'Evacuation Center', 'Building', 'Room', 'Status'
+    ]
+    ws_households.append(hh_headers)
+
+    for row in rows:
+        ws_households.append([
+            row.get('family_code') or '',
+            row.get('head_name') or '',
+            row.get('barangay') or '',
+            row.get('contact_number') or '',
+            row.get('address') or '',
+            row.get('member_count') or 0,
+            row.get('assigned_members') or 0,
+            row.get('evacuation_center') or 'Unassigned',
+            row.get('buildings') or '',
+            row.get('rooms') or '',
+            row.get('evacuation_status') or 'unassigned',
+        ])
+
+    output = io.BytesIO()
+    wb.save(output)
     return Response(
         output.getvalue(),
-        mimetype='text/csv; charset=utf-8',
-        headers={'Content-Disposition': 'attachment; filename="evacway-families.csv"'},
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="EvacWay-Resident-Masterlist.xlsx"'},
     )
 
 
@@ -509,15 +639,49 @@ def download_family_template():
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = 'Families'
+
+    # Comprehensive headers supporting both basic demographics and vulnerability tracking
+    headers = [
+        'Family Code', 'Head of Family', 'Barangay', 'Contact Number', 'Address',
+        'Member First Name', 'Member Middle Name', 'Member Last Name', 'Member Contact Number',
+        'Date of Birth', 'Gender', 'Relationship to Head',
+        'Is PWD', 'Disability Type', 'Is Pregnant', 'Is Lactating',
+        'Is Solo Parent', 'Needs Assistance', 'Medical Notes'
+    ]
+    sheet.append(headers)
+
+    # Sample rows for user guidance
     sheet.append([
-        'Family Code', 'Head of Family', 'Barangay', 'Contact Number',
-        'Address', 'Member First Name', 'Member Middle Name',
-        'Member Last Name', 'Member Contact Number',
+        'FAM-001', 'Juan Dela Cruz', 'Poblacion', '09171234567', 'Purok 1',
+        'Juan', '', 'Dela Cruz', '09171234567',
+        '1980-05-15', 'Male', 'Head',
+        'No', '', 'No', 'No',
+        'No', 'No', 'Hypertension'
     ])
+    sheet.append([
+        'FAM-001', 'Juan Dela Cruz', 'Poblacion', '09171234567', 'Purok 1',
+        'Maria', 'Santos', 'Dela Cruz', '09187654321',
+        '1984-08-20', 'Female', 'Spouse',
+        'Yes', 'Mobility / Wheelchair', 'No', 'No',
+        'No', 'Yes', 'Wheelchair user; needs ramp and ground floor room'
+    ])
+
+    # Instructions sheet
     instructions = workbook.create_sheet('Instructions')
-    instructions.append(['One row per family member; repeat the family fields for each member.'])
-    instructions.append(['Family Code must be unique and identical for all rows belonging to one family.'])
-    instructions.append(['Required on every row: Family Code, Head of Family, Barangay, Member First Name, Member Last Name.'])
+    instructions.append(['EvacWay Resident Roster Import Instructions'])
+    instructions.append([''])
+    instructions.append(['1. STRUCTURE: Each row represents one family member. Repeat family columns (Family Code, Head, Barangay, Address) for all members of the same household.'])
+    instructions.append(['2. REQUIRED FIELDS: Family Code, Head of Family, Barangay, Member First Name, Member Last Name.'])
+    instructions.append(['3. VULNERABILITY TRACKING (Optional but Recommended):'])
+    instructions.append(['   - Is PWD: Yes / No'])
+    instructions.append(['   - Disability Type: e.g. Mobility / Wheelchair, Visual, Hearing, Intellectual'])
+    instructions.append(['   - Is Pregnant: Yes / No'])
+    instructions.append(['   - Is Lactating: Yes / No'])
+    instructions.append(['   - Needs Assistance: Yes / No'])
+    instructions.append(['   - Medical Notes: Any chronic illness, medication, or special care requirements.'])
+    instructions.append(['4. SHELTER MATCHING: Vulnerability flags allow EvacWay to automatically match evacuees to evacuation centers with corresponding Amenities (Wheelchair Ramps, PWD Restrooms, Lactation Spaces, Ground Floor Rooms).'])
+    instructions.append(['5. BACKWARD COMPATIBILITY: Files with only the basic 9 columns are still fully accepted.'])
+
     output = io.BytesIO()
     workbook.save(output)
     return Response(
@@ -1843,23 +2007,52 @@ def add_family():
     assignment_center = None
     if assignment:
         if not isinstance(assignment, dict):
-            return jsonify({'error': 'Assignment must include a center and room'}), 400
+            return jsonify({'error': 'Assignment must include a center'}), 400
         try:
             assignment_center = db.session.get(EvacuationCenter, int(assignment.get('center_id')))
-            assignment_room = db.session.get(EvacuationCenterRoom, int(assignment.get('room_id')))
         except (TypeError, ValueError):
-            assignment_center = assignment_room = None
-        if not assignment_center or not assignment_room:
-            return jsonify({'error': 'Selected evacuation center or room was not found'}), 404
-        if not assignment_center.is_active or not assignment_room.is_active:
-            return jsonify({'error': 'Cannot assign a family to an inactive center or room'}), 400
-        if assignment_room.evacuation_center_id != assignment_center.id:
-            return jsonify({'error': 'Selected room does not belong to the selected center'}), 400
-        occupancy = EvacuationAssignment.query.filter_by(room_id=assignment_room.id).count()
-        if occupancy + len(parsed_members) + 1 > assignment_room.capacity:
-            return jsonify({
-                'error': f'Room does not have enough capacity. Available: {max(assignment_room.capacity - occupancy, 0)}, Needed: {len(parsed_members) + 1}'
-            }), 400
+            assignment_center = None
+        if not assignment_center:
+            return jsonify({'error': 'Selected evacuation center was not found'}), 404
+        if not assignment_center.is_active:
+            return jsonify({'error': 'Cannot assign a family to an inactive center'}), 400
+
+        raw_room_id = assignment.get('room_id')
+        if raw_room_id not in (None, ''):
+            try:
+                assignment_room = db.session.get(EvacuationCenterRoom, int(raw_room_id))
+            except (TypeError, ValueError):
+                assignment_room = None
+            if not assignment_room or not assignment_room.is_active:
+                return jsonify({'error': 'Cannot assign a family to an inactive or missing room'}), 400
+            if assignment_room.evacuation_center_id != assignment_center.id:
+                return jsonify({'error': 'Selected room does not belong to the selected center'}), 400
+            occupancy = EvacuationAssignment.query.filter_by(room_id=assignment_room.id).count()
+            if occupancy + len(parsed_members) + 1 > assignment_room.capacity:
+                return jsonify({
+                    'error': f'Room does not have enough capacity. Available: {max(assignment_room.capacity - occupancy, 0)}, Needed: {len(parsed_members) + 1}'
+                }), 400
+        else:
+            active_room_count = EvacuationCenterRoom.query.filter_by(
+                evacuation_center_id=assignment_center.id, is_active=True
+            ).count()
+            c_type = assignment_center.center_type or 'campus'
+            if active_room_count > 0 and c_type not in ('single_venue', 'covered_court', 'multi_purpose_hall', 'church_facility'):
+                return jsonify({'error': 'Selected evacuation center requires a room assignment'}), 400
+            current_center_assigned = (
+                db.session.query(func.count(EvacuationAssignment.id))
+                .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+                .filter(or_(
+                    EvacuationAssignment.evacuation_center_id == assignment_center.id,
+                    EvacuationCenterRoom.evacuation_center_id == assignment_center.id
+                ))
+                .scalar() or 0
+            )
+            effective_cap = assignment_center.capacity or 0
+            if effective_cap > 0 and current_center_assigned + len(parsed_members) + 1 > effective_cap:
+                return jsonify({
+                    'error': f'Center does not have enough capacity. Available: {max(effective_cap - current_center_assigned, 0)}, Needed: {len(parsed_members) + 1}'
+                }), 400
 
     duplicate_error = _family_duplicate(barangay_id, family_code, head_name)
     if duplicate_error:
@@ -1880,7 +2073,7 @@ def add_family():
         address=address,
         remarks=str(data.get('remarks') or head_data.get('remarks') or '').strip() or None,
         uploaded_by=get_jwt_identity(),
-        evacuation_status='Assigned' if assignment_room else 'Unassigned',
+        evacuation_status='Assigned' if assignment_center else 'Unassigned',
     )
 
     try:
@@ -1915,10 +2108,14 @@ def add_family():
             )
             db.session.add(resident)
             residents.append(resident)
-        if assignment_room:
+        if assignment_center:
             db.session.flush()
             db.session.add_all(
-                EvacuationAssignment(resident_id=resident.id, room_id=assignment_room.id)
+                EvacuationAssignment(
+                    resident_id=resident.id,
+                    room_id=assignment_room.id if assignment_room else None,
+                    evacuation_center_id=assignment_center.id,
+                )
                 for resident in residents
             )
         db.session.flush()
@@ -2355,20 +2552,17 @@ def assign_family(family_id):
     if not center.is_active:
         return jsonify({"error": "Cannot assign to an inactive evacuation center"}), 400
 
-    # Enforce center_type rules for room_id
+    # Enforce center_type / room structure rules for room_id
     center_type = center.center_type or 'campus'
-    if center_type in ('campus', 'private_property'):
-        # campus and private_property: room_id is REQUIRED
-        if not room_id:
-            return jsonify({"error": f"Room ID is required for {center_type} type centers"}), 400
-    elif center_type == 'single_venue':
-        # single_venue: room_id is OPTIONAL (direct assignment to center)
-        # room_id can be None for direct venue assignment
-        pass
-    else:
-        # Fallback: require room_id
-        if not room_id:
-            return jsonify({"error": "Room ID is required"}), 400
+    active_room_count = EvacuationCenterRoom.query.filter_by(
+        evacuation_center_id=center.id, is_active=True
+    ).count()
+    is_direct_venue = (
+        active_room_count == 0
+        or center_type in ('single_venue', 'covered_court', 'multi_purpose_hall', 'church_facility')
+    )
+    if not is_direct_venue and not room_id:
+        return jsonify({"error": f"Room ID is required for {center_type} type centers"}), 400
 
     room = None
     if room_id:
@@ -2495,19 +2689,17 @@ def move_family(family_id):
         if not target_center or not target_center.is_active:
             return jsonify({"error": "Target evacuation center is inactive or not found"}), 400
 
-    # Enforce center_type rules for room_id
+    # Enforce center_type / room structure rules for room_id
     target_center_type = target_center.center_type or 'campus'
-    if target_center_type in ('campus', 'private_property'):
-        # campus and private_property: room_id is REQUIRED
-        if not new_room:
-            return jsonify({"error": f"Room ID is required for {target_center_type} type centers"}), 400
-    elif target_center_type == 'single_venue':
-        # single_venue: room_id is OPTIONAL (direct assignment to center)
-        pass
-    else:
-        # Fallback: require room_id
-        if not new_room:
-            return jsonify({"error": "Room ID is required"}), 400
+    target_active_room_count = EvacuationCenterRoom.query.filter_by(
+        evacuation_center_id=target_center.id, is_active=True
+    ).count()
+    is_target_direct_venue = (
+        target_active_room_count == 0
+        or target_center_type in ('single_venue', 'covered_court', 'multi_purpose_hall', 'church_facility')
+    )
+    if not is_target_direct_venue and not new_room:
+        return jsonify({"error": f"Room ID is required for {target_center_type} type centers"}), 400
 
     # Check building status for campus type
     if target_center_type == 'campus' and new_room and new_room.building:
@@ -2803,6 +2995,16 @@ def get_roster_years():
         .all()
     )
 
+    res_counts = dict(
+        db.session.query(
+            Family.roster_year_id,
+            func.count(Resident.id)
+        )
+        .join(Resident, Resident.family_id == Family.id)
+        .group_by(Family.roster_year_id)
+        .all()
+    )
+
     years = RosterYear.query.order_by(RosterYear.year.desc()).all()
     return jsonify([
         {
@@ -2811,6 +3013,8 @@ def get_roster_years():
             'is_active': bool(y.is_active),
             'households': counts.get(y.id, 0),
             'household_count': counts.get(y.id, 0),
+            'residents': res_counts.get(y.id, 0),
+            'resident_count': res_counts.get(y.id, 0),
         }
         for y in years
     ]), 200

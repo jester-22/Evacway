@@ -63,6 +63,7 @@ export function initBuildingLayers(map, onBuildingClick = null, options = {}) {
       id: BUILDINGS_FILL_LAYER,
       type: "fill",
       source: BUILDINGS_SOURCE_ID,
+      minzoom: 14,
       paint: {
         "fill-color": [
           "coalesce",
@@ -96,6 +97,7 @@ export function initBuildingLayers(map, onBuildingClick = null, options = {}) {
       id: BUILDINGS_HALO_LAYER,
       type: "line",
       source: BUILDINGS_SOURCE_ID,
+      minzoom: 14,
       layout: {
         "line-join": "round",
         "line-cap": "round",
@@ -128,6 +130,7 @@ export function initBuildingLayers(map, onBuildingClick = null, options = {}) {
       id: BUILDINGS_OUTLINE_LAYER,
       type: "line",
       source: BUILDINGS_SOURCE_ID,
+      minzoom: 14,
       layout: {
         "line-join": "round",
         "line-cap": "round",

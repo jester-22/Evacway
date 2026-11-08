@@ -15,6 +15,12 @@ import {
   faImages,
   faCheck,
   faExpand,
+  faRotateRight,
+  faCircleCheck,
+  faBell,
+  faTruckFast,
+  faInbox,
+  faChevronRight,
 } from "@fortawesome/free-solid-svg-icons";
 import { api, BASE_URL } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
@@ -56,24 +62,82 @@ function resolveProofImageUrl(img) {
   return `${BASE_URL}${img.startsWith("/") ? "" : "/"}${img}`;
 }
 
-function getWaitingTimer(createdAt, now = Date.now()) {
-  if (!createdAt) return { text: "just now", minutes: 0 };
-  const created = new Date(createdAt).getTime();
-  if (Number.isNaN(created)) return { text: "just now", minutes: 0 };
-  const diffMs = Math.max(0, now - created);
+/**
+ * Context-aware time status formatting.
+ * For resolved alerts: shows "Resolved · 4d ago" instead of "waiting 4d".
+ * For in-progress alerts: shows "Responding · 45m".
+ * For open alerts: shows "Waiting 15m" (with urgency flags if >30m).
+ */
+function getAlertTimeStatus(item, now = Date.now()) {
+  const status = item?.status;
+  const createdAt = item?.created_at;
+  const updatedAt = item?.updated_at || item?.resolved_at || item?.created_at;
+
+  if (isResolvedStatus(status)) {
+    if (!updatedAt) {
+      return { text: "Resolved", icon: faCircleCheck, statusClass: "is-resolved", isUrgent: false };
+    }
+    const date = new Date(updatedAt);
+    const diffMs = Math.max(0, now - (Number.isNaN(date.getTime()) ? now : date.getTime()));
+    const minutes = Math.floor(diffMs / (1000 * 60));
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    let text = "Resolved";
+    if (days >= 1) text = `Resolved · ${days}d ago`;
+    else if (hours >= 1) text = `Resolved · ${hours}h ago`;
+    else text = `Resolved · ${Math.max(1, minutes)}m ago`;
+
+    return { text, icon: faCircleCheck, statusClass: "is-resolved", isUrgent: false };
+  }
+
+  if (isInProgressStatus(status)) {
+    if (!createdAt) {
+      return { text: "Responding", icon: faTruckFast, statusClass: "is-in-progress", isUrgent: false };
+    }
+    const date = new Date(createdAt);
+    const diffMs = Math.max(0, now - (Number.isNaN(date.getTime()) ? now : date.getTime()));
+    const minutes = Math.floor(diffMs / (1000 * 60));
+    const hours = Math.floor(minutes / 60);
+    const remMinutes = minutes % 60;
+
+    let text = "Responding";
+    if (hours >= 1) {
+      text = remMinutes > 0 ? `Responding · ${hours}h ${remMinutes}m` : `Responding · ${hours}h`;
+    } else {
+      text = `Responding · ${Math.max(1, minutes)}m`;
+    }
+
+    return { text, icon: faTruckFast, statusClass: "is-in-progress", isUrgent: false };
+  }
+
+  // Open / Pending
+  if (!createdAt) {
+    return { text: "Waiting for response", icon: faClock, statusClass: "is-waiting", isUrgent: false };
+  }
+  const date = new Date(createdAt);
+  const diffMs = Math.max(0, now - (Number.isNaN(date.getTime()) ? now : date.getTime()));
   const minutes = Math.floor(diffMs / (1000 * 60));
-  if (minutes < 1) return { text: "waiting < 1 min", minutes: 0 };
-  if (minutes < 60) return { text: `waiting ${minutes} min`, minutes };
+  const isUrgent = minutes >= 30;
+
+  if (minutes < 1) {
+    return { text: "Waiting < 1 min", icon: faClock, statusClass: "is-waiting", isUrgent: false };
+  }
+  if (minutes < 60) {
+    return { text: `Waiting ${minutes} min`, icon: faClock, statusClass: "is-waiting", isUrgent };
+  }
   const hours = Math.floor(minutes / 60);
   const remMinutes = minutes % 60;
   if (hours < 24) {
     return {
-      text: remMinutes > 0 ? `waiting ${hours}h ${remMinutes}m` : `waiting ${hours}h`,
-      minutes,
+      text: remMinutes > 0 ? `Waiting ${hours}h ${remMinutes}m` : `Waiting ${hours}h`,
+      icon: faClock,
+      statusClass: "is-waiting",
+      isUrgent: true,
     };
   }
   const days = Math.floor(hours / 24);
-  return { text: `waiting ${days}d`, minutes };
+  return { text: `Waiting ${days}d`, icon: faClock, statusClass: "is-waiting", isUrgent: true };
 }
 
 export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
@@ -171,10 +235,38 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
   const totalCount = requests.length;
 
   const statCards = [
-    { id: "open", label: "Open Alerts", count: openCount },
-    { id: "in_progress", label: "In Progress", count: inProgressCount },
-    { id: "resolved", label: "Resolved", count: resolvedCount },
-    { id: "all", label: "Total Requests", count: totalCount },
+    {
+      id: "open",
+      label: "Open Alerts",
+      count: openCount,
+      sub: openCount > 0 ? "Requires response" : "All clear",
+      icon: faBell,
+      variant: "open",
+    },
+    {
+      id: "in_progress",
+      label: "In Progress",
+      count: inProgressCount,
+      sub: inProgressCount > 0 ? "Responders active" : "None active",
+      icon: faTruckFast,
+      variant: "in-progress",
+    },
+    {
+      id: "resolved",
+      label: "Resolved",
+      count: resolvedCount,
+      sub: "Successfully assisted",
+      icon: faCircleCheck,
+      variant: "resolved",
+    },
+    {
+      id: "all",
+      label: "Total Requests",
+      count: totalCount,
+      sub: "All time recorded",
+      icon: faInbox,
+      variant: "total",
+    },
   ];
 
   const statusTabs = [
@@ -310,7 +402,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     selected?.family_members ??
     null;
 
-  const selectedWaiting = selected ? getWaitingTimer(selected.created_at, now) : null;
+  const selectedTimeStatus = selected ? getAlertTimeStatus(selected, now) : null;
   const currentStatusIndex = selected
     ? STATUS_OPTIONS.indexOf(selected.status)
     : -1;
@@ -327,18 +419,26 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
       {/* 1. HEADER */}
       <header className="rescue-queue-header">
         <div className="rescue-queue-title-area">
+          <span className="rescue-queue-eyebrow">Emergency Operations · Dispatch Center</span>
           <h1>Rescue Alerts</h1>
           <p className="rescue-queue-subtitle">
-            Review and respond to emergency rescue requests from residents.
+            Review and respond to emergency rescue requests from residents in real-time.
           </p>
         </div>
-        <span
-          className={`rescue-open-count ${openCount > 0 ? "is-active" : "is-zero"}`}
-          aria-live="polite"
-        >
-          <span className="rescue-open-dot" />
-          {openCount} {openCount === 1 ? "open alert" : "open alerts"}
-        </span>
+        <div className="rescue-header-right">
+          <span
+            className={`rescue-open-count ${openCount > 0 ? "is-active" : "is-zero"}`}
+            aria-live="polite"
+          >
+            <span className="rescue-open-dot" />
+            {openCount > 0 ? (
+              <span><strong>{openCount}</strong> {openCount === 1 ? "Open Alert" : "Open Alerts"}</span>
+            ) : (
+              <span>All Clear · 0 open alerts</span>
+            )}
+          </span>
+          
+        </div>
       </header>
 
       {visibleError && (
@@ -354,21 +454,24 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
       >
         {statCards.map((card) => {
           const isSelected = filterStatus === card.id;
-          const isRedAccent = card.id === "open" && card.count > 0;
           return (
             <button
               type="button"
               key={card.id}
-              className={`rescue-stat-card ${isSelected ? "is-selected" : ""}`}
+              className={`rescue-stat-card is-${card.variant} ${isSelected ? "is-selected" : ""}`}
               onClick={() => setFilterStatus(card.id)}
               aria-pressed={isSelected}
             >
-              <span className="rescue-stat-label">{card.label}</span>
-              <span
-                className={`rescue-stat-value ${isRedAccent ? "is-accent-red" : ""}`}
-              >
-                {card.count}
-              </span>
+              <div className="rescue-stat-card-top">
+                <span className="rescue-stat-label">{card.label}</span>
+                <span className={`rescue-stat-icon-wrap is-${card.variant}`}>
+                  <FontAwesomeIcon icon={card.icon} />
+                </span>
+              </div>
+              <div className="rescue-stat-card-bottom">
+                <span className="rescue-stat-value">{card.count}</span>
+                <span className="rescue-stat-hint">{card.sub}</span>
+              </div>
             </button>
           );
         })}
@@ -426,14 +529,17 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
         {/* REQUESTS LIST CONTAINER */}
         <div className="rescue-request-container">
           {loading ? (
-            <p className="rescue-queue-empty">Loading rescue requests…</p>
+            <div className="rescue-loading-state" role="status">
+              <FontAwesomeIcon icon={faRotateRight} spin />
+              <span>Loading rescue requests…</span>
+            </div>
           ) : requests.length === 0 ? (
             <div className="rescue-empty-state">
               <div className="rescue-empty-icon-wrap">
-                <FontAwesomeIcon icon={faTriangleExclamation} />
+                <FontAwesomeIcon icon={faCircleCheck} />
               </div>
               <h3>No rescue requests yet</h3>
-              <p>New requests from residents will appear here immediately.</p>
+              <p>Emergency rescue signals from residents will appear here immediately.</p>
             </div>
           ) : sortedRequests.length === 0 ? (
             <div className="rescue-empty-state">
@@ -441,7 +547,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                 <FontAwesomeIcon icon={faSearch} />
               </div>
               <h3>No matching requests</h3>
-              <p>Try adjusting your search terms or status filter.</p>
+              <p>No alerts match your current search or status filter.</p>
               <button
                 type="button"
                 className="rescue-clear-filters-btn"
@@ -476,70 +582,96 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                 const photoCount = Array.isArray(item.proof_images)
                   ? item.proof_images.length
                   : 0;
-                const waiting = getWaitingTimer(item.created_at, now);
+                const timeStatus = getAlertTimeStatus(item, now);
                 const isStillOpen = isOpenStatus(item.status);
-                const isTimerRed = isStillOpen && waiting.minutes >= 30;
+                const isResolved = isResolvedStatus(item.status);
                 const isSelected = selectedId === item.id;
 
                 return (
                   <button
                     type="button"
                     key={item.id}
-                    className={`rescue-request-row ${isStillOpen ? "is-open" : ""} ${isSelected ? "is-selected" : ""}`}
+                    className={`rescue-request-card ${isStillOpen ? "is-open" : isResolved ? "is-resolved" : "is-in-progress"} ${isSelected ? "is-selected" : ""}`}
                     onClick={() => setSelectedId(item.id)}
                     aria-label={`View details for Rescue Alert #${item.id}, requested by ${requesterName}`}
                   >
-                    <div className="rescue-row-top">
-                      <div className="rescue-row-header-info">
-                        <span className={`rescue-row-icon ${isStillOpen ? "is-open" : ""}`}>
-                          <FontAwesomeIcon icon={faTriangleExclamation} />
-                        </span>
-                        <div className="rescue-row-ident">
-                          <div className="rescue-row-name-line">
-                            <strong className="rescue-row-name">{requesterName}</strong>
-                            <span className="rescue-row-id">#{item.id}</span>
-                          </div>
-                          {requesterContact && (
-                            <span className="rescue-row-contact">
-                              <FontAwesomeIcon icon={faPhone} /> {requesterContact}
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                    {/* Status Left Pillar / Icon */}
+                    <div
+                      className={`rescue-row-icon-box ${
+                        isStillOpen ? "is-open" : isResolved ? "is-resolved" : "is-in-progress"
+                      }`}
+                      aria-hidden="true"
+                    >
+                      <FontAwesomeIcon
+                        icon={
+                          isStillOpen
+                            ? faTriangleExclamation
+                            : isResolved
+                            ? faCircleCheck
+                            : faTruckFast
+                        }
+                      />
                     </div>
 
-                    <div className="rescue-row-mid">
+                    {/* Requester Identity */}
+                    <div className="rescue-row-ident-col">
+                      <div className="rescue-row-name-line">
+                        <strong className="rescue-row-name">{requesterName}</strong>
+                        <span className="rescue-row-id">#{item.id}</span>
+                      </div>
+                      {requesterContact && (
+                        <span className="rescue-row-contact">
+                          <FontAwesomeIcon icon={faPhone} />
+                          <span>{requesterContact}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Situation & Location */}
+                    <div className="rescue-row-location-col">
                       <div className="rescue-row-pills">
                         <span className="rescue-row-barangay">
-                          <FontAwesomeIcon icon={faLocationDot} /> {barangayText}
+                          <FontAwesomeIcon icon={faLocationDot} />
+                          <span>{barangayText}</span>
                         </span>
                         {peopleCount != null && peopleCount !== "" && (
                           <span className="rescue-row-people">
-                            <FontAwesomeIcon icon={faUsers} /> {peopleCount}{" "}
-                            {Number(peopleCount) === 1 ? "person" : "people"}
+                            <FontAwesomeIcon icon={faUsers} />
+                            <span>
+                              {peopleCount} {Number(peopleCount) === 1 ? "person" : "people"}
+                            </span>
                           </span>
                         )}
                         {photoCount > 0 && (
                           <span className="rescue-row-photos">
-                            <FontAwesomeIcon icon={faImages} /> {photoCount}{" "}
-                            {photoCount === 1 ? "photo" : "photos"}
+                            <FontAwesomeIcon icon={faImages} />
+                            <span>
+                              {photoCount} {photoCount === 1 ? "photo" : "photos"}
+                            </span>
                           </span>
                         )}
                       </div>
                       {item.description && (
-                        <span className="rescue-row-desc">{item.description}</span>
+                        <p className="rescue-row-desc">
+                          "{item.description}"
+                        </p>
                       )}
                     </div>
 
-                    <div className="rescue-row-bottom">
+                    {/* Status Badge & Dynamic Time */}
+                    <div className="rescue-row-status-col">
                       <span className={`rescue-status-badge status-${item.status}`}>
+                        {isStillOpen && <span className="rescue-badge-dot" />}
                         {STATUS_LABELS[item.status] || item.status.replace("_", " ")}
                       </span>
                       <div className="rescue-row-time-meta">
                         <span
-                          className={`rescue-row-timer ${isTimerRed ? "is-urgent" : ""}`}
+                          className={`rescue-row-timer ${timeStatus.statusClass} ${
+                            timeStatus.isUrgent ? "is-urgent" : ""
+                          }`}
                         >
-                          <FontAwesomeIcon icon={faClock} /> {waiting.text}
+                          <FontAwesomeIcon icon={timeStatus.icon} />
+                          <span>{timeStatus.text}</span>
                         </span>
                         <small className="rescue-row-date">
                           {item.created_at
@@ -550,6 +682,11 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                             : ""}
                         </small>
                       </div>
+                    </div>
+
+                    {/* Action Chevron */}
+                    <div className="rescue-row-chevron" aria-hidden="true">
+                      <FontAwesomeIcon icon={faChevronRight} />
                     </div>
                   </button>
                 );
@@ -584,11 +721,15 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                     <span className={`rescue-status-badge status-${selected.status}`}>
                       {STATUS_LABELS[selected.status] || selected.status.replace("_", " ")}
                     </span>
-                    {selectedWaiting && (
+                    {selectedTimeStatus && (
                       <span
-                        className={`rescue-drawer-wait-pill ${isOpenStatus(selected.status) && selectedWaiting.minutes >= 30 ? "is-urgent" : ""}`}
+                        className={`rescue-drawer-wait-pill ${
+                          isOpenStatus(selected.status) && selectedTimeStatus.isUrgent
+                            ? "is-urgent"
+                            : ""
+                        }`}
                       >
-                        <FontAwesomeIcon icon={faClock} /> {selectedWaiting.text}
+                        <FontAwesomeIcon icon={selectedTimeStatus.icon} /> {selectedTimeStatus.text}
                       </span>
                     )}
                   </div>

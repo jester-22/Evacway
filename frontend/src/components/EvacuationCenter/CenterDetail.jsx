@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faBuilding, faMap, faPen, faPlus, faPhone, faTrash,
@@ -6,7 +7,10 @@ import {
   faCheck, faTriangleExclamation, faEdit,
   faChartPie, faPeopleGroup, faClockRotateLeft, faEllipsisVertical,
   faMapPin, faXmark, faLink,
+  faBuildingColumns, faUserPlus, faRotateLeft, faDoorOpen, faBed, faUsers, faCircleCheck,
+  faLocationDot, faCube, faWheelchair, faArrowRight, faListCheck, faMinus, faDrawPolygon, faArrowsRotate,
 } from '@fortawesome/free-solid-svg-icons'
+import { api } from '../../services/api'
 
 import { useAuth } from '../../context/AuthContext'
 import { useCenterDetails } from '../../hooks/useEvacuationQueries'
@@ -115,8 +119,8 @@ export default function CenterDetail({
   onAddBuilding,
   onAddRoom,
   onEditRoom,
-  onViewRoomMap,
   onViewBuildingMap,
+  onPlaceBuilding,
   onLinkRoom,
   onDeleteRoom,
   onMove,
@@ -181,10 +185,12 @@ export default function CenterDetail({
           <OverviewTab
             center={center}
             rooms={rooms}
+            buildings={buildings}
             centerFamilies={centerFamilies}
             onEdit={isAdmin ? onEditCenter : undefined}
             onPlaceOnMap={onPlaceOnMap}
             onAddRooms={onAddRooms}
+            onAddBuilding={isAdmin ? onAddBuilding : undefined}
           />
         </section>
         <section
@@ -200,9 +206,11 @@ export default function CenterDetail({
             buildings={buildings}
             onAddBuilding={isAdmin ? onAddBuilding : undefined}
             onAddRoom={onAddRoom}
+            onAssignHousehold={onAssignHousehold}
+            onEditCenter={onEditCenter}
             onEditRoom={onEditRoom}
-            onViewRoomMap={onViewRoomMap}
             onViewBuildingMap={onViewBuildingMap}
+            onPlaceBuilding={onPlaceBuilding}
             onLinkRoom={onLinkRoom}
             onDeleteRoom={onDeleteRoom}
           />
@@ -251,7 +259,7 @@ export function CenterInfoCard({ center, onEdit }) {
   const rows = [
     { label: 'Type of place', value: type, icon: faBuilding },
     { label: 'Building material', value: center.building_material || 'Not specified', icon: faBuilding },
-    { label: 'Accessibility', value: center.accessibility_notes || 'Not specified', icon: null },
+    { label: 'Amenities', value: center.accessibility_notes || 'Not specified', icon: null },
     { label: 'Contact', value: center.contact_number || 'Not provided', icon: faPhone },
     { label: 'Address / barangays served', value: address.length ? address.join(' · ') : 'Not set', icon: faMapPin },
   ]
@@ -297,9 +305,10 @@ export function CenterHeader({
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   const name = center.name || 'Unnamed Center'
-  const barangays = Array.isArray(center.barangays) ? center.barangays : []
-  const shown = formatBarangays(barangays, 2)
-  const remaining = plusN(barangays, 2)
+  const rawBarangays = Array.isArray(center.barangays) ? center.barangays : []
+  const allBarangays = rawBarangays
+    .map((b) => (typeof b === 'string' ? b : b?.name || ''))
+    .filter(Boolean)
   const contact = center.contact_number || null
   const isActive = Boolean(center.is_active)
 
@@ -334,9 +343,10 @@ export function CenterHeader({
       <header className="ec-detail-header">
         <nav className="ec-breadcrumb" aria-label="Breadcrumb">
           <button type="button" className="ec-breadcrumb-link" onClick={onBack}>
-            Evacuation Centers
+            <FontAwesomeIcon icon={faBuildingColumns} className="ec-breadcrumb-icon" />
+            <span>Evacuation Centers</span>
           </button>
-          <span className="ec-breadcrumb-separator">/</span>
+          <span className="ec-breadcrumb-separator">›</span>
           <span className="ec-breadcrumb-current">{name}</span>
         </nav>
 
@@ -348,40 +358,36 @@ export function CenterHeader({
             </div>
             <div className="ec-title-meta">
               <div className="ec-barangay-chips">
-                {shown.map((b) => (
-                  <span key={b} className="ds-chip ds-chip--neutral" style={{ fontSize: 'var(--text-xs)', padding: '2px 8px' }}>
-                    {b}
+                {allBarangays.map((b) => (
+                  <span key={b} className="ec-meta-chip">
+                    <FontAwesomeIcon icon={faMapPin} className="ec-meta-chip-icon" />
+                    <span>{b}</span>
                   </span>
                 ))}
-                {remaining > 0 && (
-                  <span className="ds-chip ds-chip--neutral" style={{ fontSize: 'var(--text-xs)', padding: '2px 8px' }}>
-                    +{remaining}
-                  </span>
-                )}
               </div>
               {contact && (
-                <a href={'tel:' + contact} className="ec-contact-link" title={'Call ' + contact}>
-                  <FontAwesomeIcon icon={faPhone} size="xs" style={{ marginRight: 'var(--space-1)' }} />
-                  {contact}
+                <a href={'tel:' + contact} className="ec-contact-pill" title={'Call ' + contact}>
+                  <FontAwesomeIcon icon={faPhone} />
+                  <span>{contact}</span>
                 </a>
               )}
             </div>
           </div>
 
           <div className="ec-title-actions">
-            <button type="button" className="ds-btn ds-btn--primary" onClick={onAssignHousehold}>
-              <FontAwesomeIcon icon={faPlus} size="xs" style={{ marginRight: 'var(--space-1)' }} />
-              Assign Household
+            <button type="button" className="ec-btn-primary-action" onClick={onAssignHousehold}>
+              <FontAwesomeIcon icon={faPlus} />
+              <span>Assign Household</span>
             </button>
-            <div className="ec-secondary">
-              <button type="button" className="ds-btn ds-btn--secondary" onClick={onViewMap}>
-                <FontAwesomeIcon icon={faMap} size="xs" style={{ marginRight: 'var(--space-1)' }} />
-                View on map
+            <div className="ec-secondary-actions">
+              <button type="button" className="ec-btn-secondary-action" onClick={onViewMap}>
+                <FontAwesomeIcon icon={faMap} />
+                <span>View on map</span>
               </button>
               {isAdmin && (
-                <button type="button" className="ds-btn ds-btn--secondary" onClick={onEditCenter}>
-                  <FontAwesomeIcon icon={faPen} size="xs" style={{ marginRight: 'var(--space-1)' }} />
-                  Edit center
+                <button type="button" className="ec-btn-secondary-action" onClick={onEditCenter}>
+                  <FontAwesomeIcon icon={faPen} />
+                  <span>Edit center</span>
                 </button>
               )}
             </div>
@@ -418,27 +424,66 @@ export function KpiStrip({ capacity = 0, assigned = 0, checkedIn = 0, spaceLeft 
 
   return (
     <div className="ec-kpi-strip">
-      <KpiCardShared label="Capacity" value={cap > 0 ? cap : '—'} helper="Total people it can shelter" />
-      <KpiCardShared label="Assigned" value={asg} helper={cap > 0 ? asg + ' of ' + cap + ' assigned' : 'Total assigned'} percent={cap > 0 ? pctAssigned : null} barVariant="brand" />
-      <KpiCardShared label="Space left" value={left} helper="People it can still take" />
-      <KpiCardShared label="Checked in" value={cin} helper={asg > 0 ? cin + ' of ' + asg + ' assigned have arrived' : 'No one assigned yet'} percent={asg > 0 ? pctCheckedIn : null} barVariant="success" />
+      <KpiCardShared
+        label="Capacity"
+        value={cap > 0 ? cap : '—'}
+        helper="Total people it can shelter"
+        icon={faBuildingColumns}
+        theme="blue"
+      />
+      <KpiCardShared
+        label="Assigned"
+        value={asg}
+        helper={cap > 0 ? `${asg} of ${cap} assigned` : 'Total assigned'}
+        percent={cap > 0 ? pctAssigned : null}
+        icon={faUserPlus}
+        theme="indigo"
+      />
+      <KpiCardShared
+        label="Space Left"
+        value={left}
+        helper="People it can still take"
+        icon={faDoorOpen}
+        theme="emerald"
+      />
+      <KpiCardShared
+        label="Checked In"
+        value={cin}
+        helper={asg > 0 ? `${cin} of ${asg} arrived` : 'No one assigned yet'}
+        percent={asg > 0 ? pctCheckedIn : null}
+        icon={faCircleCheck}
+        theme="amber"
+      />
     </div>
   )
 }
 
-function KpiCardShared({ label, value, helper, percent, barVariant = 'brand', className = '' }) {
+function KpiCardShared({ label, value, helper, percent, icon, theme = 'blue', className = '' }) {
   return (
-    <div className={`ds-card ${className}`.trim()}>
-      <div className="ds-kpi">
-        <span className="ds-kpi__label">{label}</span>
-        <span className="ds-kpi__value" style={{ fontFamily: 'var(--font-mono)' }}>{value}</span>
-        {percent != null && (
-          <div className="ds-progress ec-kpi-progress" role="progressbar" aria-valuenow={percent}>
-            <div className={`ds-progress__bar ec-kpi-progress__bar ec-kpi-progress--${barVariant}`} style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
+    <div className={`ec-kpi-card ec-kpi-card--${theme} ${className}`.trim()}>
+      <div className="ec-kpi-card-header">
+        <span className="ec-kpi-label">{label}</span>
+        {icon && (
+          <div className={`ec-kpi-icon-bubble ec-kpi-icon-bubble--${theme}`}>
+            <FontAwesomeIcon icon={icon} />
           </div>
         )}
-        {helper && <span className="ds-kpi__helper">{helper}</span>}
       </div>
+      <div className="ec-kpi-val-row">
+        <span className="ec-kpi-val">{value}</span>
+        {percent != null && (
+          <span className={`ec-kpi-badge ec-kpi-badge--${theme}`}>{percent}%</span>
+        )}
+      </div>
+      {percent != null && (
+        <div className="ec-kpi-progress-track" role="progressbar" aria-valuenow={percent}>
+          <div
+            className={`ec-kpi-progress-fill ec-kpi-progress-fill--${theme}`}
+            style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
+          />
+        </div>
+      )}
+      {helper && <span className="ec-kpi-helper">{helper}</span>}
     </div>
   )
 }
@@ -481,7 +526,7 @@ export function SectionTabs({ activeKey, counts = {}, onSelect, className = '' }
     <nav
       role="tablist"
       aria-label="Center detail sections"
-      className={`ds-tabs ${className}`.trim()}
+      className={`ec-modern-tabs ${className}`.trim()}
       onKeyDown={handleKeyDown}
     >
       {CENTER_TABS.map((tab) => {
@@ -496,12 +541,15 @@ export function SectionTabs({ activeKey, counts = {}, onSelect, className = '' }
             aria-controls={`ec-tabpanel-${tab.key}`}
             aria-selected={isActive}
             tabIndex={isActive ? 0 : -1}
-            className={`ds-tab ${isActive ? 'is-active' : ''}`}
+            className={`ec-modern-tab ${isActive ? 'is-active' : ''}`}
             onClick={() => onSelect(tab.key)}
           >
-            <FontAwesomeIcon icon={ICONS_MAP[tab.key]} size="xs" /> {tab.label}
+            <FontAwesomeIcon icon={ICONS_MAP[tab.key]} className="ec-modern-tab-icon" />
+            <span className="ec-modern-tab-label">{tab.label}</span>
             {count != null && (
-              <span className="ec-tab-count">{count}</span>
+              <span className={`ec-modern-tab-badge ${isActive ? 'is-active' : ''}`}>
+                {count}
+              </span>
             )}
           </button>
         )
@@ -533,7 +581,7 @@ const VULN_LABELS = {
   senior: 'Senior',
 }
 
-export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, onPlaceOnMap, onAddRooms }) {
+export function OverviewTab({ center, rooms = [], buildings = [], centerFamilies = [], onEdit, onPlaceOnMap, onAddRooms, onAddBuilding }) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
 
@@ -547,12 +595,12 @@ export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, o
   }
 
   const infoRows = [
-    { label: 'Type of place', value: TYPE_LABELS[center.center_type || 'campus'] || 'Center' },
-    { label: 'Building material', value: center.building_material || 'Not specified' },
-    { label: 'Accessibility', value: center.accessibility_notes || 'Not specified' },
-    { label: 'Contact', value: center.contact_number || 'Not provided' },
-    { label: 'Barangays served', value: barangays.length ? barangays.map((b) => (typeof b === 'string' ? b : b.name || b)).join(', ') : 'Not set' },
-    { label: 'Address', value: addressParts.length ? addressParts.join(' · ') : 'Not set' },
+    { label: 'Type of place', value: TYPE_LABELS[center.center_type || 'campus'] || 'Center', icon: faBuilding },
+    { label: 'Building material', value: center.building_material || 'Concrete / Standard', icon: faCube },
+    { label: 'Amenities', value: center.accessibility_notes || 'Standard amenities', icon: faWheelchair },
+    { label: 'Contact', value: center.contact_number || 'Not provided', icon: faPhone },
+    { label: 'Barangays served', value: barangays.length ? barangays.map((b) => (typeof b === 'string' ? b : b.name || b)).join(', ') : 'Not set', icon: faLocationDot },
+    { label: 'Address', value: addressParts.length ? addressParts.join(' · ') : 'Not set', icon: faMapPin },
   ]
 
   const breakdown = Array.isArray(center.barangay_breakdown) ? center.barangay_breakdown : []
@@ -564,31 +612,50 @@ export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, o
   return (
     <div className="ec-overview ec-two-col">
       <div className="ec-col-left">
-        <div className="ds-card ec-info-card">
-          <div className="ec-overview-title-row">
-            <h2>Center Information</h2>
+        <div className="ec-info-card">
+          <div className="ec-info-card-header">
+            <div className="ec-info-header-left">
+              <div className="ec-info-icon-bubble">
+                <FontAwesomeIcon icon={faBuildingColumns} />
+              </div>
+              <div>
+                <h3 className="ec-info-card-title">Center Information</h3>
+                <p className="ec-info-card-sub">Core venue details and operational specifications</p>
+              </div>
+            </div>
             {isAdmin && onEdit && (
-              <button type="button" className="ds-btn ds-btn--ghost ds-btn--sm" onClick={onEdit}>
-                <FontAwesomeIcon icon={faEdit} size="xs" style={{ marginLeft: 'var(--space-1)' }} />
-                Edit
+              <button type="button" className="ec-info-edit-btn" onClick={onEdit}>
+                <FontAwesomeIcon icon={faPen} size="xs" />
+                <span>Edit</span>
               </button>
             )}
           </div>
-          <dl className="ec-def-list">
+
+          <div className="ec-info-grid">
             {infoRows.map((row) => (
-              <div key={row.label} className="ec-def-row">
-                <dt className="ec-def-term">{row.label}</dt>
-                <dd className="ec-def-value">{row.value}</dd>
+              <div key={row.label} className="ec-info-tile">
+                <div className="ec-info-tile-icon" aria-hidden="true">
+                  <FontAwesomeIcon icon={row.icon} />
+                </div>
+                <div className="ec-info-tile-content">
+                  <span className="ec-info-tile-label">{row.label}</span>
+                  <span className="ec-info-tile-value">{row.value}</span>
+                </div>
               </div>
             ))}
-          </dl>
+          </div>
         </div>
       </div>
       <div className="ec-col-right">
         <ReadinessChecklist
-          center={center}
+          center={{
+            ...center,
+            room_count: center.room_count ?? center.total_rooms ?? rooms.length,
+            building_count: center.building_count ?? buildings.length,
+          }}
           onPlaceOnMap={onPlaceOnMap}
           onAddRooms={onAddRooms}
+          onAddBuilding={onAddBuilding}
           onSetEntrance={onEdit}
           onEditContact={onEdit}
           onEditAccessibility={onEdit}
@@ -597,25 +664,23 @@ export function OverviewTab({ center, rooms = [], centerFamilies = [], onEdit, o
     </div>
   )
 }
-export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding, onAddRoom, onEditRoom, onViewRoomMap, onViewBuildingMap, onLinkRoom, onDeleteRoom }) {
+export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding, onAddRoom, onEditRoom, onViewBuildingMap, onPlaceBuilding, onLinkRoom, onDeleteRoom, onAssignHousehold, onEditCenter }) {
   const isSingleVenue = center?.center_type === 'single_venue'
   const isPrivateProperty = center?.center_type === 'private_property'
 
-  // For private_property, don't group by building - just show all rooms
-  // For campus, group rooms by building_id
-  // For single_venue, return empty array (handled by early return in render)
+  const centerAssigned = Number(center?.assigned ?? center?.total_assigned ?? center?.occupied ?? 0)
+  const centerCapacity = Number(center?.capacity || 0)
+  const centerAvailable = Math.max(centerCapacity - centerAssigned, 0)
+
   const groups = useMemo(() => {
-    // Single venue: no rooms/buildings structure
     if (isSingleVenue) {
       return [];
     }
 
     if (isPrivateProperty) {
-      // Private property: single group with all rooms, no buildings
       return [{ building: null, rooms: rooms }];
     }
 
-    // Campus: group by building
     const buildingMap = new Map();
     buildings.forEach((b) => buildingMap.set(String(b.id), { building: b, rooms: [] }));
     buildingMap.set('unassigned', { building: null, rooms: [] });
@@ -626,9 +691,8 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
       group.rooms.push(room);
     });
 
-    // Convert to array, sort: named buildings first (by name), then Unassigned last
     return Array.from(buildingMap.entries())
-      .filter(([, v]) => v.building || v.rooms.length > 0) // show building even if empty, but skip unassigned if empty
+      .filter(([, v]) => v.building || v.rooms.length > 0)
       .sort((a, b) => {
         if (a[0] === 'unassigned') return 1;
         if (b[0] === 'unassigned') return -1;
@@ -640,30 +704,91 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
   }, [isSingleVenue, isPrivateProperty, rooms, buildings]);
 
   return (
-    <div className="ec-structure">
+    <div className="ec-structure-card">
       <div className="ec-structure-header">
-        <h2>Center Structure</h2>
+        <div className="ec-structure-title-wrap">
+          <div className="ec-structure-icon-bubble">
+            <FontAwesomeIcon icon={faBuildingColumns} />
+          </div>
+          <div>
+            <h3 className="ec-structure-title">Center Structure</h3>
+            <p className="ec-structure-sub">
+              {isSingleVenue
+                ? 'Direct open-venue assignment architecture'
+                : isPrivateProperty
+                  ? 'Individual rooms allocation'
+                  : 'Campus building and room breakdown'}
+            </p>
+          </div>
+        </div>
+
         <div className="ec-structure-actions">
           {!isSingleVenue && !isPrivateProperty && onAddBuilding && (
-            <button type="button" className="ds-btn ds-btn--secondary" onClick={onAddBuilding}>
-              <FontAwesomeIcon icon={faBuilding} size="xs" style={{ marginRight: 'var(--space-1)' }} />
-              Add building
+            <button type="button" className="ec-btn-secondary" onClick={onAddBuilding}>
+              <FontAwesomeIcon icon={faBuilding} size="xs" />
+              <span>Add building</span>
             </button>
           )}
           {!isSingleVenue && onAddRoom && (
-            <button type="button" className="ds-btn ds-btn--primary" onClick={onAddRoom}>
-              <FontAwesomeIcon icon={faPlus} size="xs" style={{ marginRight: 'var(--space-1)' }} />
-              Add room
+            <button type="button" className="ec-btn-primary" onClick={onAddRoom}>
+              <FontAwesomeIcon icon={faPlus} size="xs" />
+              <span>Add room</span>
             </button>
           )}
         </div>
       </div>
+
       {isSingleVenue ? (
-        <EmptyState
-          icon={faBuilding}
-          title="Single venue"
-          text="This center is a single venue (chapel, plaza, covered court). No buildings or rooms are required. Families are assigned directly to the venue."
-        />
+        <div className="ec-single-venue-content">
+          <div className="ec-single-venue-hero">
+            <div className="ec-single-venue-icon-circle">
+              <FontAwesomeIcon icon={faBuildingColumns} />
+            </div>
+            <div className="ec-single-venue-hero-text">
+              <div className="ec-single-venue-badge-row">
+                <span className="ec-single-venue-badge">Single Venue Architecture</span>
+                <span className="ec-single-venue-subbadge">Direct Center Model</span>
+              </div>
+              <h4 className="ec-single-venue-name">{center?.name || 'Open Unified Facility'}</h4>
+              <p className="ec-single-venue-desc">
+                This center is configured as a single open venue (such as a chapel, multipurpose gym, or covered court). No individual rooms or separate buildings are required. Households are assigned and managed directly to the center.
+              </p>
+            </div>
+          </div>
+
+          <div className="ec-single-venue-metrics">
+            <div className="ec-svm-card">
+              <span className="ec-svm-label">Venue Capacity</span>
+              <span className="ec-svm-value">{centerCapacity}</span>
+              <span className="ec-svm-desc">Total sheltering threshold</span>
+            </div>
+            <div className="ec-svm-card">
+              <span className="ec-svm-label">Assigned Evacuees</span>
+              <span className="ec-svm-value">{centerAssigned}</span>
+              <span className="ec-svm-desc">People currently allocated</span>
+            </div>
+            <div className="ec-svm-card">
+              <span className="ec-svm-label">Available Capacity</span>
+              <span className="ec-svm-value is-available">{centerAvailable}</span>
+              <span className="ec-svm-desc">Spaces ready for placement</span>
+            </div>
+          </div>
+
+          <div className="ec-single-venue-actions">
+            {onAssignHousehold && (
+              <button type="button" className="ec-btn-primary" onClick={onAssignHousehold}>
+                <FontAwesomeIcon icon={faPlus} size="xs" />
+                <span>Assign Household</span>
+              </button>
+            )}
+            {onEditCenter && (
+              <button type="button" className="ec-btn-secondary" onClick={onEditCenter}>
+                <FontAwesomeIcon icon={faPen} size="xs" />
+                <span>Edit Center Details</span>
+              </button>
+            )}
+          </div>
+        </div>
       ) : isPrivateProperty ? (
         <div className="ec-structure-groups">
           {groups.map(({ rooms: groupRooms }) => (
@@ -712,19 +837,7 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
                                 <FontAwesomeIcon icon={faPen} size="xs" />
                               </button>
                             )}
-                            {onViewBuildingMap && room.building_id && (
-                              <button
-                                type="button"
-                                className="ds-btn ds-btn--ghost ds-btn--icon"
-                                onClick={() => {
-                                  const bldg = buildings.find((b) => b.id === room.building_id);
-                                  if (bldg) onViewBuildingMap(bldg);
-                                }}
-                                title="Show building on map"
-                              >
-                                <FontAwesomeIcon icon={faBuilding} size="xs" />
-                              </button>
-                            )}
+
                             {/* No Link to building for private_property */}
                             {onDeleteRoom && (
                               <button
@@ -750,12 +863,74 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
         <EmptyState icon={faBuilding} title="No rooms yet" text="Add a building, then add rooms to it." />
       ) : (
         <div className="ec-structure-groups">
-          {groups.map(({ building, rooms: groupRooms }) => (
-            <div key={building?.id || 'unassigned'} className="ec-structure-group">
-              <div className="ec-structure-building">
-                <h3>{building?.name || 'Unassigned rooms'}</h3>
-                {building?.notes && <p className="ec-building-notes">{building.notes}</p>}
-              </div>
+          {groups.map(({ building, rooms: groupRooms }) => {
+            const isUnassigned = !building || !building.id;
+            const isMapped = !isUnassigned && Boolean(
+              building.is_mapped ||
+              building.properties?.is_mapped ||
+              (building.geometry && building.geometry.coordinates && building.geometry.coordinates.length > 0)
+            );
+
+            return (
+              <div key={building?.id || 'unassigned'} className="ec-structure-group">
+                <div className="ec-structure-building">
+                  <div className="ec-structure-building-info">
+                    <div className="ec-structure-building-title-row">
+                      <FontAwesomeIcon icon={faBuilding} className="ec-building-header-icon" />
+                      <h3 className="ec-building-title">{building?.name || 'Unassigned rooms'}</h3>
+                      {!isUnassigned && (
+                        <span className={`ec-building-map-pill ${isMapped ? 'is-mapped' : 'is-unmapped'}`}>
+                          <span className="ec-building-map-dot" />
+                          {isMapped ? 'Mapped' : 'Not placed'}
+                        </span>
+                      )}
+                    </div>
+                    {building?.notes && <p className="ec-building-notes">{building.notes}</p>}
+                  </div>
+
+                  {!isUnassigned && (
+                    <div className="ec-structure-building-actions">
+                      {isMapped ? (
+                        <>
+                          {onViewBuildingMap && (
+                            <button
+                              type="button"
+                              className="ec-btn-building-action is-view"
+                              onClick={() => onViewBuildingMap(building)}
+                              title={`View ${building.name} on the map`}
+                            >
+                              <FontAwesomeIcon icon={faLocationDot} size="xs" />
+                              <span>View on map</span>
+                            </button>
+                          )}
+                          {onPlaceBuilding && (
+                            <button
+                              type="button"
+                              className="ec-btn-building-action is-remap"
+                              onClick={() => onPlaceBuilding(building, 'remap')}
+                              title={`Remap polygon for ${building.name}`}
+                            >
+                              <FontAwesomeIcon icon={faArrowsRotate} size="xs" />
+                              <span>Remap</span>
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        onPlaceBuilding && (
+                          <button
+                            type="button"
+                            className="ec-btn-building-action is-place"
+                            onClick={() => onPlaceBuilding(building, 'place_building')}
+                            title={`Place ${building.name} footprint on map`}
+                          >
+                            <FontAwesomeIcon icon={faDrawPolygon} size="xs" />
+                            <span>Place building</span>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  )}
+                </div>
               {groupRooms.length === 0 ? (
                 <p className="ec-empty-note">No rooms in this building yet.</p>
               ) : (
@@ -788,19 +963,7 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
                                 <FontAwesomeIcon icon={faPen} size="xs" />
                               </button>
                             )}
-                            {onViewBuildingMap && room.building_id && (
-                              <button
-                                type="button"
-                                className="ds-btn ds-btn--ghost ds-btn--icon"
-                                onClick={() => {
-                                  const bldg = buildings.find((b) => b.id === room.building_id);
-                                  if (bldg) onViewBuildingMap(bldg);
-                                }}
-                                title="Show building on map"
-                              >
-                                <FontAwesomeIcon icon={faBuilding} size="xs" />
-                              </button>
-                            )}
+
                             {onLinkRoom && (
                               <button
                                 type="button"
@@ -829,42 +992,158 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
                 </table>
               )}
             </div>
-          ))}
-        </div>
-      )}
-    </div>
+          )
+        })}
+      </div>
+    )}
+  </div>
   );
 }
 
 export function HouseholdsTab({ center, centerFamilies = [], rooms = [], onAssignHousehold, onMove, loading = false }) {
+  const queryClient = useQueryClient()
+  const [loadingFamId, setLoadingFamId] = useState(null)
+  const totalMembers = centerFamilies.reduce((sum, f) => sum + Number(f.member_count || f.family_members || 1), 0)
+  const checkedInCount = centerFamilies.filter((f) => f.is_checked_in).length
+
+  const handleCheckInToggle = async (fam) => {
+    const centerId = center?.id ?? center?.properties?.id
+    const familyId = fam.id ?? fam.family_id
+    if (!centerId || !familyId) return
+
+    const action = fam.is_checked_in ? 'check_out' : 'check_in'
+    setLoadingFamId(familyId)
+    try {
+      await api.updateEvacueeCheckIn(centerId, { family_id: familyId, action, method: 'manual' })
+      await queryClient.invalidateQueries({ queryKey: ['evacuation-center-details'] })
+      await queryClient.invalidateQueries({ queryKey: ['evacuation-centers'] })
+      await queryClient.invalidateQueries({ queryKey: ['evacuee-check-in-list'] })
+    } catch (err) {
+      alert(err.message || 'Failed to update check-in status.')
+    } finally {
+      setLoadingFamId(null)
+    }
+  }
+
   return (
-    <div className="ec-households">
-      <div className="ec-households-header">
-        <h2>Households</h2>
+    <div className="ec-households-card">
+      <div className="ec-households-card-header">
+        <div className="ec-households-header-left">
+          <div className="ec-households-title-wrap">
+            <h2 className="ec-households-card-title">Households</h2>
+            <span className="ec-badge-count">{centerFamilies.length}</span>
+          </div>
+          <p className="ec-households-card-sub">
+            {totalMembers} total individuals across {centerFamilies.length} {centerFamilies.length === 1 ? 'household' : 'households'} · {checkedInCount} checked in
+          </p>
+        </div>
       </div>
+
       {centerFamilies.length === 0 ? (
-        <EmptyState icon={faEdit} title="No households assigned" text="Households assigned to this center will appear here." />
+        <EmptyState icon={faPeopleGroup} title="No households assigned" text="Households assigned to this evacuation center will appear here." />
       ) : (
-        <table className="ds-table ec-households-table ds-table--stack">
-          <thead>
-            <tr>
-              <th scope="col">Household</th>
-              <th scope="col">Room</th>
-              <th scope="col">Members</th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {centerFamilies.map((fam) => (
-              <tr key={fam.id}>
-                <td>{fam.household_head_name || fam.head_name || 'Unnamed'}</td>
-                <td>{fam.room_number || 'Not assigned'}</td>
-                <td>{fam.member_count || fam.family_members || 1}</td>
-                <td>{fam.is_checked_in ? 'Checked in' : 'Not arrived'}</td>
+        <div className="ec-table-container">
+          <table className="ec-modern-table">
+            <thead>
+              <tr>
+                <th scope="col" style={{ width: '32%' }}>HOUSEHOLD</th>
+                <th scope="col" style={{ width: '18%' }}>ROOM</th>
+                <th scope="col" style={{ width: '14%' }}>MEMBERS</th>
+                <th scope="col" style={{ width: '18%' }}>STATUS</th>
+                <th scope="col" style={{ width: '18%', textAlign: 'right' }}>STAFF ACTION</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {centerFamilies.map((fam) => {
+                const headName = fam.household_head_name || fam.head_name || 'Unnamed'
+                const initials = headName
+                  .split(' ')
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map((n) => n[0].toUpperCase())
+                  .join('') || 'HH'
+                const memberCount = fam.member_count || fam.family_members || 1
+                const isCheckedIn = Boolean(fam.is_checked_in)
+                const room = fam.room_number
+                const isRowLoading = loadingFamId === (fam.id ?? fam.family_id)
+
+                return (
+                  <tr key={fam.id} className="ec-table-row">
+                    <td>
+                      <div className="ec-household-user-cell">
+                        <div className="ec-avatar-circle" aria-hidden="true">
+                          {initials}
+                        </div>
+                        <div className="ec-household-text">
+                          <span className="ec-household-name">{headName}</span>
+                          <span className="ec-household-role">Household Head</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      {room && room !== 'Not assigned' ? (
+                        <span className="ec-room-pill is-assigned">
+                          <FontAwesomeIcon icon={faDoorOpen} />
+                          <span>{room}</span>
+                        </span>
+                      ) : (
+                        <span className="ec-room-pill is-unassigned">
+                          <span>Not assigned</span>
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <span className="ec-members-chip">
+                        <FontAwesomeIcon icon={faUsers} />
+                        <span>{memberCount}</span>
+                      </span>
+                    </td>
+                    <td>
+                      {isCheckedIn ? (
+                        <span className="ec-status-chip is-checked-in">
+                          <span className="ec-dot green" />
+                          <span>Checked in</span>
+                        </span>
+                      ) : (
+                        <span className="ec-status-chip is-not-arrived">
+                          <span className="ec-dot amber" />
+                          <span>Not arrived</span>
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {isCheckedIn ? (
+                        <button
+                          type="button"
+                          className="ds-btn ds-btn--outline"
+                          style={{ height: '32px', fontSize: '12px', padding: '0 10px', gap: '5px' }}
+                          onClick={() => handleCheckInToggle(fam)}
+                          disabled={isRowLoading}
+                          title="Undo check-in"
+                        >
+                          <FontAwesomeIcon icon={faRotateLeft} />
+                          <span>Undo</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ds-btn ds-btn--primary"
+                          style={{ height: '32px', fontSize: '12px', padding: '0 12px', background: '#16a34a', borderColor: '#16a34a', gap: '5px' }}
+                          onClick={() => handleCheckInToggle(fam)}
+                          disabled={isRowLoading}
+                          title="Mark arrived and checked in"
+                        >
+                          <FontAwesomeIcon icon={faCheck} />
+                          <span>Check In</span>
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
@@ -872,49 +1151,126 @@ export function HouseholdsTab({ center, centerFamilies = [], rooms = [], onAssig
 export function ActivityTab({ center }) {
   const [typeFilter, setTypeFilter] = useState('all')
   const [centerLogs, setCenterLogs] = useState([])
-  const [users, setUsers] = useState([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
 
-  const centerName = center?.name || ''
+  useEffect(() => {
+    let mounted = true
+    async function fetchLogs() {
+      try {
+        setLoading(true)
+        const allLogs = await api.getLogs()
+        if (!mounted) return
+        if (Array.isArray(allLogs)) {
+          const cName = (center?.name || '').toLowerCase()
+          const matched = allLogs.filter((l) => {
+            if (!l.action) return false
+            const act = l.action.toLowerCase()
+            return act.includes(cName) || act.includes('evacuation center') || act.includes('assigned family') || act.includes('unassigned')
+          })
+          setCenterLogs(matched.length > 0 ? matched : allLogs.slice(0, 15))
+        }
+      } catch (err) {
+        console.error('Failed to load center activity logs:', err)
+      } finally {
+        if (mounted) setLoading(false)
+      }
+    }
+    fetchLogs()
+    return () => {
+      mounted = false
+    }
+  }, [center?.id, center?.name])
+
+  const filteredLogs = useMemo(() => {
+    if (typeFilter === 'all') return centerLogs
+    if (typeFilter === 'assignments') {
+      return centerLogs.filter((l) => (l.action || '').toLowerCase().includes('assign'))
+    }
+    if (typeFilter === 'updates') {
+      return centerLogs.filter((l) => !(l.action || '').toLowerCase().includes('assign'))
+    }
+    return centerLogs
+  }, [centerLogs, typeFilter])
 
   return (
-    <div className="ec-activity">
-      <div className="ec-activity-header">
-        <div className="ec-activity-title-row">
-          <FontAwesomeIcon icon={faEdit} size="xs" className="ec-activity-title-icon" />
-          <h2 className="ec-activity-title">Activity</h2>
+    <div className="ec-activity-card">
+      <div className="ec-activity-card-header">
+        <div className="ec-activity-header-left">
+          <div className="ec-activity-icon-bubble">
+            <FontAwesomeIcon icon={faClockRotateLeft} />
+          </div>
+          <div>
+            <h3 className="ec-activity-card-title">Activity & Audit Log</h3>
+            <p className="ec-activity-card-sub">Chronological history of allocations, updates, and events</p>
+          </div>
         </div>
+
         <div className="ec-activity-chips">
-          <button type="button" className={`ec-activity-chip ${typeFilter === 'all' ? 'ec-activity-chip--active' : ''}`} onClick={() => setTypeFilter('all')} aria-pressed={typeFilter === 'all'}>
+          <button
+            type="button"
+            className={`ec-activity-chip ${typeFilter === 'all' ? 'is-active' : ''}`}
+            onClick={() => setTypeFilter('all')}
+          >
             All <span className="ec-activity-chip-count">{centerLogs.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`ec-activity-chip ${typeFilter === 'assignments' ? 'is-active' : ''}`}
+            onClick={() => setTypeFilter('assignments')}
+          >
+            Assignments
+          </button>
+          <button
+            type="button"
+            className={`ec-activity-chip ${typeFilter === 'updates' ? 'is-active' : ''}`}
+            onClick={() => setTypeFilter('updates')}
+          >
+            Updates
           </button>
         </div>
       </div>
-      <div className="ec-activity-list" role="list">
+
+      <div className="ec-activity-content">
         {loading ? (
-          <div className="ec-activity-skeleton">
-            <div className="ds-skeleton ds-skeleton--line" style={{ height: 'var(--text-xs)', width: '60%' }} />
-            <div className="ds-skeleton ds-skeleton--line" style={{ height: 'var(--text-xs)', width: '80%' }} />
+          <div className="ec-activity-loading">
+            <div className="ec-activity-spinner" />
+            <p>Loading activity history...</p>
           </div>
-        ) : centerLogs.length === 0 ? (
-          <EmptyState icon={faEdit} title="No activity yet" text="Assignments, moves, check-ins and center edits for this center will appear here." />
+        ) : filteredLogs.length === 0 ? (
+          <div className="ec-activity-empty">
+            <div className="ec-activity-empty-bubble">
+              <FontAwesomeIcon icon={faClockRotateLeft} />
+            </div>
+            <h4 className="ec-activity-empty-title">No Activity Recorded Yet</h4>
+            <p className="ec-activity-empty-text">
+              Household allocations, transfers, evacuee check-ins, and detail updates for <strong>{center?.name || 'this center'}</strong> will automatically appear here.
+            </p>
+          </div>
         ) : (
-          <div>
-            {centerLogs.map((log) => {
-              const name = 'Admin'
+          <div className="ec-activity-timeline" role="list">
+            {filteredLogs.map((log) => {
               const sentence = String(log.action || '')
-              const when = new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              const when = log.timestamp
+                ? new Date(log.timestamp).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : 'Recent'
+
+              const isAssign = sentence.toLowerCase().includes('assign')
+              const isDanger = sentence.toLowerCase().includes('delete') || sentence.toLowerCase().includes('remov')
+
               return (
                 <div key={log.id} className="ec-activity-item" role="listitem">
-                  <div className="ec-activity-icon" aria-hidden="true">
-                    <FontAwesomeIcon icon={faEdit} />
+                  <div className={`ec-activity-bullet ${isAssign ? 'is-assign' : isDanger ? 'is-danger' : 'is-info'}`} aria-hidden="true">
+                    <FontAwesomeIcon icon={isAssign ? faUsers : faClockRotateLeft} />
                   </div>
-                  <div className="ec-activity-body">
-                    <div className="ec-activity-sentence" title={sentence}>
-                      {sentence}
-                    </div>
+                  <div className="ec-activity-item-card">
+                    <p className="ec-activity-sentence">{sentence}</p>
                     <div className="ec-activity-meta">
-                      <span className="ec-activity-who">by {name}</span>
+                      <span className="ec-activity-badge">System Log</span>
                       <span className="ec-activity-time">{when}</span>
                     </div>
                   </div>

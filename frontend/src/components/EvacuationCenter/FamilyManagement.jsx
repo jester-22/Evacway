@@ -62,6 +62,25 @@ const RELATIONSHIP_OPTIONS = [
   "Other",
 ];
 
+function getHouseholdInitials(name) {
+  if (!name) return "HH";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function formatHouseholdDisplayCode(code) {
+  if (!code) return "FM-001";
+  if (typeof code === "string" && code.includes("-")) {
+    const parts = code.split("-");
+    const lastPart = parts[parts.length - 1];
+    if (/^\d+$/.test(lastPart)) {
+      return `#${lastPart}`;
+    }
+  }
+  return String(code).length > 16 ? `${String(code).slice(0, 14)}…` : String(code);
+}
+
 function emptyMember(isHead = false) {
   return {
     first_name: "",
@@ -153,6 +172,131 @@ function isFamilyAssigned(fam) {
   return false;
 }
 
+function getRoomAssignedCount(room) {
+  return Number(room?.assigned ?? room?.occupied ?? 0);
+}
+
+function getRoomRemainingCapacity(room) {
+  if (!room) return 0;
+  const cap = Number(room.capacity || 0);
+  if (room.unassigned != null) return Math.max(Number(room.unassigned), 0);
+  return Math.max(cap - getRoomAssignedCount(room), 0);
+}
+
+function getCenterAssignedCount(center) {
+  return Number(
+    center?.assigned ??
+      center?.total_assigned ??
+      center?.occupied ??
+      center?.current_occupancy ??
+      0
+  );
+}
+
+function getCenterRemainingCapacity(center) {
+  if (!center) return 0;
+  const cap = Number(center.capacity || 0);
+  if (center.unassigned != null) return Math.max(Number(center.unassigned), 0);
+  return Math.max(cap - getCenterAssignedCount(center), 0);
+}
+
+function isDirectVenueCenter(center, rooms = [], isLoadingRooms = false) {
+  if (!center) return false;
+  const cType = center.center_type || "campus";
+  if (cType === "single_venue") return true;
+  const totalRooms = Number(center.room_count ?? center.total_rooms ?? rooms.length);
+  const totalBldgs = Number(
+    center.building_count ?? (center.buildings || []).length
+  );
+  if (
+    ["covered_court", "multi_purpose_hall", "church_facility"].includes(cType) &&
+    totalRooms === 0
+  ) {
+    return true;
+  }
+  if (!isLoadingRooms && totalRooms === 0 && rooms.length === 0 && totalBldgs === 0) {
+    return true;
+  }
+  return false;
+}
+
+function centerHasBuildings(center, rooms = []) {
+  if (!center) return false;
+  if (isDirectVenueCenter(center, rooms, false)) return false;
+  if (Array.isArray(center.buildings) && center.buildings.length > 0) return true;
+  if (Number(center.building_count || 0) > 0) return true;
+  return rooms.some((r) => r.building_id != null);
+}
+
+function getAvailableBuildingsForCenter(center, rooms = [], needed = 1) {
+  if (!center) return [];
+  const bldgMap = new Map();
+  for (const b of center.buildings || []) {
+    if (b?.id != null && b.status !== "closed" && b.status !== "under_repair") {
+      bldgMap.set(String(b.id), {
+        id: String(b.id),
+        name: b.name || `Building #${b.id}`,
+        rooms: [],
+        availableSpaces: 0,
+      });
+    }
+  }
+  for (const r of rooms) {
+    if (r.building_id != null) {
+      const key = String(r.building_id);
+      if (!bldgMap.has(key)) {
+        bldgMap.set(key, {
+          id: key,
+          name: r.building_name || `Building #${r.building_id}`,
+          rooms: [],
+          availableSpaces: 0,
+        });
+      }
+      const rem = getRoomRemainingCapacity(r);
+      if (rem >= needed) {
+        const entry = bldgMap.get(key);
+        entry.rooms.push(r);
+        entry.availableSpaces += rem;
+      }
+    }
+  }
+  const list = Array.from(bldgMap.values()).filter((b) => b.rooms.length > 0);
+  const unmappedRooms = rooms.filter(
+    (r) => r.building_id == null && getRoomRemainingCapacity(r) >= needed
+  );
+  if (unmappedRooms.length > 0) {
+    const unmappedSpaces = unmappedRooms.reduce(
+      (sum, r) => sum + getRoomRemainingCapacity(r),
+      0
+    );
+    list.push({
+      id: "unmapped",
+      name: "Other / Unassigned Building Rooms",
+      rooms: unmappedRooms,
+      availableSpaces: unmappedSpaces,
+    });
+  }
+  return list;
+}
+
+function getFilteredRoomsForSelection(
+  center,
+  rooms = [],
+  selectedBuildingId = "",
+  needed = 1
+) {
+  if (!center) return [];
+  const hasBldgs = centerHasBuildings(center, rooms);
+  return rooms.filter((r) => {
+    const rem = getRoomRemainingCapacity(r);
+    if (rem < needed) return false;
+    if (!hasBldgs) return true;
+    if (!selectedBuildingId) return false;
+    if (selectedBuildingId === "unmapped") return r.building_id == null;
+    return String(r.building_id) === String(selectedBuildingId);
+  });
+}
+
 const ADD_STEPS = [
   { number: 1, title: "Household & Head", subtitle: "Address, contact & head profile" },
   { number: 2, title: "Household Members", subtitle: "Additional members (optional)" },
@@ -194,6 +338,26 @@ export default function FamilyManagement({
   const [buildingFilter, setBuildingFilter] = useState("");
   const [sortBy, setSortBy] = useState("family_code");
   const [direction, setDirection] = useState("asc");
+  const [rosterYears, setRosterYears] = useState([]);
+  const [yearFilter, setYearFilter] = useState("2026");
+
+  useEffect(() => {
+    let isMounted = true;
+    api.getRosterYears()
+      .then((data) => {
+        if (!isMounted) return;
+        const list = Array.isArray(data) ? data : [];
+        setRosterYears(list);
+        const active = list.find((y) => y.is_active);
+        if (active) {
+          setYearFilter(String(active.year));
+        }
+      })
+      .catch((err) => console.error("Failed to load roster years in FamilyManagement:", err));
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Feedback banners
   const [localError, setError] = useState("");
@@ -244,10 +408,11 @@ export default function FamilyManagement({
       barangay_id: effectiveBarangayId,
       assignment_status: assignmentStatus,
       building_id: buildingFilter,
+      year: yearFilter,
       sort_by: sortBy,
       direction,
     }),
-    [page, pageSize, search, effectiveBarangayId, assignmentStatus, buildingFilter, sortBy, direction]
+    [page, pageSize, search, effectiveBarangayId, assignmentStatus, buildingFilter, yearFilter, sortBy, direction]
   );
 
   const familiesQuery = useFamilies(familyFilters);
@@ -297,6 +462,7 @@ export default function FamilyManagement({
     otherMembers: [],
     assignment_mode: "unassigned", // "unassigned" | "assign"
     assignment_center_id: "",
+    assignment_building_id: "",
     assignment_room_id: "",
   });
   const [editingOtherIndex, setEditingOtherIndex] = useState(null);
@@ -320,10 +486,12 @@ export default function FamilyManagement({
 
   // Assign / Move Room Modal State
   const [assignCenterId, setAssignCenterId] = useState("");
+  const [assignBuildingId, setAssignBuildingId] = useState("");
   const [assignRoomId, setAssignRoomId] = useState("");
   const [assigning, setAssigning] = useState(false);
 
   const [targetCenterId, setTargetCenterId] = useState("");
+  const [targetBuildingId, setTargetBuildingId] = useState("");
   const [targetRoomId, setTargetRoomId] = useState("");
   const [moving, setMoving] = useState(false);
 
@@ -442,8 +610,10 @@ export default function FamilyManagement({
     setModal("");
     setError("");
     setAssignCenterId("");
+    setAssignBuildingId("");
     setAssignRoomId("");
     setTargetCenterId("");
+    setTargetBuildingId("");
     setTargetRoomId("");
   }
 
@@ -503,6 +673,7 @@ export default function FamilyManagement({
       otherMembers: [],
       assignment_mode: "unassigned",
       assignment_center_id: "",
+      assignment_building_id: "",
       assignment_room_id: "",
     });
     setWizardStep(1);
@@ -672,37 +843,10 @@ export default function FamilyManagement({
     }
 
     if (step === 3) {
-      if (wizardForm.assignment_mode === "assign") {
-        if (
-          !wizardForm.assignment_center_id ||
-          !wizardForm.assignment_room_id
-        ) {
-          setError(
-            "Select both an evacuation center and a room, or choose 'Leave Unassigned'."
-          );
-          return false;
-        }
-        const selectedRoom = wizardRooms.find(
-          (r) => String(r.id) === String(wizardForm.assignment_room_id)
-        );
-        const totalMembersCount = 1 + wizardForm.otherMembers.length;
-        const available =
-          selectedRoom?.available ??
-          (selectedRoom
-            ? Math.max(selectedRoom.capacity - (selectedRoom.occupied || 0), 0)
-            : 0);
-        if (selectedRoom && totalMembersCount > available) {
-          setError(
-            `Selected room only has ${available} available space(s), but this household has ${totalMembersCount} member(s).`
-          );
-          return false;
-        }
-      }
-
-      if (wizardForm.assignment_mode === "venue") {
+      if (wizardForm.assignment_mode === "assign" || wizardForm.assignment_mode === "venue") {
         if (!wizardForm.assignment_center_id) {
           setError(
-            "Select a single venue center, or choose 'Leave Unassigned'."
+            "Select an evacuation center, or choose 'Leave Unassigned'."
           );
           return false;
         }
@@ -710,12 +854,45 @@ export default function FamilyManagement({
           (c) => String(c.id) === String(wizardForm.assignment_center_id)
         );
         const totalMembersCount = 1 + wizardForm.otherMembers.length;
-        const cap = selectedCenter?.capacity ?? 0;
-        const occ = selectedCenter?.occupied ?? selectedCenter?.current_occupancy ?? 0;
-        const available = Math.max(cap - occ, 0);
-        if (selectedCenter && totalMembersCount > available) {
+        const isDirectCenter =
+          wizardForm.assignment_mode === "venue" ||
+          isDirectVenueCenter(
+            selectedCenter,
+            wizardRooms,
+            wizardRoomsQuery.isLoading
+          );
+
+        if (isDirectCenter) {
+          const available = getCenterRemainingCapacity(selectedCenter);
+          if (selectedCenter && totalMembersCount > available) {
+            setError(
+              `Selected center only has ${available} available space(s), but this household has ${totalMembersCount} member(s).`
+            );
+            return false;
+          }
+          return true;
+        }
+
+        const hasBldgs = centerHasBuildings(selectedCenter, wizardRooms);
+        if (hasBldgs && !wizardForm.assignment_building_id) {
+          setError("Please select a building first.");
+          return false;
+        }
+        if (!wizardForm.assignment_room_id) {
           setError(
-            `Selected venue only has ${available} available space(s), but this household has ${totalMembersCount} member(s).`
+            hasBldgs
+              ? "Please select a room in the chosen building."
+              : "Please select a room in the chosen evacuation center."
+          );
+          return false;
+        }
+        const selectedRoom = wizardRooms.find(
+          (r) => String(r.id) === String(wizardForm.assignment_room_id)
+        );
+        const available = getRoomRemainingCapacity(selectedRoom);
+        if (selectedRoom && totalMembersCount > available) {
+          setError(
+            `Selected room only has ${available} available space(s), but this household has ${totalMembersCount} member(s).`
           );
           return false;
         }
@@ -755,7 +932,7 @@ export default function FamilyManagement({
   async function submitNewFamily(event) {
     event.preventDefault();
     if (saving) return;
-    for (let s = 1; s <= 2; s += 1) {
+    for (let s = 1; s <= 3; s += 1) {
       if (!validateWizardStep(s)) {
         setWizardStep(s);
         return;
@@ -778,6 +955,17 @@ export default function FamilyManagement({
     setSaving(true);
     setError("");
     try {
+      const selectedWizardCenter = centersList.find(
+        (c) => String(c.id) === String(wizardForm.assignment_center_id)
+      );
+      const isWizardDirectCenter =
+        wizardForm.assignment_mode === "venue" ||
+        isDirectVenueCenter(
+          selectedWizardCenter,
+          wizardRooms,
+          wizardRoomsQuery.isLoading
+        );
+
       const payload = {
         family_code: wizardForm.family_code.trim() || undefined,
         head_name: headFullName,
@@ -823,19 +1011,20 @@ export default function FamilyManagement({
           notes: member.notes.trim() || null,
         })),
         assignment:
-          wizardForm.assignment_mode === "assign" &&
-          wizardForm.assignment_center_id &&
-          wizardForm.assignment_room_id
-            ? {
-                center_id: Number(wizardForm.assignment_center_id),
-                room_id: Number(wizardForm.assignment_room_id),
-              }
-            : wizardForm.assignment_mode === "venue" &&
-              wizardForm.assignment_center_id
-            ? {
-                center_id: Number(wizardForm.assignment_center_id),
-                room_id: null,
-              }
+          (wizardForm.assignment_mode === "assign" ||
+            wizardForm.assignment_mode === "venue") &&
+          wizardForm.assignment_center_id
+            ? isWizardDirectCenter
+              ? {
+                  center_id: Number(wizardForm.assignment_center_id),
+                  room_id: null,
+                }
+              : wizardForm.assignment_room_id
+                ? {
+                    center_id: Number(wizardForm.assignment_center_id),
+                    room_id: Number(wizardForm.assignment_room_id),
+                  }
+                : null
             : null,
       };
 
@@ -1154,22 +1343,24 @@ export default function FamilyManagement({
     setSelectedFamilySeed(fam);
     setSelectedFamilyId(fam.id);
     setAssignCenterId("");
+    setAssignBuildingId("");
     setAssignRoomId("");
     setError("");
     setModal("assign");
 
+    const needed = fam.member_count || fam.resident_count || 1;
     const centers = await loadActiveCenters();
     if (fam.barangay_id) {
       const matching = centers.find(
-        (center) => (center.barangays || []).some(
-          (barangay) => Number(barangay.id) === Number(fam.barangay_id)
-        )
+        (center) =>
+          (center.barangays || []).some(
+            (barangay) => Number(barangay.id) === Number(fam.barangay_id)
+          ) && getCenterRemainingCapacity(center) >= needed
       );
       if (matching) {
         setAssignCenterId(String(matching.id));
-        // For single_venue centers, we don't need to load rooms
-        const isSingleVenue = matching.center_type === 'single_venue';
-        if (!isSingleVenue) {
+        const isDirect = isDirectVenueCenter(matching, [], true);
+        if (!isDirect) {
           await queryClient.fetchQuery({
             queryKey: queryKeys.rooms(Number(matching.id)),
             queryFn: () => fetchRooms(Number(matching.id)),
@@ -1182,42 +1373,50 @@ export default function FamilyManagement({
   async function submitAssignment(event) {
     event.preventDefault();
 
-    // Get the selected center to check if it's single_venue
-    const selectedCenter = centersList.find(c => String(c.id) === String(assignCenterId));
-    const isSingleVenue = selectedCenter?.center_type === 'single_venue';
+    const selectedCenter = centersList.find(
+      (c) => String(c.id) === String(assignCenterId)
+    );
+    const isDirectCenter = isDirectVenueCenter(
+      selectedCenter,
+      assignRooms,
+      assignRoomsQuery.isLoading
+    );
+    const hasBldgs = centerHasBuildings(selectedCenter, assignRooms);
+    const needed =
+      activeFamily?.member_count || activeFamily?.resident_count || 1;
 
-    // For single_venue, we only need center_id, not room_id
-    if (!assignCenterId || (!isSingleVenue && !assignRoomId) || !activeFamily) {
-      setError(isSingleVenue
-        ? "Please select a single venue center."
-        : "Please select both an evacuation center and a room."
-      );
+    if (!assignCenterId || !activeFamily) {
+      setError("Please select an evacuation center.");
       return;
     }
 
-    // For single_venue, validate venue capacity instead of room capacity
-    if (isSingleVenue) {
-      const needed = activeFamily.member_count || activeFamily.resident_count || 1;
-      const cap = selectedCenter?.capacity ?? 0;
-      const occ = selectedCenter?.occupied ?? selectedCenter?.current_occupancy ?? 0;
-      const available = Math.max(cap - occ, 0);
+    if (isDirectCenter) {
+      const available = getCenterRemainingCapacity(selectedCenter);
       if (needed > available) {
         setError(
-          `${selectedCenter.name} only has ${available} space(s) available, but this household has ${needed} member(s).`
+          `${selectedCenter?.name || "Selected center"} only has ${available} space(s) available, but this household has ${needed} member(s).`
         );
         return;
       }
     } else {
-      // Validate room capacity for campus/private_property centers
+      if (hasBldgs && !assignBuildingId) {
+        setError("Please select a building first.");
+        return;
+      }
+      if (!assignRoomId) {
+        setError(
+          hasBldgs
+            ? "Please select a room in the selected building."
+            : "Please select a room."
+        );
+        return;
+      }
       const room = assignRooms.find(
         (r) => String(r.id) === String(assignRoomId)
       );
       if (!room) return;
 
-      const needed =
-        activeFamily.member_count || activeFamily.resident_count || 1;
-      const available =
-        room.unassigned ?? Math.max(room.capacity - (room.assigned ?? room.occupied ?? 0), 0);
+      const available = getRoomRemainingCapacity(room);
       if (needed > available) {
         setError(
           `${formatRoomLabel(room.room_number)} only has ${available} space(s) available, but this household has ${needed} member(s).`
@@ -1231,12 +1430,12 @@ export default function FamilyManagement({
     try {
       const result = await api.assignFamily(activeFamily.id, {
         center_id: Number(assignCenterId),
-        room_id: isSingleVenue ? null : Number(assignRoomId),
+        room_id: isDirectCenter ? null : Number(assignRoomId),
       });
       await refreshAllData(activeFamily.id);
-      const message = isSingleVenue
-        ? `Household assigned to ${selectedCenter.name}.`
-        : `Household assigned to ${formatRoomLabel(assignRooms.find(r => String(r.id) === String(assignRoomId))?.room_number)}.`;
+      const message = isDirectCenter
+        ? `Household assigned to ${selectedCenter?.name || "evacuation center"}.`
+        : `Household assigned to ${formatRoomLabel(assignRooms.find((r) => String(r.id) === String(assignRoomId))?.room_number)}.`;
       setNotice(result.message || message);
       setModal("");
     } catch (requestError) {
@@ -1256,16 +1455,20 @@ export default function FamilyManagement({
         ? String(fam.assignments[0].center_id)
         : "";
     setTargetCenterId(initialCenterId);
+    setTargetBuildingId(
+      fam.current_building_id ? String(fam.current_building_id) : ""
+    );
     setTargetRoomId("");
     setError("");
     setModal("move");
 
     await loadActiveCenters();
     if (initialCenterId) {
-      // For single_venue centers, we don't need to load rooms
-      const initialCenter = centersList.find(c => String(c.id) === String(initialCenterId));
-      const isSingleVenue = initialCenter?.center_type === 'single_venue';
-      if (!isSingleVenue) {
+      const initialCenter = centersList.find(
+        (c) => String(c.id) === String(initialCenterId)
+      );
+      const isDirect = isDirectVenueCenter(initialCenter, [], true);
+      if (!isDirect) {
         await queryClient.fetchQuery({
           queryKey: queryKeys.rooms(Number(initialCenterId)),
           queryFn: () => fetchRooms(Number(initialCenterId)),
@@ -1277,42 +1480,50 @@ export default function FamilyManagement({
   function handleMoveSubmit(event) {
     event.preventDefault();
 
-    // Get the destination center to check if it's single_venue
-    const destCenter = centersList.find(c => String(c.id) === String(targetCenterId));
-    const isDestSingleVenue = destCenter?.center_type === 'single_venue';
-    const needed = activeFamily.member_count || activeFamily.resident_count || 1;
+    const destCenter = centersList.find(
+      (c) => String(c.id) === String(targetCenterId)
+    );
+    const isDestDirectCenter = isDirectVenueCenter(
+      destCenter,
+      targetRooms,
+      targetRoomsQuery.isLoading
+    );
+    const destHasBldgs = centerHasBuildings(destCenter, targetRooms);
+    const needed =
+      activeFamily?.member_count || activeFamily?.resident_count || 1;
 
-    // For single_venue destination, we only need center_id, not room_id
-    if (!targetCenterId || (!isDestSingleVenue && !targetRoomId) || !activeFamily) {
-      setError(isDestSingleVenue
-        ? "Please select a destination center."
-        : "Please select a destination center and room."
-      );
+    if (!targetCenterId || !activeFamily) {
+      setError("Please select a destination center.");
       return;
     }
 
-    // Validate capacity
-    if (isDestSingleVenue) {
-      // Validate venue capacity for single_venue
-      const cap = destCenter?.capacity ?? 0;
-      const occ = destCenter?.occupied ?? destCenter?.current_occupancy ?? 0;
-      const available = Math.max(cap - occ, 0);
+    if (isDestDirectCenter) {
+      const available = getCenterRemainingCapacity(destCenter);
       if (needed > available) {
         setError(
-          `${destCenter.name} only has ${available} space(s) available, but this household needs ${needed}.`
+          `${destCenter?.name || "Destination center"} only has ${available} space(s) available, but this household needs ${needed}.`
         );
         return;
       }
     } else {
-      // Validate room capacity for campus/private_property
+      if (destHasBldgs && !targetBuildingId) {
+        setError("Please select a destination building first.");
+        return;
+      }
+      if (!targetRoomId) {
+        setError(
+          destHasBldgs
+            ? "Please select a destination room in the selected building."
+            : "Please select a destination room."
+        );
+        return;
+      }
       const destRoom = targetRooms.find(
         (r) => String(r.id) === String(targetRoomId)
       );
       if (!destRoom) return;
 
-      const available =
-        destRoom.available ??
-        Math.max(destRoom.capacity - (destRoom.occupied || 0), 0);
+      const available = getRoomRemainingCapacity(destRoom);
       if (needed > available) {
         setError(
           `Destination room only has ${available} space(s) available, but this household needs ${needed}.`
@@ -1322,10 +1533,12 @@ export default function FamilyManagement({
     }
 
     setConfirmDialog({
-      title: isDestSingleVenue ? "Confirm Venue Transfer" : "Confirm Room Transfer",
-      message: isDestSingleVenue
-        ? `Move household "${activeFamily.head_name}" (${needed} member${needed === 1 ? "" : "s"}) to ${destCenter ? displayEntityName(destCenter.name) : "selected venue"}? Occupancy will update automatically.`
-        : `Move household "${activeFamily.head_name}" (${needed} member${needed === 1 ? "" : "s"}) to ${destCenter ? displayEntityName(destCenter.name) + " — " : ""}${formatRoomLabel(targetRooms.find(r => String(r.id) === String(targetRoomId))?.room_number)}? Occupancy in both rooms will update automatically.`,
+      title: isDestDirectCenter
+        ? "Confirm Center Transfer"
+        : "Confirm Room Transfer",
+      message: isDestDirectCenter
+        ? `Move household "${activeFamily.head_name}" (${needed} member${needed === 1 ? "" : "s"}) to ${destCenter ? displayEntityName(destCenter.name) : "selected center"}? Occupancy will update automatically.`
+        : `Move household "${activeFamily.head_name}" (${needed} member${needed === 1 ? "" : "s"}) to ${destCenter ? displayEntityName(destCenter.name) + " — " : ""}${formatRoomLabel(targetRooms.find((r) => String(r.id) === String(targetRoomId))?.room_number)}? Occupancy in both rooms will update automatically.`,
       confirmText: "Transfer Household",
       danger: false,
       onConfirm: async () => {
@@ -1334,14 +1547,14 @@ export default function FamilyManagement({
         try {
           const res = await api.moveFamily(activeFamily.id, {
             center_id: Number(targetCenterId),
-            room_id: isDestSingleVenue ? null : Number(targetRoomId),
+            room_id: isDestDirectCenter ? null : Number(targetRoomId),
           });
           setConfirmDialog(null);
           setModal("");
           await refreshAllData(activeFamily.id);
-          const message = isDestSingleVenue
+          const message = isDestDirectCenter
             ? `Household transferred to ${destCenter?.name}.`
-            : `Household transferred to ${formatRoomLabel(targetRooms.find(r => String(r.id) === String(targetRoomId))?.room_number)}.`;
+            : `Household transferred to ${formatRoomLabel(targetRooms.find((r) => String(r.id) === String(targetRoomId))?.room_number)}.`;
           setNotice(res.message || message);
         } catch (err) {
           setError(err.message || "Failed to transfer household.");
@@ -1428,14 +1641,7 @@ export default function FamilyManagement({
   );
   const assignFamilyMembers =
     activeFamily?.member_count || activeFamily?.resident_count || 1;
-  const assignRoomAvailable =
-    selectedAssignRoom?.available ??
-    (selectedAssignRoom
-      ? Math.max(
-          selectedAssignRoom.capacity - (selectedAssignRoom.occupied || 0),
-          0
-        )
-      : 0);
+  const assignRoomAvailable = getRoomRemainingCapacity(selectedAssignRoom);
   const assignHasCapacity = selectedAssignRoom
     ? assignRoomAvailable >= assignFamilyMembers
     : false;
@@ -1445,14 +1651,7 @@ export default function FamilyManagement({
   );
   const moveFamilyMembers =
     activeFamily?.member_count || activeFamily?.resident_count || 1;
-  const targetRoomAvailable =
-    selectedTargetRoom?.available ??
-    (selectedTargetRoom
-      ? Math.max(
-          selectedTargetRoom.capacity - (selectedTargetRoom.occupied || 0),
-          0
-        )
-      : 0);
+  const targetRoomAvailable = getRoomRemainingCapacity(selectedTargetRoom);
   const moveHasCapacity = selectedTargetRoom
     ? targetRoomAvailable >= moveFamilyMembers
     : false;
@@ -2118,6 +2317,7 @@ export default function FamilyManagement({
                           ...prev,
                           assignment_mode: "unassigned",
                           assignment_center_id: "",
+                          assignment_building_id: "",
                           assignment_room_id: "",
                         }))
                       }
@@ -2126,18 +2326,21 @@ export default function FamilyManagement({
                       <strong>Leave Unassigned for Now</strong>
                       <p>
                         Register the household in the barangay registry without
-                        occupying an evacuation room/venue yet.
+                        occupying an evacuation center or room yet.
                       </p>
                     </div>
                   </label>
 
                   <label
-                    className={`fm-choice-card ${wizardForm.assignment_mode === "assign" ? "is-selected" : ""}`}
+                    className={`fm-choice-card ${wizardForm.assignment_mode === "assign" || wizardForm.assignment_mode === "venue" ? "is-selected" : ""}`}
                   >
                     <input
                       type="radio"
                       name="assignment_mode"
-                      checked={wizardForm.assignment_mode === "assign"}
+                      checked={
+                        wizardForm.assignment_mode === "assign" ||
+                        wizardForm.assignment_mode === "venue"
+                      }
                       onChange={() =>
                         setWizardForm((prev) => ({
                           ...prev,
@@ -2146,231 +2349,283 @@ export default function FamilyManagement({
                       }
                     />
                     <div>
-                      <strong>Assign to Evacuation Center & Room</strong>
+                      <strong>Assign to Evacuation Center</strong>
                       <p>
-                        Select an active evacuation center and room with
-                        sufficient remaining capacity.
+                        Select an active evacuation center with available capacity
+                        (assigns directly to center, room, or building &amp; room).
                       </p>
                     </div>
                   </label>
-
-                  {centersList.some(c => c.center_type === 'single_venue') && (
-                    <label
-                      className={`fm-choice-card ${wizardForm.assignment_mode === "venue" ? "is-selected" : ""}`}
-                    >
-                      <input
-                        type="radio"
-                        name="assignment_mode"
-                        checked={wizardForm.assignment_mode === "venue"}
-                        onChange={() =>
-                          setWizardForm((prev) => ({
-                            ...prev,
-                            assignment_mode: "venue",
-                            assignment_room_id: "",
-                          }))
-                        }
-                      />
-                      <div>
-                        <strong>Assign to Single Venue Center</strong>
-                        <p>
-                          Assign directly to a single venue center (chapel, plaza, covered court) — no room selection needed.
-                        </p>
-                      </div>
-                    </label>
-                  )}
                 </div>
 
-                {wizardForm.assignment_mode === "assign" && (
-                  <div className="fm-assignment-selector-box">
-                    <div className="fm-form-grid-2">
-                      <label className="fm-field">
-                        <span>
-                          Evacuation Center <strong className="fm-req">*</strong>
-                        </span>
-                        <select
-                          value={wizardForm.assignment_center_id}
-                          onChange={(e) =>
-                            setWizardForm((prev) => ({
-                              ...prev,
-                              assignment_center_id: e.target.value,
-                              assignment_room_id: "",
-                            }))
+                {(wizardForm.assignment_mode === "assign" ||
+                  wizardForm.assignment_mode === "venue") &&
+                  (() => {
+                    const needed = 1 + wizardForm.otherMembers.length;
+                    const availableCenters = centersList.filter(
+                      (c) =>
+                        getCenterRemainingCapacity(c) >= needed ||
+                        String(c.id) === String(wizardForm.assignment_center_id)
+                    );
+                    const selectedWizardCenter = centersList.find(
+                      (c) =>
+                        String(c.id) === String(wizardForm.assignment_center_id)
+                    );
+                    const isWizardDirect = isDirectVenueCenter(
+                      selectedWizardCenter,
+                      wizardRooms,
+                      wizardRoomsQuery.isLoading
+                    );
+                    const wizardHasBldgs = centerHasBuildings(
+                      selectedWizardCenter,
+                      wizardRooms
+                    );
+                    const wizardAvailableBldgs = getAvailableBuildingsForCenter(
+                      selectedWizardCenter,
+                      wizardRooms,
+                      needed
+                    );
+                    const wizardFilteredRooms = getFilteredRoomsForSelection(
+                      selectedWizardCenter,
+                      wizardRooms,
+                      wizardForm.assignment_building_id,
+                      needed
+                    );
+
+                    return (
+                      <div className="fm-assignment-selector-box">
+                        <div
+                          className={
+                            isWizardDirect
+                              ? "fm-form-grid-1"
+                              : "fm-form-grid-2"
                           }
                         >
-                          <option value="">Select evacuation center</option>
-                          {centersList.map((c) => {
-                            const cap = c.capacity ?? 0;
-                            const occ = c.occupied ?? c.current_occupancy ?? 0;
-                            return (
-                              <option key={c.id} value={c.id}>
-                                {displayEntityName(c.name)} (
-                                {(c.barangays || []).map((barangay) => barangay.name).join(", ")}) — {occ}/{cap} assigned
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </label>
+                          <label className="fm-field">
+                            <span>
+                              Evacuation Center{" "}
+                              <strong className="fm-req">*</strong>
+                            </span>
+                            <select
+                              value={wizardForm.assignment_center_id}
+                              onChange={(e) =>
+                                setWizardForm((prev) => ({
+                                  ...prev,
+                                  assignment_center_id: e.target.value,
+                                  assignment_building_id: "",
+                                  assignment_room_id: "",
+                                }))
+                              }
+                            >
+                              <option value="">Select evacuation center</option>
+                              {availableCenters.map((c) => {
+                                const cap = c.capacity ?? 0;
+                                const occ = getCenterAssignedCount(c);
+                                const rem = getCenterRemainingCapacity(c);
+                                return (
+                                  <option key={c.id} value={c.id}>
+                                    {displayEntityName(c.name)} (
+                                    {(c.barangays || [])
+                                      .map((barangay) => barangay.name)
+                                      .join(", ")}
+                                    ) — {occ}/{cap} assigned ({rem} left)
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </label>
 
-                      <label className="fm-field">
-                        <span>
-                          Room <strong className="fm-req">*</strong>
-                        </span>
-                        <select
-                          value={wizardForm.assignment_room_id}
-                          disabled={
-                            !wizardForm.assignment_center_id ||
-                            wizardRoomsQuery.isLoading
-                          }
-                          onChange={(e) =>
-                            setWizardForm((prev) => ({
-                              ...prev,
-                              assignment_room_id: e.target.value,
-                            }))
-                          }
-                        >
-                          <option value="">
-                            {!wizardForm.assignment_center_id
-                              ? "Select a center first"
-                              : wizardRoomsQuery.isLoading
-                                ? "Loading rooms..."
-                                : wizardRooms.length === 0
-                                  ? "No active rooms in this center"
-                                  : "Select room"}
-                          </option>
-                          {wizardRooms.map((room) => {
-                            const available =
-                              room.available ??
-                              Math.max(
-                                room.capacity - (room.occupied || 0),
-                                0
-                              );
-                            const needed = 1 + wizardForm.otherMembers.length;
-                            const enough = available >= needed;
-                            return (
-                              <option
-                                key={room.id}
-                                value={room.id}
-                                disabled={!enough}
-                              >
-                                {formatRoomLabel(room.room_number)} — {room.occupied || 0}/
-                                {room.capacity} assigned ({available} remaining)
-                                {!enough ? " [Insufficient capacity]" : ""}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </label>
-                    </div>
-
-                    {wizardForm.assignment_center_id &&
-                      wizardRooms.length > 0 && (
-                        <div className="fm-room-cards-grid">
-                          {wizardRooms.map((room) => {
-                            const available =
-                              room.available ??
-                              Math.max(
-                                room.capacity - (room.occupied || 0),
-                                0
-                              );
-                            const needed = 1 + wizardForm.otherMembers.length;
-                            const enough = available >= needed;
-                            const isSelected =
-                              String(wizardForm.assignment_room_id) ===
-                              String(room.id);
-                            return (
-                              <button
-                                key={room.id}
-                                type="button"
-                                disabled={!enough}
-                                onClick={() =>
+                          {!isWizardDirect && wizardHasBldgs && (
+                            <label className="fm-field">
+                              <span>
+                                Building <strong className="fm-req">*</strong>
+                              </span>
+                              <select
+                                value={wizardForm.assignment_building_id}
+                                disabled={
+                                  !wizardForm.assignment_center_id ||
+                                  wizardRoomsQuery.isLoading
+                                }
+                                onChange={(e) =>
                                   setWizardForm((prev) => ({
                                     ...prev,
-                                    assignment_room_id: String(room.id),
+                                    assignment_building_id: e.target.value,
+                                    assignment_room_id: "",
                                   }))
                                 }
-                                className={`fm-room-pick-card ${isSelected ? "is-selected" : ""} ${!enough ? "is-disabled" : ""}`}
                               >
-                                <div className="fm-room-pick-top">
-                                  <strong>
-                                    <FontAwesomeIcon icon={faDoorOpen} />{" "}
-                                    {formatRoomLabel(room.room_number)}
-                                  </strong>
-                                  <span
-                                    className={`fm-badge ${enough ? "fm-badge-green" : "fm-badge-red"}`}
-                                  >
-                                    {available} remaining
-                                  </span>
-                                </div>
-                                <div className="fm-room-pick-meta">
-                                  <span>Capacity: {room.capacity}</span>
-                                  <span>Assigned: {room.occupied || 0}</span>
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                  </div>
-                )}
-
-                {wizardForm.assignment_mode === "venue" && (
-                  <div className="fm-assignment-selector-box">
-                    <div className="fm-form-grid-1">
-                      <label className="fm-field">
-                        <span>
-                          Single Venue Center <strong className="fm-req">*</strong>
-                        </span>
-                        <select
-                          value={wizardForm.assignment_center_id}
-                          onChange={(e) =>
-                            setWizardForm((prev) => ({
-                              ...prev,
-                              assignment_center_id: e.target.value,
-                            }))
-                          }
-                        >
-                          <option value="">Select single venue center</option>
-                          {centersList
-                            .filter(c => c.center_type === 'single_venue')
-                            .map((c) => {
-                              const cap = c.capacity ?? 0;
-                              const occ = c.occupied ?? c.current_occupancy ?? 0;
-                              const available = Math.max(cap - occ, 0);
-                              return (
-                                <option key={c.id} value={c.id} disabled={available < (1 + wizardForm.otherMembers.length)}>
-                                  {displayEntityName(c.name)} (
-                                  {(c.barangays || []).map((barangay) => barangay.name).join(", ")}) — {occ}/{cap} assigned ({available} remaining)
-                                  {available < (1 + wizardForm.otherMembers.length) ? " [Insufficient capacity]" : ""}
+                                <option value="">
+                                  {!wizardForm.assignment_center_id
+                                    ? "Select a center first"
+                                    : wizardRoomsQuery.isLoading
+                                      ? "Loading buildings..."
+                                      : wizardAvailableBldgs.length === 0
+                                        ? "No buildings with available capacity"
+                                        : "Select building"}
                                 </option>
+                                {wizardAvailableBldgs.map((b) => (
+                                  <option key={b.id} value={b.id}>
+                                    {displayEntityName(b.name)} (
+                                    {b.rooms.length} room
+                                    {b.rooms.length === 1 ? "" : "s"},{" "}
+                                    {b.availableSpaces} spaces left)
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
+
+                          {!isWizardDirect && (
+                            <label className="fm-field">
+                              <span>
+                                Room <strong className="fm-req">*</strong>
+                              </span>
+                              <select
+                                value={wizardForm.assignment_room_id}
+                                disabled={
+                                  !wizardForm.assignment_center_id ||
+                                  wizardRoomsQuery.isLoading ||
+                                  (wizardHasBldgs &&
+                                    !wizardForm.assignment_building_id)
+                                }
+                                onChange={(e) =>
+                                  setWizardForm((prev) => ({
+                                    ...prev,
+                                    assignment_room_id: e.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="">
+                                  {!wizardForm.assignment_center_id
+                                    ? "Select a center first"
+                                    : wizardRoomsQuery.isLoading
+                                      ? "Loading rooms..."
+                                      : wizardHasBldgs &&
+                                          !wizardForm.assignment_building_id
+                                        ? "Select a building first"
+                                        : wizardFilteredRooms.length === 0
+                                          ? "No rooms with available capacity"
+                                          : "Select room"}
+                                </option>
+                                {wizardFilteredRooms.map((room) => {
+                                  const available =
+                                    getRoomRemainingCapacity(room);
+                                  const assigned = getRoomAssignedCount(room);
+                                  return (
+                                    <option key={room.id} value={room.id}>
+                                      {formatRoomLabel(room.room_number)} —{" "}
+                                      {assigned}/{room.capacity} assigned (
+                                      {available} remaining)
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            </label>
+                          )}
+                        </div>
+
+                        {selectedWizardCenter && isWizardDirect && (
+                          <div className="fm-venue-capacity-box">
+                            {(() => {
+                              const cap = selectedWizardCenter.capacity ?? 0;
+                              const occ =
+                                getCenterAssignedCount(selectedWizardCenter);
+                              const available =
+                                getCenterRemainingCapacity(selectedWizardCenter);
+                              const enough = available >= needed;
+                              return (
+                                <div
+                                  className={`fm-capacity-summary ${enough ? "has-capacity" : "no-capacity"}`}
+                                >
+                                  <div className="capacity-row">
+                                    <span className="capacity-label">
+                                      Center capacity
+                                    </span>
+                                    <span className="capacity-value">
+                                      {cap} people
+                                    </span>
+                                  </div>
+                                  <div className="capacity-row">
+                                    <span className="capacity-label">
+                                      Currently assigned
+                                    </span>
+                                    <span className="capacity-value">
+                                      {occ} people
+                                    </span>
+                                  </div>
+                                  <div className="capacity-row">
+                                    <span className="capacity-label">
+                                      Remaining capacity
+                                    </span>
+                                    <span
+                                      className="capacity-value"
+                                      style={{
+                                        color: enough
+                                          ? "var(--ew-safe-text)"
+                                          : "var(--ew-danger-text)",
+                                      }}
+                                    >
+                                      {available} spaces left
+                                    </span>
+                                  </div>
+                                  <div className="capacity-row">
+                                    <span className="capacity-label">
+                                      Household to assign
+                                    </span>
+                                    <span className="capacity-value">
+                                      {needed} members
+                                    </span>
+                                  </div>
+                                </div>
                               );
-                            })}
-                        </select>
-                      </label>
-                    </div>
-                    {wizardForm.assignment_center_id && (
-                      <div className="fm-venue-capacity-box">
-                        {(() => {
-                          const center = centersList.find(c => String(c.id) === String(wizardForm.assignment_center_id));
-                          if (!center) return null;
-                          const cap = center.capacity ?? 0;
-                          const occ = center.occupied ?? center.current_occupancy ?? 0;
-                          const available = Math.max(cap - occ, 0);
-                          const needed = 1 + wizardForm.otherMembers.length;
-                          const enough = available >= needed;
-                          return (
-                            <div className={`fm-capacity-summary ${enough ? 'has-capacity' : 'no-capacity'}`}>
-                              <div className="capacity-row"><span className="capacity-label">Venue capacity</span><span className="capacity-value">{cap} people</span></div>
-                              <div className="capacity-row"><span className="capacity-label">Currently assigned</span><span className="capacity-value">{occ} people</span></div>
-                              <div className="capacity-row"><span className="capacity-label">Remaining capacity</span><span className="capacity-value" style={{ color: enough ? 'var(--ew-safe-text)' : 'var(--ew-danger-text)' }}>{available} spaces left</span></div>
-                              <div className="capacity-row"><span className="capacity-label">Household to assign</span><span className="capacity-value">{needed} members</span></div>
-                              {!enough && <p className="capacity-warning"><FontAwesomeIcon icon={faTriangleExclamation} /> Warning: this household has {needed} members but only {available} space left. Assigning would exceed venue capacity.</p>}
+                            })()}
+                          </div>
+                        )}
+
+                        {wizardForm.assignment_center_id &&
+                          !isWizardDirect &&
+                          wizardFilteredRooms.length > 0 && (
+                            <div className="fm-room-cards-grid">
+                              {wizardFilteredRooms.map((room) => {
+                                const available =
+                                  getRoomRemainingCapacity(room);
+                                const assigned = getRoomAssignedCount(room);
+                                const isSelected =
+                                  String(wizardForm.assignment_room_id) ===
+                                  String(room.id);
+                                return (
+                                  <button
+                                    key={room.id}
+                                    type="button"
+                                    onClick={() =>
+                                      setWizardForm((prev) => ({
+                                        ...prev,
+                                        assignment_room_id: String(room.id),
+                                      }))
+                                    }
+                                    className={`fm-room-pick-card ${isSelected ? "is-selected" : ""}`}
+                                  >
+                                    <div className="fm-room-pick-top">
+                                      <strong>
+                                        <FontAwesomeIcon icon={faDoorOpen} />{" "}
+                                        {formatRoomLabel(room.room_number)}
+                                      </strong>
+                                      <span className="fm-badge fm-badge-green">
+                                        {available} remaining
+                                      </span>
+                                    </div>
+                                    <div className="fm-room-pick-meta">
+                                      <span>Capacity: {room.capacity}</span>
+                                      <span>Assigned: {assigned}</span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
                             </div>
-                          );
-                        })()}
+                          )}
                       </div>
-                    )}
-                  </div>
-                )}
+                    );
+                  })()}
 
                 {/* Review Summary before submission */}
                 <div className="fm-step-intro" style={{ marginTop: "1.5rem" }}>
@@ -2430,60 +2685,87 @@ export default function FamilyManagement({
                   <div className="fm-review-card">
                     <div className="fm-review-card-header">
                       <h5>
-                        <FontAwesomeIcon icon={faBuilding} /> Room Assignment
+                        <FontAwesomeIcon icon={faBuilding} /> Evacuation Assignment
                       </h5>
                     </div>
-                    {wizardForm.assignment_mode === "assign" &&
-                    wizardForm.assignment_center_id &&
-                    wizardForm.assignment_room_id ? (
-                      <dl className="fm-dl-grid">
-                        <div>
-                          <dt>Status</dt>
-                          <dd>
-                            <span className="fm-badge fm-badge-green">
-                              Assigned on Registration
+                    {(() => {
+                      const selectedWizardCenter = centersList.find(
+                        (c) =>
+                          String(c.id) === String(wizardForm.assignment_center_id)
+                      );
+                      const isWizardDirect = isDirectVenueCenter(
+                        selectedWizardCenter,
+                        wizardRooms,
+                        wizardRoomsQuery.isLoading
+                      );
+                      const isAssignedReady =
+                        (wizardForm.assignment_mode === "assign" ||
+                          wizardForm.assignment_mode === "venue") &&
+                        wizardForm.assignment_center_id &&
+                        (isWizardDirect || wizardForm.assignment_room_id);
+
+                      if (!isAssignedReady) {
+                        return (
+                          <div className="fm-review-unassigned">
+                            <span className="fm-badge fm-badge-neutral">
+                              Unassigned
                             </span>
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Evacuation Center</dt>
-                          <dd>
-                            {displayEntityName(
-                              centersList.find(
-                                (c) =>
-                                  String(c.id) ===
-                                  String(wizardForm.assignment_center_id)
-                              )?.name
-                            ) || "Selected Center"}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Room</dt>
-                          <dd>
-                            {formatRoomLabel(
-                              wizardRooms.find(
-                                (r) =>
-                                  String(r.id) ===
-                                  String(wizardForm.assignment_room_id)
-                              )?.room_number || wizardForm.assignment_room_id
-                            )}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Total Members to Assign</dt>
-                          <dd>{1 + wizardForm.otherMembers.length}</dd>
-                        </div>
-                      </dl>
-                    ) : (
-                      <div className="fm-review-unassigned">
-                        <span className="fm-badge fm-badge-neutral">
-                          Unassigned
-                        </span>
-                        <p>
-                          Household will be registered in the barangay registry without an active room assignment.
-                        </p>
-                      </div>
-                    )}
+                            <p>
+                              Household will be registered in the barangay
+                              registry without an active center assignment.
+                            </p>
+                          </div>
+                        );
+                      }
+
+                      const selectedRoomObj = wizardRooms.find(
+                        (r) =>
+                          String(r.id) === String(wizardForm.assignment_room_id)
+                      );
+
+                      return (
+                        <dl className="fm-dl-grid">
+                          <div>
+                            <dt>Status</dt>
+                            <dd>
+                              <span className="fm-badge fm-badge-green">
+                                Assigned on Registration
+                              </span>
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Evacuation Center</dt>
+                            <dd>
+                              {displayEntityName(selectedWizardCenter?.name) ||
+                                "Selected Center"}
+                            </dd>
+                          </div>
+                          {!isWizardDirect && selectedRoomObj?.building_name && (
+                            <div>
+                              <dt>Building</dt>
+                              <dd>
+                                {displayEntityName(selectedRoomObj.building_name)}
+                              </dd>
+                            </div>
+                          )}
+                          <div>
+                            <dt>{isWizardDirect ? "Placement" : "Room"}</dt>
+                            <dd>
+                              {isWizardDirect
+                                ? "Direct Center Assignment"
+                                : formatRoomLabel(
+                                    selectedRoomObj?.room_number ||
+                                      wizardForm.assignment_room_id
+                                  )}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Total Members to Assign</dt>
+                            <dd>{1 + wizardForm.otherMembers.length}</dd>
+                          </div>
+                        </dl>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -3537,6 +3819,22 @@ export default function FamilyManagement({
               />
             </label>
 
+            <select
+              value={yearFilter}
+              onChange={(e) => {
+                setPage(1);
+                setYearFilter(e.target.value);
+              }}
+              aria-label="Filter by census year"
+            >
+              <option value="">All Years</option>
+              {rosterYears.map((ry) => (
+                <option key={ry.id || ry.year} value={ry.year}>
+                  Census Year {ry.year} {ry.is_active ? "(Active)" : ""}
+                </option>
+              ))}
+            </select>
+
             {!lockedBarangayId && (
               <select
                 value={barangayFilter}
@@ -3658,58 +3956,65 @@ export default function FamilyManagement({
                           ? `${bldgName} · ${formatRoomLabel(roomNum)}`
                           : null;
                       return (
-                        <tr key={fam.id}>
+                        <tr key={fam.id} className="fm-table-row">
                           <td>
                             <div className="fm-household-cell">
-                              <button
-                                type="button"
-                                className="fm-link-btn fm-head-name-btn"
-                                onClick={() => openHouseholdDetails(fam)}
-                              >
-                                {fam.head_name}
-                              </button>
-                              <span
-                                className="fm-household-id-sub"
-                                title={fam.family_code}
-                              >
-                                {fam.family_code}
-                              </span>
+                              <div className="fm-avatar-circle" title={fam.head_name}>
+                                {getHouseholdInitials(fam.head_name)}
+                              </div>
+                              <div className="fm-household-info">
+                                <button
+                                  type="button"
+                                  className="fm-link-btn fm-head-name-btn"
+                                  onClick={() => openHouseholdDetails(fam)}
+                                >
+                                  {fam.head_name}
+                                </button>
+                                <span
+                                  className="fm-household-id-sub"
+                                  title={`Full Code: ${fam.family_code}`}
+                                >
+                                  {formatHouseholdDisplayCode(fam.family_code)}
+                                </span>
+                              </div>
                             </div>
                           </td>
-                          {!lockedBarangayId && <td>{fam.barangay || "—"}</td>}
+                          {!lockedBarangayId && (
+                            <td>
+                              <span className="fm-brgy-tag">{fam.barangay || "—"}</span>
+                            </td>
+                          )}
                           <td>
-                            <strong>
-                              {fam.resident_count ?? fam.member_count ?? 0}
-                            </strong>
+                            <span className="fm-members-badge">
+                              <FontAwesomeIcon icon={faUsers} />
+                              <strong>{fam.resident_count ?? fam.member_count ?? 0}</strong>
+                            </span>
                           </td>
                           <td>
                             {bldgRoomText ? (
                               <div className="fm-assignment-cell">
-                                <span className="fm-room-name">
-                                  {bldgRoomText}
+                                <span className="fm-room-badge">
+                                  <FontAwesomeIcon icon={faDoorOpen} />
+                                  <span>{bldgRoomText}</span>
                                 </span>
                                 {centerName && (
-                                  <span className="fm-center-name">
-                                    {centerName}
+                                  <span className="fm-center-name" title={centerName}>
+                                    <FontAwesomeIcon icon={faBuilding} /> {centerName}
                                   </span>
                                 )}
                               </div>
                             ) : (
                               <span className="fm-badge fm-badge-amber">
-                                Unassigned
+                                <FontAwesomeIcon icon={faTriangleExclamation} /> Unassigned
                               </span>
                             )}
                           </td>
                           <td>
                             {assigned ? (
                               <span
-                                className="fm-badge"
-                                style={{
-                                  backgroundColor: fam.is_checked_in ? "#dcfce7" : "#f1f5f9",
-                                  color: fam.is_checked_in ? "#166534" : "#475569",
-                                  border: fam.is_checked_in ? "none" : "1px solid #cbd5e1",
-                                }}
+                                className={`fm-checkin-pill ${fam.is_checked_in ? "checked-in" : "pending"}`}
                               >
+                                <span className={`fm-status-dot ${fam.is_checked_in ? "green" : "slate"}`} />
                                 {fam.checkin_status || (fam.is_checked_in ? "Checked in" : "Not yet arrived")}
                               </span>
                             ) : (
@@ -3720,28 +4025,31 @@ export default function FamilyManagement({
                             <div className="fm-row-actions">
                               <button
                                 type="button"
-                                className="fm-btn fm-btn-secondary fm-action-btn"
+                                className="fm-btn-icon view"
+                                title="View details"
                                 onClick={() => openHouseholdDetails(fam)}
                               >
-                                View
+                                <FontAwesomeIcon icon={faEye} />
                               </button>
                               <button
                                 type="button"
-                                className="fm-btn fm-btn-outline fm-action-btn"
+                                className="fm-btn-icon edit"
+                                title="Edit household"
                                 onClick={() => openEditHouseholdModal(fam)}
                               >
-                                Edit
+                                <FontAwesomeIcon icon={faPenToSquare} />
                               </button>
                               <button
                                 type="button"
-                                className="fm-text-btn fm-action-text-btn"
+                                className="fm-btn-icon reassign"
+                                title={assigned ? "Reassign Room" : "Assign to Room"}
                                 onClick={() =>
                                   assigned
                                     ? openMoveModal(fam)
                                     : openAssignModal(fam)
                                 }
                               >
-                                Reassign
+                                <FontAwesomeIcon icon={faRightLeft} />
                               </button>
                             </div>
                           </td>
@@ -3770,102 +4078,104 @@ export default function FamilyManagement({
                     fam.resident_count ?? fam.member_count ?? 0;
                   return (
                     <article key={fam.id} className="fm-mobile-card">
-                      <div className="fm-mobile-card-top">
+                      <div className="fm-mobile-card-header">
+                        <div className="fm-avatar-circle" title={fam.head_name}>
+                          {getHouseholdInitials(fam.head_name)}
+                        </div>
                         <div className="fm-mobile-top-content">
                           <button
                             type="button"
-                            className="fm-link-btn fm-mobile-head-name"
+                            className="fm-head-name-btn fm-mobile-head-name"
                             onClick={() => openHouseholdDetails(fam)}
                           >
                             {fam.head_name}
                           </button>
                           <div className="fm-mobile-sub-info">
                             <span
-                              className="fm-mobile-id"
-                              title={fam.family_code}
+                              className="fm-household-id-sub"
+                              title={`Full Code: ${fam.family_code}`}
                             >
-                              {fam.family_code}
+                              {formatHouseholdDisplayCode(fam.family_code)}
                             </span>
                             {!lockedBarangayId && fam.barangay && (
-                              <>
-                                <span className="fm-dot-sep">•</span>
-                                <span>{fam.barangay}</span>
-                              </>
+                              <span className="fm-brgy-tag">{fam.barangay}</span>
                             )}
-                            <span className="fm-dot-sep">•</span>
-                            <span>
-                              {memberCount}{" "}
-                              {memberCount === 1 ? "member" : "members"}
+                            <span className="fm-members-badge">
+                              <FontAwesomeIcon icon={faUsers} />
+                              <strong>{memberCount}</strong>
                             </span>
                           </div>
                         </div>
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                          {!assigned ? (
-                            <span className="fm-badge fm-badge-amber fm-mobile-badge">
-                              Unassigned
+
+                        <div className="fm-mobile-status-wrap">
+                          {assigned ? (
+                            <span
+                              className={`fm-checkin-pill ${fam.is_checked_in ? "checked-in" : "pending"}`}
+                            >
+                              <span className={`fm-status-dot ${fam.is_checked_in ? "green" : "slate"}`} />
+                              {fam.checkin_status || (fam.is_checked_in ? "Checked in" : "Not yet arrived")}
                             </span>
                           ) : (
-                            <span
-                              className="fm-badge fm-mobile-badge"
-                              style={{
-                                backgroundColor: fam.is_checked_in ? "#dcfce7" : "#f1f5f9",
-                                color: fam.is_checked_in ? "#166534" : "#475569",
-                                border: fam.is_checked_in ? "none" : "1px solid #cbd5e1",
-                              }}
-                            >
-                              {fam.checkin_status || (fam.is_checked_in ? "Checked in" : "Not yet arrived")}
+                            <span className="fm-badge fm-badge-amber">
+                              <FontAwesomeIcon icon={faTriangleExclamation} /> Unassigned
                             </span>
                           )}
                         </div>
                       </div>
 
-                      <div className="fm-mobile-card-center-room">
-                        <span className="fm-mobile-loc-label">
-                          Building &middot; Room
-                        </span>
-                        <div className="fm-mobile-center-room-val">
-                          {bldgRoomText ? (
-                            <>
-                              <span className="fm-mobile-room-name">
-                                {bldgRoomText}
+                      <div className="fm-mobile-card-body">
+                        <div className="fm-mobile-info-row">
+                          <span className="fm-mobile-loc-label">Shelter Assignment:</span>
+                          <div className="fm-mobile-loc-val">
+                            {bldgRoomText ? (
+                              <div className="fm-assignment-cell">
+                                <span className="fm-room-badge">
+                                  <FontAwesomeIcon icon={faDoorOpen} />
+                                  <span>{bldgRoomText}</span>
+                                </span>
+                                {centerName && (
+                                  <span className="fm-center-name" title={centerName}>
+                                    <FontAwesomeIcon icon={faBuilding} /> {centerName}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-amber-600 font-medium text-xs">
+                                Awaiting evacuation center room assignment
                               </span>
-                              {centerName && (
-                                <strong className="fm-mobile-center-name">
-                                  {centerName}
-                                </strong>
-                              )}
-                            </>
-                          ) : (
-                            <span className="fm-badge fm-badge-amber">Unassigned</span>
-                          )}
+                            )}
+                          </div>
                         </div>
                       </div>
 
                       <div className="fm-mobile-card-actions">
                         <button
                           type="button"
-                          className="fm-btn fm-btn-secondary fm-btn-mobile"
+                          className="fm-btn-icon view"
                           onClick={() => openHouseholdDetails(fam)}
                         >
-                          View
+                          <FontAwesomeIcon icon={faEye} />
+                          <span>View</span>
                         </button>
                         <button
                           type="button"
-                          className="fm-btn fm-btn-outline fm-btn-mobile"
+                          className="fm-btn-icon edit"
                           onClick={() => openEditHouseholdModal(fam)}
                         >
-                          Edit
+                          <FontAwesomeIcon icon={faPenToSquare} />
+                          <span>Edit</span>
                         </button>
                         <button
                           type="button"
-                          className="fm-text-btn fm-btn-mobile fm-mobile-reassign-btn"
+                          className="fm-btn-icon reassign"
                           onClick={() =>
                             assigned
                               ? openMoveModal(fam)
                               : openAssignModal(fam)
                           }
                         >
-                          Reassign
+                          <FontAwesomeIcon icon={faRightLeft} />
+                          <span>{assigned ? "Reassign" : "Assign"}</span>
                         </button>
                       </div>
                     </article>
@@ -3948,8 +4258,8 @@ export default function FamilyManagement({
                     (memberModalMode === "add"
                       ? "Add Household Member"
                       : "Edit Household Member")}
-                  {modal === "assign" && "Assign Household to Evacuation Room"}
-                  {modal === "move" && "Change Assigned Evacuation Room"}
+                  {modal === "assign" && "Assign Household to Evacuation Center"}
+                  {modal === "move" && "Change Assigned Evacuation Center / Room"}
                 </h3>
                 <p>
                   {modal === "edit-household" &&
@@ -3957,9 +4267,9 @@ export default function FamilyManagement({
                   {modal === "member-form" &&
                     `Household: ${activeFamily?.head_name || ""} (${activeFamily?.family_code || ""})`}
                   {modal === "assign" &&
-                    `Select an active center and room for ${activeFamily?.head_name || ""}.`}
+                    `Select an active evacuation center with available capacity for ${activeFamily?.head_name || ""}.`}
                   {modal === "move" &&
-                    `Transfer ${activeFamily?.head_name || ""} to another room.`}
+                    `Transfer ${activeFamily?.head_name || ""} to another evacuation center or room.`}
                 </p>
               </div>
               <button
@@ -4198,14 +4508,37 @@ export default function FamilyManagement({
 
             {/* MODAL: ASSIGN ROOM */}
             {modal === "assign" && activeFamily && (() => {
-              const selectedCenter = centersList.find(c => String(c.id) === String(assignCenterId));
-              const isSingleVenue = selectedCenter?.center_type === 'single_venue';
-              const needed = activeFamily.member_count || activeFamily.resident_count || 1;
+              const selectedCenter = centersList.find(
+                (c) => String(c.id) === String(assignCenterId)
+              );
+              const needed =
+                activeFamily.member_count || activeFamily.resident_count || 1;
+              const availableCenters = centersList.filter(
+                (c) =>
+                  getCenterRemainingCapacity(c) >= needed ||
+                  String(c.id) === String(assignCenterId)
+              );
+              const isDirectCenter = isDirectVenueCenter(
+                selectedCenter,
+                assignRooms,
+                assignRoomsQuery.isLoading
+              );
+              const hasBldgs = centerHasBuildings(selectedCenter, assignRooms);
+              const availableBldgs = getAvailableBuildingsForCenter(
+                selectedCenter,
+                assignRooms,
+                needed
+              );
+              const filteredRooms = getFilteredRoomsForSelection(
+                selectedCenter,
+                assignRooms,
+                assignBuildingId,
+                needed
+              );
 
-              // For single_venue, calculate venue capacity
               const venueCap = selectedCenter?.capacity ?? 0;
-              const venueOcc = selectedCenter?.occupied ?? selectedCenter?.current_occupancy ?? 0;
-              const venueAvailable = Math.max(venueCap - venueOcc, 0);
+              const venueOcc = getCenterAssignedCount(selectedCenter);
+              const venueAvailable = getCenterRemainingCapacity(selectedCenter);
               const venueHasCapacity = venueAvailable >= needed;
 
               return (
@@ -4230,44 +4563,138 @@ export default function FamilyManagement({
                         value={assignCenterId}
                         onChange={(e) => {
                           setAssignCenterId(e.target.value);
+                          setAssignBuildingId("");
                           setAssignRoomId("");
                         }}
                         required
                       >
                         <option value="">Select evacuation center</option>
-                        {centersList.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {displayEntityName(c.name)} ({(c.barangays || []).map((barangay) => barangay.name).join(", ")})
-                          </option>
-                        ))}
+                        {availableCenters.map((c) => {
+                          const rem = getCenterRemainingCapacity(c);
+                          return (
+                            <option key={c.id} value={c.id}>
+                              {displayEntityName(c.name)} (
+                              {(c.barangays || [])
+                                .map((barangay) => barangay.name)
+                                .join(", ")}
+                              ) — {rem} spaces left
+                            </option>
+                          );
+                        })}
                       </select>
                     </label>
                   </div>
 
-                  {isSingleVenue ? (
-                    // Single venue - show venue capacity instead of room selection
+                  {isDirectCenter ? (
                     <div className="fm-assignment-selector-box">
                       {selectedCenter && (
-                        <div className={`fm-capacity-summary ${venueHasCapacity ? 'has-capacity' : 'no-capacity'}`}>
-                          <div className="capacity-row"><span className="capacity-label">Venue capacity</span><span className="capacity-value">{venueCap} people</span></div>
-                          <div className="capacity-row"><span className="capacity-label">Currently assigned</span><span className="capacity-value">{venueOcc} people</span></div>
-                          <div className="capacity-row"><span className="capacity-label">Remaining capacity</span><span className="capacity-value" style={{ color: venueHasCapacity ? 'var(--ew-safe-text)' : 'var(--ew-danger-text)' }}>{venueAvailable} spaces left</span></div>
-                          <div className="capacity-row"><span className="capacity-label">Household to assign</span><span className="capacity-value">{needed} members</span></div>
-                          {!venueHasCapacity && <p className="capacity-warning"><FontAwesomeIcon icon={faTriangleExclamation} /> Warning: this household has {needed} members but only {venueAvailable} space left. Assigning would exceed venue capacity.</p>}
+                        <div
+                          className={`fm-capacity-summary ${venueHasCapacity ? "has-capacity" : "no-capacity"}`}
+                        >
+                          <div className="capacity-row">
+                            <span className="capacity-label">
+                              Center capacity
+                            </span>
+                            <span className="capacity-value">
+                              {venueCap} people
+                            </span>
+                          </div>
+                          <div className="capacity-row">
+                            <span className="capacity-label">
+                              Currently assigned
+                            </span>
+                            <span className="capacity-value">
+                              {venueOcc} people
+                            </span>
+                          </div>
+                          <div className="capacity-row">
+                            <span className="capacity-label">
+                              Remaining capacity
+                            </span>
+                            <span
+                              className="capacity-value"
+                              style={{
+                                color: venueHasCapacity
+                                  ? "var(--ew-safe-text)"
+                                  : "var(--ew-danger-text)",
+                              }}
+                            >
+                              {venueAvailable} spaces left
+                            </span>
+                          </div>
+                          <div className="capacity-row">
+                            <span className="capacity-label">
+                              Household to assign
+                            </span>
+                            <span className="capacity-value">
+                              {needed} members
+                            </span>
+                          </div>
+                          {!venueHasCapacity && (
+                            <p className="capacity-warning">
+                              <FontAwesomeIcon icon={faTriangleExclamation} />{" "}
+                              Warning: this household has {needed} members but
+                              only {venueAvailable} space left. Assigning would
+                              exceed center capacity.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
                   ) : (
-                    // Campus/Private Property - show room selection
                     <>
-                      <div className="fm-form-grid-2">
+                      <div
+                        className={
+                          hasBldgs ? "fm-form-grid-2" : "fm-form-grid-1"
+                        }
+                      >
+                        {hasBldgs && (
+                          <label className="fm-field">
+                            <span>
+                              Building <strong className="fm-req">*</strong>
+                            </span>
+                            <select
+                              value={assignBuildingId}
+                              disabled={
+                                !assignCenterId || assignRoomsQuery.isLoading
+                              }
+                              onChange={(e) => {
+                                setAssignBuildingId(e.target.value);
+                                setAssignRoomId("");
+                              }}
+                              required
+                            >
+                              <option value="">
+                                {!assignCenterId
+                                  ? "Select a center first"
+                                  : assignRoomsQuery.isLoading
+                                    ? "Loading buildings..."
+                                    : availableBldgs.length === 0
+                                      ? "No buildings with available capacity"
+                                      : "Select building"}
+                              </option>
+                              {availableBldgs.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {displayEntityName(b.name)} ({b.rooms.length}{" "}
+                                  room{b.rooms.length === 1 ? "" : "s"},{" "}
+                                  {b.availableSpaces} available)
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+
                         <label className="fm-field">
                           <span>
                             Room <strong className="fm-req">*</strong>
                           </span>
                           <select
                             value={assignRoomId}
-                            disabled={!assignCenterId || assignRoomsQuery.isLoading}
+                            disabled={
+                              !assignCenterId ||
+                              assignRoomsQuery.isLoading ||
+                              (hasBldgs && !assignBuildingId)
+                            }
                             onChange={(e) => setAssignRoomId(e.target.value)}
                             required
                           >
@@ -4276,20 +4703,18 @@ export default function FamilyManagement({
                                 ? "Select a center first"
                                 : assignRoomsQuery.isLoading
                                   ? "Loading rooms..."
-                                  : "Select room"}
+                                  : hasBldgs && !assignBuildingId
+                                    ? "Select a building first"
+                                    : filteredRooms.length === 0
+                                      ? "No rooms with available capacity"
+                                      : "Select room"}
                             </option>
-                            {assignRooms.map((r) => {
-                              const avail =
-                                r.available ??
-                                Math.max(r.capacity - (r.occupied || 0), 0);
+                            {filteredRooms.map((r) => {
+                              const avail = getRoomRemainingCapacity(r);
                               return (
-                                <option
-                                  key={r.id}
-                                  value={r.id}
-                                  disabled={avail < needed}
-                                >
-                                  {formatRoomLabel(r.room_number)} ({avail} available /{" "}
-                                  {r.capacity} cap)
+                                <option key={r.id} value={r.id}>
+                                  {formatRoomLabel(r.room_number)} ({avail}{" "}
+                                  available / {r.capacity} cap)
                                 </option>
                               );
                             })}
@@ -4307,7 +4732,9 @@ export default function FamilyManagement({
                           </div>
                           <div>
                             <span>Currently Assigned</span>
-                            <strong>{selectedAssignRoom.occupied || 0}</strong>
+                            <strong>
+                              {getRoomAssignedCount(selectedAssignRoom)}
+                            </strong>
                           </div>
                           <div>
                             <span>Remaining Capacity</span>
@@ -4333,9 +4760,11 @@ export default function FamilyManagement({
                       disabled={
                         assigning ||
                         !assignCenterId ||
-                        (!isSingleVenue && !assignRoomId) ||
-                        (isSingleVenue && !venueHasCapacity) ||
-                        (!isSingleVenue && !assignHasCapacity)
+                        (!isDirectCenter &&
+                          ((hasBldgs && !assignBuildingId) ||
+                            !assignRoomId ||
+                            !assignHasCapacity)) ||
+                        (isDirectCenter && !venueHasCapacity)
                       }
                     >
                       {assigning ? "Assigning..." : "Confirm Assignment"}
@@ -4347,22 +4776,56 @@ export default function FamilyManagement({
 
             {/* MODAL: MOVE / CHANGE ROOM */}
             {modal === "move" && activeFamily && (() => {
-              const destCenter = centersList.find(c => String(c.id) === String(targetCenterId));
-              const isDestSingleVenue = destCenter?.center_type === 'single_venue';
+              const destCenter = centersList.find(
+                (c) => String(c.id) === String(targetCenterId)
+              );
               const needed = moveFamilyMembers;
+              const currentCenterId =
+                activeFamily.current_center_id ||
+                activeFamily.assignments?.[0]?.center_id;
+              const availableDestCenters = centersList.filter((c) => {
+                const isSameCenter =
+                  currentCenterId && String(c.id) === String(currentCenterId);
+                const isDirect = isDirectVenueCenter(c, [], true);
+                if (isSameCenter && !isDirect) return true;
+                return (
+                  getCenterRemainingCapacity(c) >= needed ||
+                  String(c.id) === String(targetCenterId)
+                );
+              });
 
-              // For single_venue, calculate venue capacity
+              const isDestDirectCenter = isDirectVenueCenter(
+                destCenter,
+                targetRooms,
+                targetRoomsQuery.isLoading
+              );
+              const destHasBldgs = centerHasBuildings(destCenter, targetRooms);
+              const destAvailableBldgs = getAvailableBuildingsForCenter(
+                destCenter,
+                targetRooms,
+                needed
+              );
+              const destFilteredRooms = getFilteredRoomsForSelection(
+                destCenter,
+                targetRooms,
+                targetBuildingId,
+                needed
+              );
+
               const venueCap = destCenter?.capacity ?? 0;
-              const venueOcc = destCenter?.occupied ?? destCenter?.current_occupancy ?? 0;
-              const venueAvailable = Math.max(venueCap - venueOcc, 0);
+              const venueOcc = getCenterAssignedCount(destCenter);
+              const venueAvailable = getCenterRemainingCapacity(destCenter);
               const venueHasCapacity = venueAvailable >= needed;
 
-              // Current location display - for single_venue, no room
               const currentCenterName = displayEntityName(
                 activeFamily.current_center || activeFamily.evacuation_center
               );
-              const currentRoomLabel = activeFamily.current_room || activeFamily.rooms;
-              const isCurrentSingleVenue = activeFamily.current_center_type === 'single_venue';
+              const currentRoomLabel =
+                activeFamily.current_room || activeFamily.rooms;
+              const isCurrentDirectVenue =
+                activeFamily.current_center_type === "single_venue" ||
+                !currentRoomLabel ||
+                currentRoomLabel === "Single Venue";
 
               return (
                 <form onSubmit={handleMoveSubmit} className="fm-modal-body">
@@ -4371,7 +4834,7 @@ export default function FamilyManagement({
                       <span>Current Location</span>
                       <strong>
                         {currentCenterName}
-                        {isCurrentSingleVenue
+                        {isCurrentDirectVenue
                           ? ""
                           : ` — ${formatRoomLabel(currentRoomLabel)}`}
                       </strong>
@@ -4391,44 +4854,140 @@ export default function FamilyManagement({
                         value={targetCenterId}
                         onChange={(e) => {
                           setTargetCenterId(e.target.value);
+                          setTargetBuildingId("");
                           setTargetRoomId("");
                         }}
                         required
                       >
                         <option value="">Select destination center</option>
-                        {centersList.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {displayEntityName(c.name)} ({(c.barangays || []).map((barangay) => barangay.name).join(", ")})
-                          </option>
-                        ))}
+                        {availableDestCenters.map((c) => {
+                          const rem = getCenterRemainingCapacity(c);
+                          return (
+                            <option key={c.id} value={c.id}>
+                              {displayEntityName(c.name)} (
+                              {(c.barangays || [])
+                                .map((barangay) => barangay.name)
+                                .join(", ")}
+                              ) — {rem} spaces left
+                            </option>
+                          );
+                        })}
                       </select>
                     </label>
                   </div>
 
-                  {isDestSingleVenue ? (
-                    // Single venue - show venue capacity instead of room selection
+                  {isDestDirectCenter ? (
                     <div className="fm-assignment-selector-box">
                       {destCenter && (
-                        <div className={`fm-capacity-summary ${venueHasCapacity ? 'has-capacity' : 'no-capacity'}`}>
-                          <div className="capacity-row"><span className="capacity-label">Venue capacity</span><span className="capacity-value">{venueCap} people</span></div>
-                          <div className="capacity-row"><span className="capacity-label">Currently assigned</span><span className="capacity-value">{venueOcc} people</span></div>
-                          <div className="capacity-row"><span className="capacity-label">Remaining capacity</span><span className="capacity-value" style={{ color: venueHasCapacity ? 'var(--ew-safe-text)' : 'var(--ew-danger-text)' }}>{venueAvailable} spaces left</span></div>
-                          <div className="capacity-row"><span className="capacity-label">Household to move</span><span className="capacity-value">{needed} members</span></div>
-                          {!venueHasCapacity && <p className="capacity-warning"><FontAwesomeIcon icon={faTriangleExclamation} /> Warning: this household has {needed} members but only {venueAvailable} space left. Moving would exceed venue capacity.</p>}
+                        <div
+                          className={`fm-capacity-summary ${venueHasCapacity ? "has-capacity" : "no-capacity"}`}
+                        >
+                          <div className="capacity-row">
+                            <span className="capacity-label">
+                              Center capacity
+                            </span>
+                            <span className="capacity-value">
+                              {venueCap} people
+                            </span>
+                          </div>
+                          <div className="capacity-row">
+                            <span className="capacity-label">
+                              Currently assigned
+                            </span>
+                            <span className="capacity-value">
+                              {venueOcc} people
+                            </span>
+                          </div>
+                          <div className="capacity-row">
+                            <span className="capacity-label">
+                              Remaining capacity
+                            </span>
+                            <span
+                              className="capacity-value"
+                              style={{
+                                color: venueHasCapacity
+                                  ? "var(--ew-safe-text)"
+                                  : "var(--ew-danger-text)",
+                              }}
+                            >
+                              {venueAvailable} spaces left
+                            </span>
+                          </div>
+                          <div className="capacity-row">
+                            <span className="capacity-label">
+                              Household to move
+                            </span>
+                            <span className="capacity-value">
+                              {needed} members
+                            </span>
+                          </div>
+                          {!venueHasCapacity && (
+                            <p className="capacity-warning">
+                              <FontAwesomeIcon icon={faTriangleExclamation} />{" "}
+                              Warning: this household has {needed} members but
+                              only {venueAvailable} space left. Moving would
+                              exceed center capacity.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>
                   ) : (
-                    // Campus/Private Property - show room selection
                     <>
-                      <div className="fm-form-grid-2">
+                      <div
+                        className={
+                          destHasBldgs ? "fm-form-grid-2" : "fm-form-grid-1"
+                        }
+                      >
+                        {destHasBldgs && (
+                          <label className="fm-field">
+                            <span>
+                              Destination Building{" "}
+                              <strong className="fm-req">*</strong>
+                            </span>
+                            <select
+                              value={targetBuildingId}
+                              disabled={
+                                !targetCenterId || targetRoomsQuery.isLoading
+                              }
+                              onChange={(e) => {
+                                setTargetBuildingId(e.target.value);
+                                setTargetRoomId("");
+                              }}
+                              required
+                            >
+                              <option value="">
+                                {!targetCenterId
+                                  ? "Select a center first"
+                                  : targetRoomsQuery.isLoading
+                                    ? "Loading buildings..."
+                                    : destAvailableBldgs.length === 0
+                                      ? "No buildings with available capacity"
+                                      : "Select destination building"}
+                              </option>
+                              {destAvailableBldgs.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {displayEntityName(b.name)} ({b.rooms.length}{" "}
+                                  room{b.rooms.length === 1 ? "" : "s"},{" "}
+                                  {b.availableSpaces} available)
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+
                         <label className="fm-field">
                           <span>
-                            Destination Room <strong className="fm-req">*</strong>
+                            Destination Room{" "}
+                            <strong className="fm-req">*</strong>
                           </span>
                           <select
                             value={targetRoomId}
-                            disabled={!targetCenterId || targetRoomsQuery.isLoading}
+                            disabled={
+                              !targetCenterId ||
+                              targetRoomsQuery.isLoading ||
+                              (destHasBldgs && !targetBuildingId)
+                            }
                             onChange={(e) => setTargetRoomId(e.target.value)}
                             required
                           >
@@ -4437,20 +4996,18 @@ export default function FamilyManagement({
                                 ? "Select a center first"
                                 : targetRoomsQuery.isLoading
                                   ? "Loading rooms..."
-                                  : "Select destination room"}
+                                  : destHasBldgs && !targetBuildingId
+                                    ? "Select a building first"
+                                    : destFilteredRooms.length === 0
+                                      ? "No rooms with available capacity"
+                                      : "Select destination room"}
                             </option>
-                            {targetRooms.map((r) => {
-                              const avail =
-                                r.available ??
-                                Math.max(r.capacity - (r.occupied || 0), 0);
+                            {destFilteredRooms.map((r) => {
+                              const avail = getRoomRemainingCapacity(r);
                               return (
-                                <option
-                                  key={r.id}
-                                  value={r.id}
-                                  disabled={avail < needed}
-                                >
-                                  {formatRoomLabel(r.room_number)} ({avail} available /{" "}
-                                  {r.capacity} cap)
+                                <option key={r.id} value={r.id}>
+                                  {formatRoomLabel(r.room_number)} ({avail}{" "}
+                                  available / {r.capacity} cap)
                                 </option>
                               );
                             })}
@@ -4468,7 +5025,9 @@ export default function FamilyManagement({
                           </div>
                           <div>
                             <span>Currently Assigned</span>
-                            <strong>{selectedTargetRoom.occupied || 0}</strong>
+                            <strong>
+                              {getRoomAssignedCount(selectedTargetRoom)}
+                            </strong>
                           </div>
                           <div>
                             <span>Remaining Capacity</span>
@@ -4494,8 +5053,11 @@ export default function FamilyManagement({
                       disabled={
                         moving ||
                         !targetCenterId ||
-                        (isDestSingleVenue && !venueHasCapacity) ||
-                        (!isDestSingleVenue && (!targetRoomId || !moveHasCapacity))
+                        (isDestDirectCenter && !venueHasCapacity) ||
+                        (!isDestDirectCenter &&
+                          ((destHasBldgs && !targetBuildingId) ||
+                            !targetRoomId ||
+                            !moveHasCapacity))
                       }
                     >
                       {moving ? "Transferring..." : "Review Transfer"}

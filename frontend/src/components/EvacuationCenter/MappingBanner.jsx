@@ -28,8 +28,6 @@ export function MappingBanner({ center, onPlaceOnMap, onDismiss }) {
     if (!dismissed) return
     const needs = centerNeedsMapping(center)
     if (!needs) {
-      // Center was mapped elsewhere, reset dismissal so banner shows again if needed
-      // Use setTimeout to avoid calling setState synchronously in effect
       setTimeout(() => {
         setDismissed(false)
         try {
@@ -53,36 +51,43 @@ export function MappingBanner({ center, onPlaceOnMap, onDismiss }) {
         localStorage.setItem(key, '1')
       }
     } catch {
-      // localStorage unavailable or quota exceeded — dismissal won't persist, banner stays dismissible in-session
+      // localStorage unavailable or quota exceeded
     }
     onDismiss?.()
   }
 
   return (
-    <div className="ds-banner ds-banner--info" role="status" aria-label="Mapping notice">
-      <FontAwesomeIcon icon={faMapPin} size="xs" className="ds-banner__icon" />
-      <div className="ds-banner__content">
-        <p className="ds-banner__title" style={{ margin: 0, fontWeight: '600' }}>
-          This center isn't on the map yet
-        </p>
-        <p className="ds-banner__text" style={{ margin: 0, fontSize: 'var(--text-xs)' }}>
-          Place it on the map so staff can route families here.
-        </p>
+    <div className="ec-mapping-banner" role="status" aria-label="Mapping notice">
+      <div className="ec-mapping-banner-left">
+        <div className="ec-mapping-icon-bubble">
+          <FontAwesomeIcon icon={faMapPin} />
+        </div>
+        <div className="ec-mapping-banner-text">
+          <p className="ec-mapping-title">
+            This center isn't on the map yet
+          </p>
+          <p className="ec-mapping-desc">
+            Place it on the map so staff can route families here.
+          </p>
+        </div>
       </div>
-      <div className="ec-banner-actions">
+      <div className="ec-mapping-banner-actions">
         <button
           type="button"
-          className="ds-btn ds-btn--primary ds-btn--sm"
+          className="ec-btn-place-map"
           onClick={() => { onPlaceOnMap?.() }}
         >
-          <FontAwesomeIcon icon={faMapPin} size="xs" /> Place on map
+          <FontAwesomeIcon icon={faMapPin} />
+          <span>Place on map</span>
         </button>
         <button
           type="button"
-          className="ds-btn ds-btn--ghost ds-btn--sm"
+          className="ec-btn-dismiss-banner"
           onClick={handleDismiss}
+          title="Dismiss notice"
+          aria-label="Dismiss notice"
         >
-          <FontAwesomeIcon icon={faXmark} size="xs" />
+          <FontAwesomeIcon icon={faXmark} />
         </button>
       </div>
     </div>

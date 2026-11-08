@@ -19,34 +19,11 @@ const queryClient = new QueryClient({
 })
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', async () => {
-    // Unregister any stale EvacWay service workers first (dev and prod)
-    const registrations = await navigator.serviceWorker.getRegistrations()
-    const evacWayRegistrations = registrations.filter((registration) =>
-      [registration.active, registration.waiting, registration.installing].some(
-        (worker) => worker && new URL(worker.scriptURL).pathname === '/sw.js'
-      )
-    )
-    await Promise.all(evacWayRegistrations.map((registration) => registration.unregister()))
-
-    // Clear dev caches only
-    if (!import.meta.env.PROD) {
-      const cacheNames = await caches.keys()
-      await Promise.all(
-        cacheNames
-          .filter((name) => name.startsWith('evacway-shell-'))
-          .map((name) => caches.delete(name))
-      )
-    }
-
-    // Register the service worker in prod only; skip in dev to avoid Chrome
-    // serving stale cached shell/assets (blank page / not updating on reload).
-    if (import.meta.env.PROD) {
-      await navigator.serviceWorker.register('/sw.js').catch((error) => {
-        console.error('Service worker registration failed:', error)
-      })
-    }
-  })
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((error) => {
+      console.warn('Service worker registration failed:', error);
+    });
+  });
 }
 
 createRoot(document.getElementById('root')).render(

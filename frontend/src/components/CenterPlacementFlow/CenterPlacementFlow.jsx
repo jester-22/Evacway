@@ -215,7 +215,7 @@ export default function CenterPlacementFlow({
   // Compute step validity
   const isStep1Valid = footprintPoints.length >= 3;
   const isStep2Valid = entrancePoints.length >= 1;
-  const isEditValid = editPolygonPoints && editPolygonPoints.length >= 3;
+  const isEditValid = (editPolygonPoints ? editPolygonPoints.length : footprintPoints.length) >= 3;
 
   // Handle cancel action: if points exist, confirm first
   const handleCancelRequest = useCallback(() => {
@@ -235,11 +235,11 @@ export default function CenterPlacementFlow({
       }
     } else if (step === "entrance") {
       if (isStep2Valid && onStepChange) {
-        onStepChange("confirm");
+        onStepChange("edit");
       }
     } else if (step === "edit") {
-      if (isEditValid && !saving && onSave) {
-        onSave();
+      if (isEditValid && onStepChange) {
+        onStepChange("confirm");
       }
     } else if (step === "confirm") {
       if (!saving && onSave) {
@@ -350,16 +350,17 @@ export default function CenterPlacementFlow({
   );
 
   // Calculate edit polygon area
+  const activeEditPoints = editPolygonPoints || footprintPoints;
   const editPolygonArea = useMemo(
-    () => (editPolygonPoints && editPolygonPoints.length >= 3 ? calculatePolygonAreaM2(editPolygonPoints) : 0),
-    [editPolygonPoints]
+    () => (activeEditPoints && activeEditPoints.length >= 3 ? calculatePolygonAreaM2(activeEditPoints) : 0),
+    [activeEditPoints]
   );
 
   // Live text for toolbar
   const liveText = useMemo(() => {
     const pts = footprintPoints.length;
     const ents = entrancePoints.length;
-    const editPts = editPolygonPoints ? editPolygonPoints.length : 0;
+    const editPts = activeEditPoints.length;
     if (step === "footprint") {
       const pLabel = `${pts} ${pts === 1 ? "point" : "points"}`;
       return pts >= 3
@@ -372,12 +373,12 @@ export default function CenterPlacementFlow({
     if (step === "edit") {
       const pLabel = `${editPts} ${editPts === 1 ? "point" : "points"}`;
       return editPts >= 3
-        ? `${pLabel} • Footprint about ${editPolygonArea.toLocaleString()} m²`
+        ? `${pLabel} • Drag handles to reshape • Footprint about ${editPolygonArea.toLocaleString()} m²`
         : pLabel;
     }
     // confirm step
     return `${pts} points • ${ents} ${ents === 1 ? "entrance" : "entrances"} • Footprint about ${footprintArea.toLocaleString()} m²`;
-  }, [step, footprintPoints.length, entrancePoints.length, footprintArea, editPolygonPoints, editPolygonArea]);
+  }, [step, footprintPoints.length, entrancePoints.length, footprintArea, activeEditPoints.length, editPolygonArea]);
 
   // Can undo / clear
   const canUndo =
@@ -562,7 +563,7 @@ export default function CenterPlacementFlow({
                 <FontAwesomeIcon icon={faSpinner} spin />
                 <span>Saving...</span>
               </>
-            ) : step === "confirm" || step === "edit" ? (
+            ) : step === "confirm" ? (
               <span>Save center</span>
             ) : (
               <span>Next</span>

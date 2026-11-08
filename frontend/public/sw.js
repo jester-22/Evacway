@@ -11,6 +11,11 @@ function parsePushPayload(data) {
 }
 
 self.addEventListener("install", (event) => {
+  // In development, skip caching static assets
+  if (self.location.hostname === "localhost" || self.location.hostname === "127.0.0.1") {
+    self.skipWaiting();
+    return;
+  }
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS))
   );
@@ -27,6 +32,11 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
+  // In development, completely bypass cache to let Vite HMR and API requests flow directly
+  if (self.location.hostname === "localhost" || self.location.hostname === "127.0.0.1") {
+    return;
+  }
+
   const { request } = event;
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) {

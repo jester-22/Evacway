@@ -1,6 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from geoalchemy2 import Geometry
-from datetime import datetime
+from datetime import datetime, date, date
 from zoneinfo import ZoneInfo
 
 
@@ -109,6 +109,44 @@ class User(BaseModel):
         nullable=True
     )
 
+    @property
+    def center_type(self):
+        return self.center_type_ref.code if self.center_type_ref else "campus"
+
+    @center_type.setter
+    def center_type(self, val):
+        if isinstance(val, int):
+            self.center_type_id = val
+        elif val:
+            ct = CenterType.query.filter_by(code=str(val).strip().lower()).first()
+            if ct:
+                self.center_type_id = ct.id
+
+    @property
+    def center_type_name(self):
+        return self.center_type_ref.name if self.center_type_ref else "Campus"
+
+    @property
+    def building_material(self):
+        return self.building_material_ref.name if self.building_material_ref else None
+
+    @building_material.setter
+    def building_material(self, val):
+        if isinstance(val, int):
+            self.building_material_id = val
+        elif val:
+            bm = BuildingMaterial.query.filter(
+                (BuildingMaterial.name.ilike(str(val).strip())) | (BuildingMaterial.code == str(val).strip().lower())
+            ).first()
+            if bm:
+                self.building_material_id = bm.id
+
+    @property
+    def accessibility_notes(self):
+        if self.amenities:
+            return ", ".join(a.name for a in self.amenities)
+        return None
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -184,6 +222,107 @@ class HazardZone(BaseModel):
 
 
 # ---------------------------------------------------------
+# DEDICATED TABLES: CENTER TYPES, MATERIALS, ACCESSIBILITY
+# ---------------------------------------------------------
+class CenterType(BaseModel):
+    __tablename__ = 'center_types'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    display_order = db.Column(db.Integer, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=philippines_now)
+    updated_at = db.Column(db.DateTime, default=philippines_now, onupdate=philippines_now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'code': self.code,
+            'name': self.name,
+            'description': self.description,
+            'is_active': self.is_active,
+            'display_order': self.display_order,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<CenterType code='{self.code}' name='{self.name}'>"
+
+
+class BuildingMaterial(BaseModel):
+    __tablename__ = 'building_materials'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    display_order = db.Column(db.Integer, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=philippines_now)
+    updated_at = db.Column(db.DateTime, default=philippines_now, onupdate=philippines_now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'code': self.code,
+            'name': self.name,
+            'description': self.description,
+            'is_active': self.is_active,
+            'display_order': self.display_order,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<BuildingMaterial code='{self.code}' name='{self.name}'>"
+
+
+class Amenity(BaseModel):
+    __tablename__ = 'amenities'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), nullable=False, unique=True, index=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    display_order = db.Column(db.Integer, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=philippines_now)
+    updated_at = db.Column(db.DateTime, default=philippines_now, onupdate=philippines_now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'code': self.code,
+            'name': self.name,
+            'description': self.description,
+            'is_active': self.is_active,
+            'display_order': self.display_order,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<Amenity code='{self.code}' name='{self.name}'>"
+
+
+# Backward compatibility alias
+AccessibilityFeature = Amenity
+
+# ---------------------------------------------------------
+# JUNCTION: EVACUATION CENTERS <-> AMENITIES
+# ---------------------------------------------------------
+center_amenities = db.Table(
+    'center_amenities',
+    db.Column('center_id', db.Integer, db.ForeignKey('evacuation_centers.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('amenity_id', db.Integer, db.ForeignKey('amenities.id', ondelete='CASCADE'), primary_key=True)
+)
+center_accessibility_features = center_amenities
+
+
+# ---------------------------------------------------------
 # EVACUATION CENTERS
 #
 # Center information can come from Excel first.
@@ -208,13 +347,21 @@ class EvacuationCenter(BaseModel):
         db.Integer
     )
 
-    building_material = db.Column(
-        db.String(50)
+    center_type_id = db.Column(
+        db.Integer,
+        db.ForeignKey('center_types.id', ondelete='RESTRICT'),
+        nullable=False,
+        default=1,
+        server_default='1'
     )
 
-    accessibility_notes = db.Column(
-        db.Text
+    building_material_id = db.Column(
+        db.Integer,
+        db.ForeignKey('building_materials.id', ondelete='SET NULL'),
+        nullable=True
     )
+
+
 
     hazard_exposure_score = db.Column(
         db.Float
@@ -227,13 +374,6 @@ class EvacuationCenter(BaseModel):
     is_active = db.Column(
         db.Boolean,
         default=True
-    )
-
-    center_type = db.Column(
-        db.String(50),
-        nullable=False,
-        default='campus',
-        server_default='campus'
     )
 
     owner_name = db.Column(
@@ -285,6 +425,71 @@ class EvacuationCenter(BaseModel):
         cascade='all, delete-orphan'
     )
 
+    center_type_ref = db.relationship(
+        'CenterType',
+        foreign_keys=[center_type_id],
+        lazy='joined'
+    )
+
+    building_material_ref = db.relationship(
+        'BuildingMaterial',
+        foreign_keys=[building_material_id],
+        lazy='joined'
+    )
+
+    amenities = db.relationship(
+        'Amenity',
+        secondary=center_amenities,
+        lazy='subquery',
+        backref=db.backref('centers', lazy='dynamic')
+    )
+
+    @property
+    def accessibility_features(self):
+        return self.amenities
+
+    @accessibility_features.setter
+    def accessibility_features(self, val):
+        self.amenities = val
+
+    @property
+    def center_type(self):
+        return self.center_type_ref.code if self.center_type_ref else "campus"
+
+    @center_type.setter
+    def center_type(self, val):
+        if isinstance(val, int):
+            self.center_type_id = val
+        elif val:
+            ct = CenterType.query.filter_by(code=str(val).strip().lower()).first()
+            if ct:
+                self.center_type_id = ct.id
+
+    @property
+    def center_type_name(self):
+        return self.center_type_ref.name if self.center_type_ref else "Campus"
+
+    @property
+    def building_material(self):
+        return self.building_material_ref.name if self.building_material_ref else None
+
+    @building_material.setter
+    def building_material(self, val):
+        if isinstance(val, int):
+            self.building_material_id = val
+        elif val:
+            bm = BuildingMaterial.query.filter(
+                (BuildingMaterial.name.ilike(str(val).strip())) | (BuildingMaterial.code == str(val).strip().lower())
+            ).first()
+            if bm:
+                self.building_material_id = bm.id
+
+    @property
+    def accessibility_notes(self):
+        if self.amenities:
+            return ", ".join(a.name for a in self.amenities)
+        return ""
+
     def to_dict(self):
         barangays = [
             {
@@ -310,10 +515,17 @@ class EvacuationCenter(BaseModel):
             "barangay_ids": [item["id"] for item in barangays],
             "barangay_id": barangays[0]["id"] if barangays else None,
             "capacity": self.capacity,
-            "center_type": self.center_type or "campus",
+            "center_type_id": self.center_type_id,
+            "center_type": self.center_type_ref.code if self.center_type_ref else "campus",
+            "center_type_name": self.center_type_ref.name if self.center_type_ref else "Campus",
             "owner_name": self.owner_name,
             "max_rooms": self.max_rooms,
-            "building_material": self.building_material,
+            "building_material_id": self.building_material_id,
+            "building_material": self.building_material_ref.name if self.building_material_ref else self.building_material,
+            "amenities": [a.to_dict() for a in self.amenities],
+            "amenity_ids": [a.id for a in self.amenities],
+            "accessibility_features": [a.to_dict() for a in self.amenities],
+            "accessibility_feature_ids": [a.id for a in self.amenities],
             "accessibility_notes": self.accessibility_notes,
             "hazard_exposure_score": self.hazard_exposure_score,
             "contact_number": self.contact_number,
@@ -896,6 +1108,17 @@ class Resident(BaseModel):
     def roster_year_id(self):
         return self.family.roster_year_id if self.family else None
 
+    @property
+    def age(self):
+        if not self.date_of_birth:
+            return None
+        today = date.today()
+        born = self.date_of_birth
+        try:
+            return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+        except Exception:
+            return None
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -922,6 +1145,7 @@ class Resident(BaseModel):
                 if self.date_of_birth
                 else None
             ),
+            "age": self.age,
             "gender": self.gender,
             "alternate_contact": self.alternate_contact,
             "relationship_to_head": self.relationship_to_head,
@@ -1236,16 +1460,21 @@ class EvacuationCenterRoom(BaseModel):
         nullable=False
     )
 
-    # Can be NULL until room is placed on map.
-    latitude = db.Column(
-        db.Numeric(10, 7),
-        nullable=True
-    )
+    @property
+    def latitude(self):
+        return None
 
-    longitude = db.Column(
-        db.Numeric(10, 7),
-        nullable=True
-    )
+    @latitude.setter
+    def latitude(self, val):
+        pass
+
+    @property
+    def longitude(self):
+        return None
+
+    @longitude.setter
+    def longitude(self, val):
+        pass
 
     is_active = db.Column(
         db.Boolean,
@@ -1280,17 +1509,8 @@ class EvacuationCenterRoom(BaseModel):
             "capacity": self.capacity,
             "is_active": self.is_active,
 
-            "latitude": (
-                float(self.latitude)
-                if self.latitude is not None
-                else None
-            ),
-
-            "longitude": (
-                float(self.longitude)
-                if self.longitude is not None
-                else None
-            ),
+            "latitude": None,
+            "longitude": None,
 
             "created_at": (
                 self.created_at.isoformat()
@@ -1379,3 +1599,4 @@ class EvacuationAssignment(BaseModel):
             f"center={self.evacuation_center_id} "
             f"room={self.room_id}>"
         )
+

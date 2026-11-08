@@ -7,7 +7,7 @@ from datetime import date, datetime
 import pandas as pd
 
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import get_jwt_identity, jwt_required, get_jwt
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
@@ -23,6 +23,7 @@ from models import (
     CenterBarangay,
     SystemLog,
     User,
+    RosterYear,
 )
 
 from utils import role_required
@@ -2077,32 +2078,36 @@ def upload_residents():
 )
 def list_residents():
 
-    barangay_filter = request.args.get(
-        'barangay'
-    )
+    barangay_filter = request.args.get('barangay')
+    year_filter = request.args.get('year')
+    roster_year_id_filter = request.args.get('roster_year_id')
 
     query = Resident.query.outerjoin(Resident.family).outerjoin(Family.barangay).options(
         joinedload(Resident.family).joinedload(Family.barangay),
         joinedload(Resident.family).joinedload(Family.roster_year)
     )
 
+    if roster_year_id_filter:
+        try:
+            query = query.filter(Family.roster_year_id == int(roster_year_id_filter))
+        except (TypeError, ValueError):
+            pass
+    elif year_filter:
+        try:
+            query = query.join(Family.roster_year).filter(RosterYear.year == int(year_filter))
+        except (TypeError, ValueError):
+            pass
+
     if barangay_filter:
         normalized_filter = normalize_barangay_name(barangay_filter)
-        residents = query.filter(
-            func.lower(func.trim(Barangay.name)) == normalized_filter.lower()
-        ).order_by(
-            Barangay.name,
-            Family.head_name,
-            Resident.last_name,
-            Resident.first_name
-        ).all()
-    else:
-        residents = query.order_by(
-            Barangay.name,
-            Family.head_name,
-            Resident.last_name,
-            Resident.first_name
-        ).all()
+        query = query.filter(func.lower(func.trim(Barangay.name)) == normalized_filter.lower())
+
+    residents = query.order_by(
+        Barangay.name,
+        Family.head_name,
+        Resident.last_name,
+        Resident.first_name
+    ).all()
 
     linked_resident_ids = {
         resident_id
@@ -2134,8 +2139,11 @@ def list_residents():
     '/api/residents/find-center',
     methods=['GET']
 )
+@jwt_required(optional=True)
 def find_my_evacuation_center():
 
+    jwt_claims = get_jwt() or {}
+    resident_id = request.args.get('resident_id', type=int) or jwt_claims.get('resident_id')
     name = request.args.get(
         'name',
         ''
@@ -2143,7 +2151,7 @@ def find_my_evacuation_center():
 
     name = name.strip() if name else ''
 
-    if len(name) < 3:
+    if not resident_id and len(name) < 3:
 
         return jsonify({
             "error": (
@@ -2152,13 +2160,23 @@ def find_my_evacuation_center():
             )
         }), 400
 
-    query_normalized = normalize_name(name)
+    query_normalized = normalize_name(name) if name else ""
 
-    families = Family.query.all()
+    if resident_id:
+        target_res = Resident.query.get(resident_id)
+        if target_res and target_res.family_id:
+            families = [Family.query.get(target_res.family_id)]
+        else:
+            families = []
+    else:
+        target_res = None
+        families = Family.query.all()
 
     matches = []
 
     for family in families:
+        if not family:
+            continue
 
         residents = Resident.query.filter_by(
             family_id=family.id
@@ -2172,21 +2190,24 @@ def find_my_evacuation_center():
             family.head_name
         )
 
-        matched_resident = next(
-            (
-                r for r in residents
-                if _name_matches(query_normalized, normalize_name(r.get_full_name()))
-                or _name_matches(query_normalized, normalize_name(f"{r.first_name} {r.last_name}"))
-            ),
-            None
-        )
+        if resident_id and target_res:
+            matched_resident = target_res
+        else:
+            matched_resident = next(
+                (
+                    r for r in residents
+                    if _name_matches(query_normalized, normalize_name(r.get_full_name()))
+                    or _name_matches(query_normalized, normalize_name(f"{r.first_name} {r.last_name}"))
+                ),
+                None
+            )
 
-        if not _name_matches(
-            query_normalized,
-            head_normalized
-        ) and matched_resident is None:
+            if not _name_matches(
+                query_normalized,
+                head_normalized
+            ) and matched_resident is None:
 
-            continue
+                continue
 
         barangay = Barangay.query.get(
             family.barangay_id
@@ -2339,6 +2360,7 @@ def find_my_evacuation_center():
         matches.append({
 
             "resident_id": representative.id,
+            "family_id": family.id,
 
             "resident_name": representative.get_full_name(),
 

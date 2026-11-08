@@ -4,7 +4,8 @@ import os
 import uuid
 
 from flask import Blueprint, current_app, jsonify, request
-from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import get_jwt, get_jwt_identity, verify_jwt_in_request
+from werkzeug.utils import secure_filename
 
 from models import RescueRequest, SystemLog, db
 from services.notifications import (
@@ -24,16 +25,24 @@ def _allowed_image(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_IMAGE_EXTENSIONS
 
 
-def _save_proof_images(photo_files):
-    """Save uploads under static/rescue with unique names; return their URLs."""
-    upload_folder = os.path.join(current_app.root_path, 'static', 'rescue')
+def _sanitize_uploader_folder(uploader_name):
+    folder = secure_filename(str(uploader_name or '').strip())
+    return folder or 'anonymous'
+
+
+def _save_proof_images(photo_files, uploader_name=None):
+    """Save uploads under static/uploads/rescue/<uploader> with unique names; return their URLs."""
+    uploader_folder = _sanitize_uploader_folder(uploader_name)
+    upload_folder = os.path.join(
+        current_app.root_path, 'static', 'uploads', 'rescue', uploader_folder
+    )
     os.makedirs(upload_folder, exist_ok=True)
     urls = []
     for photo in photo_files:
         ext = photo.filename.rsplit('.', 1)[1].lower()
         unique_name = f"{uuid.uuid4().hex}.{ext}"
         photo.save(os.path.join(upload_folder, unique_name))
-        urls.append(f"/static/uploads/rescue/{unique_name}")
+        urls.append(f"/static/uploads/rescue/{uploader_folder}/{unique_name}")
     return urls
 
 
@@ -115,7 +124,19 @@ def submit_rescue_request():
         return jsonify({'error': 'Provide a GPS location or describe where help is needed.'}), 400
 
     # All validation passed — only now write photo files to disk.
-    proof_image_urls = _save_proof_images(photo_files) if photo_files else []
+    uploader_name = requester_name
+    try:
+        verify_jwt_in_request(optional=True)
+        claims = get_jwt() or {}
+        if not uploader_name and claims.get('name'):
+            uploader_name = claims.get('name')
+    except Exception:
+        pass
+    proof_image_urls = (
+        _save_proof_images(photo_files, uploader_name=uploader_name)
+        if photo_files
+        else []
+    )
 
     rescue = RescueRequest(
         description=description,

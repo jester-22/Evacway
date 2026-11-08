@@ -5,11 +5,15 @@ import {
   faCircleCheck,
   faCircleNotch,
   faEnvelope,
+  faInfoCircle,
   faMagnifyingGlass,
+  faRotateRight,
   faTriangleExclamation,
+  faUserPlus,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../../services/api";
+import CreateResidentAccountModal from "./CreateResidentAccountModal";
 import "./ResidentRegistrations.css";
 
 const STATUS_TABS = [
@@ -106,8 +110,26 @@ export default function ResidentRegistrations() {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState("");
   const [decisionResult, setDecisionResult] = useState(null);
+
+  // Manual account modal & Floating toast notification state
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+
   const dialogRef = useRef(null);
   const listRequestRef = useRef(0);
+
+  const showToast = useCallback((message, type = "success") => {
+    setToast({ id: Date.now(), message, type });
+  }, []);
+
+  // Auto-dismiss floating toast after 4.5 seconds
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => {
+      setToast(null);
+    }, 4500);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const refreshList = useCallback(async () => {
     const requestNumber = ++listRequestRef.current;
@@ -253,10 +275,12 @@ export default function ResidentRegistrations() {
         pending: Math.max(0, current.pending - 1),
         approved: current.approved + 1,
       }));
+      showToast(`Registration approved for ${selectedRequest.full_name || joinName(selectedRequest)}!`, "success");
       setRefreshKey((current) => current + 1);
     } catch (error) {
       const message = error.message || "The registration could not be approved.";
       setActionError(message);
+      showToast(message, "error");
       if (/already linked/i.test(message)) {
         setSelectedResident((current) => current ? { ...current, already_linked: true, available: false } : current);
       }
@@ -280,9 +304,11 @@ export default function ResidentRegistrations() {
         pending: Math.max(0, current.pending - 1),
         rejected: current.rejected + 1,
       }));
+      showToast("Registration rejected.", "info");
       setRefreshKey((current) => current + 1);
     } catch (error) {
       setActionError(error.message || "The registration could not be rejected.");
+      showToast(error.message || "The registration could not be rejected.", "error");
     } finally {
       setActionLoading(false);
     }
@@ -299,64 +325,52 @@ export default function ResidentRegistrations() {
         result: { ...current.result, email_sent: result.email_sent },
         resendMessage: result.message,
       }));
+      showToast(result.message || "Email resent successfully.", "success");
     } catch (error) {
-      setActionError(error.message || "The decision email could not be resent.");
+      setActionError(error.message || "The activation email could not be resent.");
+      showToast(error.message || "The activation email could not be resent.", "error");
     } finally {
       setActionLoading(false);
     }
   }
 
   function renderComparison(match) {
-    const resident = match.resident || {};
+    const isSelected = selectedResident?.id === match.id;
+    const isAvailable = match.available && !match.already_linked;
     return (
-      <div className="resident-match-comparison" key={resident.id}>
-        <div className="resident-match-columns">
-          <div className="resident-match-column">
-            <h4>Submitted details</h4>
-            {COMPARISON_FIELDS.map((field) => {
-              const isMatch = Boolean(match.match_flags?.[field.flag]);
-              return (
-                <div className={`resident-match-value ${isMatch ? "is-match" : "is-different"}`} key={field.id}>
-                  <span>{field.label}</span>
-                  <strong>{field.id === "birthdate" ? formatDate(compareValue(selectedRequest, resident, field)) : compareValue(selectedRequest, resident, field)}</strong>
-                </div>
-              );
-            })}
-            <div className="resident-match-value resident-match-neutral">
-              <span>Email</span><strong>{selectedRequest.email}</strong>
-            </div>
+      <div className={`resident-match-card ${isSelected ? "is-selected" : ""} ${!isAvailable ? "is-unavailable" : ""}`} key={match.id}>
+        <div className="resident-match-card-header">
+          <div>
+            <strong>{match.resident?.full_name || match.full_name || joinName(match)}</strong>
+            <small>Roster #{match.id} · {match.barangay || "Barangay not set"}</small>
           </div>
-          <div className="resident-match-column">
-            <h4>Resident roster record</h4>
-            {COMPARISON_FIELDS.map((field) => {
-              const isMatch = Boolean(match.match_flags?.[field.flag]);
-              return (
-                <div className={`resident-match-value ${isMatch ? "is-match" : "is-different"}`} key={field.id}>
-                  <span>{field.label}</span>
-                  <strong>{field.id === "birthdate" ? formatDate(field.format(resident)) : field.format(resident)}</strong>
-                </div>
-              );
-            })}
-            <div className="resident-match-value resident-match-neutral">
-              <span>Roster ID</span><strong>#{resident.id}</strong>
-            </div>
-          </div>
+          {isAvailable ? (
+            <button
+              type="button"
+              className={`resident-select-match ${isSelected ? "is-active" : ""}`}
+              onClick={() => selectMatch(match)}
+            >
+              {isSelected ? "Selected" : "Select this match"}
+            </button>
+          ) : (
+            <span className="resident-already-linked-chip">Already linked</span>
+          )}
         </div>
-        {match.already_linked && (
-          <p className="resident-registration-warning" role="alert">
-            <FontAwesomeIcon icon={faTriangleExclamation} /> This resident record is already linked to another account and cannot be selected.
-          </p>
-        )}
-        {!match.already_linked && isPendingRequest && (
-          <button
-            type="button"
-            className={`resident-match-select ${selectedResident?.resident?.id === resident.id || selectedResident?.id === resident.id ? "is-selected" : ""}`}
-            onClick={() => selectMatch(match)}
-          >
-            <FontAwesomeIcon icon={faCheck} />
-            {selectedResident?.resident?.id === resident.id || selectedResident?.id === resident.id ? "Linked to this request" : "Link this resident record"}
-          </button>
-        )}
+        <dl className="resident-match-grid">
+          {COMPARISON_FIELDS.map((field) => {
+            const requested = compareValue(selectedRequest, null, field);
+            const roster = field.format(match.resident || match);
+            const flag = match.match_flags?.[field.flag];
+            const className = flag ? "is-mismatch" : "is-match";
+            return (
+              <div key={field.id} className={className}>
+                <dt>{field.label}</dt>
+                <dd><span>Submitted:</span> <strong>{requested}</strong></dd>
+                <dd><span>Roster:</span> <strong>{roster}</strong></dd>
+              </div>
+            );
+          })}
+        </dl>
       </div>
     );
   }
@@ -372,17 +386,55 @@ export default function ResidentRegistrations() {
 
   return (
     <section className="resident-registrations-page" aria-labelledby="resident-registrations-title">
-      <header className="resident-registrations-header">
-        <div>
-          <p className="resident-registrations-eyebrow">Account review</p>
-          <h1 id="resident-registrations-title">Resident Registrations</h1>
-          <p>Review submitted resident accounts and link each approved request to the roster.</p>
+      {/* Floating Toast Notification */}
+      {toast && (
+        <div className={`resident-floating-toast is-${toast.type}`} role="alert">
+          <div className="resident-toast-icon">
+            <FontAwesomeIcon
+              icon={
+                toast.type === "success"
+                  ? faCircleCheck
+                  : toast.type === "error"
+                  ? faTriangleExclamation
+                  : faInfoCircle
+              }
+            />
+          </div>
+          <span className="resident-toast-message">{toast.message}</span>
+          <button
+            type="button"
+            className="resident-toast-close"
+            onClick={() => setToast(null)}
+            aria-label="Dismiss notification"
+          >
+            <FontAwesomeIcon icon={faXmark} />
+          </button>
         </div>
-        <button type="button" className="resident-registration-refresh" onClick={() => setRefreshKey((current) => current + 1)} disabled={listLoading} aria-label="Refresh registrations" title="Refresh registrations">
-          <FontAwesomeIcon icon={listLoading ? faCircleNotch : faMagnifyingGlass} spin={listLoading} />
-        </button>
+      )}
+
+      {/* Header */}
+      <header className="resident-registrations-header">
+        <div className="resident-header-left">
+          <p className="resident-registrations-eyebrow">Resident Management</p>
+          <h1 id="resident-registrations-title">Resident Registrations</h1>
+          <p className="resident-header-description">
+            Review submitted resident accounts, link verified applicants to the roster, and manually create resident accounts.
+          </p>
+        </div>
+        <div className="resident-header-actions">
+          <button
+            type="button"
+            className="resident-btn-create-account"
+            onClick={() => setIsCreateModalOpen(true)}
+          >
+            <FontAwesomeIcon icon={faUserPlus} />
+            <span>Create Resident Account</span>
+          </button>
+          
+        </div>
       </header>
 
+      {/* Toolbar */}
       <div className="resident-registration-toolbar">
         <div className="resident-registration-tabs" role="tablist" aria-label="Registration status">
           {STATUS_TABS.map((tab) => (
@@ -390,21 +442,37 @@ export default function ResidentRegistrations() {
               type="button"
               role="tab"
               aria-selected={activeStatus === tab.id}
-              className={activeStatus === tab.id ? "is-active" : ""}
+              className={`resident-tab-btn ${activeStatus === tab.id ? "is-active" : ""}`}
               onClick={() => setActiveStatus(tab.id)}
               key={tab.id}
             >
-              <span>{tab.label}</span><span className="resident-registration-count">{counts[tab.id]}</span>
+              <span>{tab.label}</span>
+              <span className="resident-registration-count">{counts[tab.id]}</span>
             </button>
           ))}
         </div>
         <label className="resident-registration-search">
           <FontAwesomeIcon icon={faMagnifyingGlass} aria-hidden="true" />
           <span className="sr-only">Search registrations</span>
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, email, contact, barangay" />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search name, email, contact, barangay..."
+          />
+          {search && (
+            <button
+              type="button"
+              className="resident-search-clear-btn"
+              onClick={() => setSearch("")}
+              aria-label="Clear search"
+            >
+              <FontAwesomeIcon icon={faXmark} />
+            </button>
+          )}
         </label>
       </div>
 
+      {/* Main List */}
       {listLoading ? (
         <div className="resident-registration-state" role="status">
           <FontAwesomeIcon icon={faCircleNotch} spin /> Loading resident registrations…
@@ -417,27 +485,59 @@ export default function ResidentRegistrations() {
         </div>
       ) : visibleRequests.length === 0 ? (
         <div className="resident-registration-state is-empty">
-          <FontAwesomeIcon icon={faEnvelope} />
+          <div className="resident-empty-icon">
+            <FontAwesomeIcon icon={faEnvelope} />
+          </div>
           <strong>No {activeStatus} registrations</strong>
-          <span>{search ? "Try a different search." : "New resident requests will appear here."}</span>
+          <span>{search ? "Try a different search query." : "New resident requests will appear here."}</span>
         </div>
       ) : (
         <div className="resident-registration-list" role="list" aria-label={`${activeStatus} registrations`}>
-          {visibleRequests.map((item) => (
-            <button type="button" role="listitem" className="resident-registration-row" key={item.id} onClick={() => openReview(item)}>
-              <span className="resident-registration-person">
-                <strong>{item.full_name || joinName(item)}</strong>
-                <small>{item.email}</small>
-              </span>
-              <span className="resident-registration-row-detail">{item.barangay}</span>
-              <span className="resident-registration-row-detail">{item.contact_number}</span>
-              <span className="resident-registration-row-date">{formatDate(item.created_at?.slice(0, 10))}</span>
-              <span className={`resident-registration-status is-${item.status}`}>{item.status}</span>
-            </button>
-          ))}
+          {visibleRequests.map((item) => {
+            const name = item.full_name || joinName(item) || "Unknown Resident";
+            const initials = name
+              .split(" ")
+              .filter(Boolean)
+              .slice(0, 2)
+              .map((n) => n[0].toUpperCase())
+              .join("");
+
+            return (
+              <button
+                type="button"
+                role="listitem"
+                className="resident-registration-row"
+                key={item.id}
+                onClick={() => openReview(item)}
+              >
+                <div className="resident-row-avatar" aria-hidden="true">
+                  {initials}
+                </div>
+                <div className="resident-registration-person">
+                  <strong className="resident-row-name">{name}</strong>
+                  <small className="resident-row-email">{item.email}</small>
+                </div>
+                <div className="resident-registration-row-detail resident-row-barangay">
+                  <span className="resident-badge-subtle">{item.barangay || "N/A"}</span>
+                </div>
+                <div className="resident-registration-row-detail resident-row-contact">
+                  {item.contact_number || "—"}
+                </div>
+                <div className="resident-registration-row-date">
+                  {formatDate(item.created_at?.slice(0, 10))}
+                </div>
+                <div className="resident-row-status-wrap">
+                  <span className={`resident-registration-status is-${item.status}`}>
+                    {item.status}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
+      {/* Review Dialog */}
       <dialog
         ref={dialogRef}
         className="resident-review-dialog"
@@ -452,7 +552,13 @@ export default function ResidentRegistrations() {
                 <p className="resident-registrations-eyebrow">Request #{selectedRequest.id}</p>
                 <h2 id="resident-review-title">Review resident registration</h2>
               </div>
-              <button type="button" className="resident-registration-icon-button" onClick={closeReview} aria-label="Close review" disabled={actionLoading}>
+              <button
+                type="button"
+                className="resident-registration-icon-button"
+                onClick={closeReview}
+                aria-label="Close review"
+                disabled={actionLoading}
+              >
                 <FontAwesomeIcon icon={faXmark} />
               </button>
             </header>
@@ -599,6 +705,16 @@ export default function ResidentRegistrations() {
           </div>
         )}
       </dialog>
+
+      {/* Create Account Modal */}
+      <CreateResidentAccountModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSuccess={({ message }) => {
+          showToast(message, "success");
+          setRefreshKey((k) => k + 1);
+        }}
+      />
     </section>
   );
 }

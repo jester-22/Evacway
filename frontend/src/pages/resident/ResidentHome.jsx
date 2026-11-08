@@ -2,11 +2,12 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, BASE_URL } from "../../services/api";
 import HazardReportModal from "../../components/HazardReportModal/HazardReportModal";
 import RescueAlertModal from "../../components/RescueAlertModal/RescueAlertModal";
 import { MapLegend } from "../../components/DashboardMap/MapOverlays";
+import { getCenterCoordinates } from "../../utils/mapCenterCoordinates";
 import { createReportPopup } from "../../components/mapReports/mapReports";
 import {
   setOrUpdateSelectedLocationMarker,
@@ -42,6 +43,8 @@ import {
   faWater,
   faMountain,
   faHome,
+  faRightToBracket,
+  faRightFromBracket,
   faPersonWalking,
   faXmark,
   faSliders,
@@ -67,14 +70,16 @@ import "../../components_css/MyLocationMarker.css";
 import "../../components/DashboardMap/MapOverlays.css";
 import "./ResidentHome.css";
 import "./ResidentHome.motion.css";
+import { useAuth } from "../../context/AuthContext";
+import { LoginDialog, ResidentSignUpDialog } from "../../components/AuthModals/AuthModals";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
 const SOGOD_CENTER = [10.435, 124.996];
 
 const SOGOD_BOUNDS = [
-  [10.35, 124.89],
-  [10.56, 125.11],
+  [10.368, 124.912],
+  [10.525, 125.078],
 ];
 
 /*
@@ -447,6 +452,41 @@ function getValidCoordinates(coordinates) {
 }
 
 // --------------------------------------------------
+
+// --------------------------------------------------
+// Ray-casting point-in-polygon algorithm for GeoJSON
+// --------------------------------------------------
+
+function isPointInGeoPolygon(point, coordinates) {
+  if (!point || !coordinates || !Array.isArray(coordinates)) return false;
+  const [x, y] = point;
+
+  function checkRing(ring) {
+    if (!ring || ring.length < 3) return false;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0];
+      const yi = ring[i][1];
+      const xj = ring[j][0];
+      const yj = ring[j][1];
+      const intersect = ((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  if (Array.isArray(coordinates[0]) && typeof coordinates[0][0] === "number") {
+    return checkRing(coordinates);
+  }
+  if (Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0]) && typeof coordinates[0][0][0] === "number") {
+    return checkRing(coordinates[0]);
+  }
+  if (Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0]) && Array.isArray(coordinates[0][0][0])) {
+    return coordinates.some((poly) => checkRing(poly[0]));
+  }
+  return false;
+}
+
 // Get center point of evacuation building polygon
 // --------------------------------------------------
 
@@ -455,67 +495,73 @@ function getGeometryCenter(geometry) {
     return null;
   }
 
-  if (
-    geometry.type === "Polygon" &&
-    Array.isArray(geometry.coordinates[0])
-  ) {
-    const ring = geometry.coordinates[0];
-
-    if (!ring.length) {
-      return null;
-    }
-
-    let totalLng = 0;
-    let totalLat = 0;
-    let count = 0;
-
-    ring.forEach((coordinate) => {
-      const valid = getValidCoordinates(coordinate);
-
-      if (valid) {
-        totalLng += valid[0];
-        totalLat += valid[1];
-        count++;
-      }
-    });
-
-    if (count === 0) {
-      return null;
-    }
-
-    return [totalLng / count, totalLat / count];
-  }
-
-  if (geometry.type === "MultiPolygon") {
-    let totalLng = 0;
-    let totalLat = 0;
-    let count = 0;
-
-    geometry.coordinates.forEach((polygon) => {
-      if (!Array.isArray(polygon) || !Array.isArray(polygon[0])) {
-        return;
-      }
-
-      polygon[0].forEach((coordinate) => {
-        const valid = getValidCoordinates(coordinate);
-
-        if (valid) {
-          totalLng += valid[0];
-          totalLat += valid[1];
-          count++;
-        }
-      });
-    });
-
-    if (count === 0) {
-      return null;
-    }
-
-    return [totalLng / count, totalLat / count];
-  }
-
+  // Handle Point
   if (geometry.type === "Point") {
     return getValidCoordinates(geometry.coordinates);
+  }
+
+  // Handle Polygon
+  if (geometry.type === "Polygon" && Array.isArray(geometry.coordinates[0])) {
+    const ring = geometry.coordinates[0];
+    if (!ring || ring.length < 3) return null;
+
+    let area = 0;
+    let cx = 0;
+    let cy = 0;
+    const n = ring.length;
+
+    for (let i = 0; i < n - 1; i++) {
+      const p1 = ring[i];
+      const p2 = ring[i + 1];
+      if (!Array.isArray(p1) || !Array.isArray(p2)) continue;
+      const cross = p1[0] * p2[1] - p2[0] * p1[1];
+      area += cross;
+      cx += (p1[0] + p2[0]) * cross;
+      cy += (p1[1] + p2[1]) * cross;
+    }
+
+    area = area * 0.5;
+
+    if (Math.abs(area) > 1e-12) {
+      cx = cx / (6 * area);
+      cy = cy / (6 * area);
+      if (Number.isFinite(cx) && Number.isFinite(cy)) {
+        return [cx, cy];
+      }
+    }
+
+    // Fallback: exact bounding-box midpoint
+    let minLng = ring[0][0];
+    let maxLng = ring[0][0];
+    let minLat = ring[0][1];
+    let maxLat = ring[0][1];
+
+    ring.forEach((coord) => {
+      if (Array.isArray(coord) && coord.length >= 2) {
+        minLng = Math.min(minLng, Number(coord[0]));
+        maxLng = Math.max(maxLng, Number(coord[0]));
+        minLat = Math.min(minLat, Number(coord[1]));
+        maxLat = Math.max(maxLat, Number(coord[1]));
+      }
+    });
+
+    return [(minLng + maxLng) / 2, (minLat + maxLat) / 2];
+  }
+
+  // Handle MultiPolygon: find largest component polygon outer ring
+  if (geometry.type === "MultiPolygon" && Array.isArray(geometry.coordinates)) {
+    let maxRing = null;
+    let maxLen = 0;
+    geometry.coordinates.forEach((poly) => {
+      if (Array.isArray(poly) && Array.isArray(poly[0]) && poly[0].length > maxLen) {
+        maxRing = poly[0];
+        maxLen = poly[0].length;
+      }
+    });
+
+    if (maxRing && maxRing.length >= 3) {
+      return getGeometryCenter({ type: "Polygon", coordinates: [maxRing] });
+    }
   }
 
   return null;
@@ -876,6 +922,35 @@ const ResidentHome = () => {
   // bottom dock and bottom sheets) is used on phones AND tablets (< 1024px).
   // Phone vs. tablet sizing is handled by CSS media queries.
   const isMobile = useIsMobile(1024);
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  const loginDialogRef = useRef(null);
+  const signUpDialogRef = useRef(null);
+  const [signUpOpen, setSignUpOpen] = useState(false);
+  const [authModalNotice, setAuthModalNotice] = useState("");
+
+  const openLoginDialog = (notice = "") => {
+    setAuthModalNotice(notice || "");
+    signUpDialogRef.current?.close();
+    setSignUpOpen(false);
+    loginDialogRef.current?.showModal();
+  };
+
+  const openSignUpDialog = () => {
+    loginDialogRef.current?.close();
+    window.requestAnimationFrame(() => {
+      signUpDialogRef.current?.showModal();
+      setSignUpOpen(true);
+    });
+  };
+
+  const handleLogout = () => {
+    logout();
+    setMyCenter(null);
+    setReportConfirmation("Signed out successfully.");
+    setTimeout(() => setReportConfirmation(""), 3500);
+  };
 
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -1349,6 +1424,35 @@ const ResidentHome = () => {
   }, [mapLoaded, hazardReports]);
 
   // --------------------------------------------------
+  // Auto-detect resident evacuation assignment when logged in
+  // --------------------------------------------------
+
+  useEffect(() => {
+    if (!user) return;
+
+    const queryParam = user.resident_id
+      ? { resident_id: user.resident_id }
+      : { name: user.name };
+
+    api
+      .findMyEvacuationCenter(queryParam)
+      .then((result) => {
+        const matches = normalizeMatches(result);
+        const match =
+          matches.find(
+            (item) =>
+              user.resident_id != null &&
+              String(item.resident_id) === String(user.resident_id)
+          ) || (matches.length > 0 ? matches[0] : null);
+
+        if (match?.evacuation_center) {
+          setMyCenter(match);
+        }
+      })
+      .catch(() => {});
+  }, [user]);
+
+  // --------------------------------------------------
   // Restore the resident saved on this device
   // (re-checked so a changed assignment is picked up)
   // --------------------------------------------------
@@ -1436,6 +1540,76 @@ const ResidentHome = () => {
       .catch(() => { });
   }, []);
 
+
+  // --------------------------------------------------
+  // Automatic GPS arrival & check-in detection
+  // --------------------------------------------------
+  const autoCheckInAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    if (!myLocation || !myCenter || myCenter.is_checked_in) return;
+    if (autoCheckInAttemptedRef.current) return;
+
+    const targetCenterId = myCenter.evacuation_center?.id;
+    if (!targetCenterId) return;
+
+    const centerFeature = evacCenters?.features?.find(
+      (f) => String(f.properties?.id ?? f.id) === String(targetCenterId)
+    );
+
+    let isInside = false;
+    const userPoint = [myLocation.lng, myLocation.lat];
+
+    if (centerFeature?.geometry?.coordinates) {
+      isInside = isPointInGeoPolygon(userPoint, centerFeature.geometry.coordinates);
+    }
+
+    if (!isInside) {
+      let centerCoord = null;
+      if (centerFeature) {
+        centerCoord = getCenterCoordinates(centerFeature);
+      }
+      if (!centerCoord && myCenter.evacuation_center) {
+        const cProps = myCenter.evacuation_center;
+        if (cProps.latitude && cProps.longitude) {
+          centerCoord = { lat: Number(cProps.latitude), lng: Number(cProps.longitude) };
+        }
+      }
+      if (centerCoord) {
+        const dist = getDistanceMeters([myLocation.lat, myLocation.lng], [centerCoord.lat, centerCoord.lng]);
+        if (dist <= 50) {
+          isInside = true;
+        }
+      }
+    }
+
+    if (isInside) {
+      autoCheckInAttemptedRef.current = true;
+      const payload = {
+        center_id: targetCenterId,
+        resident_id: myCenter.resident_id,
+        family_id: myCenter.family_id,
+        latitude: myLocation.lat,
+        longitude: myLocation.lng,
+      };
+
+      api.autoGeofenceCheckIn(payload)
+        .then((res) => {
+          if (res.success) {
+            setMyCenter((prev) => (prev ? { ...prev, is_checked_in: true, checkin_status: "Checked in" } : prev));
+            const roomTxt = res.room_number ? ` Assigned room: ${res.room_number}.` : "";
+            setArrivalToast(
+              `🎉 Welcome to ${res.center_name || myCenter.evacuation_center?.name || "your evacuation center"}! Your arrival has been confirmed.${roomTxt}`
+            );
+          }
+        })
+        .catch((err) => {
+          console.warn("Auto check-in check:", err);
+          autoCheckInAttemptedRef.current = false;
+        });
+    }
+  }, [myLocation, myCenter, evacCenters]);
+
   // --------------------------------------------------
   // Initialize Mapbox
   // --------------------------------------------------
@@ -1465,7 +1639,7 @@ const ResidentHome = () => {
       pitch: 0,
       bearing: 0,
 
-      minZoom: 1,
+      minZoom: 12.3,
       maxZoom: 18,
 
       attributionControl: true,
@@ -1908,6 +2082,7 @@ const ResidentHome = () => {
           id: fillLayerId,
           type: "fill",
           source: sourceId,
+          minzoom: ROOM_MIN_ZOOM,
 
           paint: {
             "fill-color": "#2563eb",
@@ -1919,11 +2094,34 @@ const ResidentHome = () => {
           id: lineLayerId,
           type: "line",
           source: sourceId,
+          minzoom: ROOM_MIN_ZOOM,
 
           paint: {
             "line-color": "#1d4ed8",
             "line-width": 2,
             "line-opacity": 0.9,
+          },
+        });
+
+        map.addLayer({
+          id: "evacuation-centers-label",
+          type: "symbol",
+          source: sourceId,
+          minzoom: ROOM_MIN_ZOOM,
+          layout: {
+            "text-field": ["get", "name"],
+            "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+            "text-size": 11,
+            "text-letter-spacing": 0.04,
+            "text-transform": "uppercase",
+            "text-anchor": "center",
+            "text-max-width": 16,
+            "text-allow-overlap": false,
+          },
+          paint: {
+            "text-color": "#1e40af",
+            "text-halo-color": "#ffffff",
+            "text-halo-width": 2.5,
           },
         });
       }
@@ -2070,54 +2268,67 @@ const ResidentHome = () => {
       }
 
       (evacCenters.features || []).forEach((center) => {
-        const properties = center.properties || {};
+        const properties = center.properties || center || {};
 
-        const coordinates =
-          getGeometryCenter(center.geometry) ??
-          getValidCoordinates([
-            properties.longitude ?? properties.lng,
-            properties.latitude ?? properties.lat,
-          ]);
-
-        if (!coordinates) {
+        const centerCoords = getCenterCoordinates(center, buildingsGeoJSON);
+        if (!centerCoords) {
           return;
         }
+        const coordinates = [centerCoords.longitude, centerCoords.latitude];
 
+        const centerId = properties.id ?? center.id;
         const isMine =
-          myCenterId != null && String(properties.id) === String(myCenterId);
+          myCenterId != null && String(centerId) === String(myCenterId);
 
-        const element = document.createElement("div");
+        const centerName = displayEntityName(
+          properties.name ?? center.name ?? properties.center_name,
+          "Evacuation Center"
+        );
 
-        element.className = `evacway-center-marker${isMine ? " evacway-center-marker-mine" : ""
-          }`;
+        const cap = properties.capacity || 0;
+        const occ = properties.occupied ?? properties.current_occupancy ?? 0;
+        const pct = cap > 0 ? Math.min(100, Math.round((occ / cap) * 100)) : 0;
+
+        let statusColor = "#16a34a"; // Green: Normal
+        if (pct >= 90) {
+          statusColor = "#dc2626"; // Red: Full
+        } else if (pct >= 70) {
+          statusColor = "#d97706"; // Amber: High
+        }
+        if (isMine) {
+          statusColor = "#2563eb"; // Blue: User Center
+        }
+
+        const element = document.createElement("button");
+        element.type = "button";
+        element.className = `evacway-center-marker show-label${isMine ? " evacway-center-marker-mine" : ""}`;
+        element.setAttribute(
+          "aria-label",
+          `Evacuation Center: ${centerName}, ${pct}% occupied`
+        );
 
         const iconElement = document.createElement("span");
         iconElement.className = "evacway-center-icon";
+        iconElement.style.setProperty("--pin-bg", statusColor);
+        iconElement.style.backgroundColor = statusColor;
         iconElement.innerHTML = icon(faBuildingColumns).html.join("");
 
         const label = document.createElement("span");
         label.className = "evacway-center-label";
-        label.textContent = properties.name || "Evacuation Center";
+
+        const dot = document.createElement("span");
+        dot.className = "evacway-center-label-dot";
+        dot.style.backgroundColor = statusColor;
+
+        const text = document.createElement("span");
+        text.className = "evacway-center-label-text";
+        text.textContent = centerName;
+
+        label.appendChild(dot);
+        label.appendChild(text);
 
         element.appendChild(iconElement);
         element.appendChild(label);
-
-        // Center occupancy badge for city / zoomed out view
-        const cap = properties.capacity || 0;
-        const occ = properties.occupied ?? properties.current_occupancy ?? 0;
-        const pct = cap > 0 ? Math.min(100, Math.round((occ / cap) * 100)) : 0;
-        const roomCount = properties.total_rooms ?? (Array.isArray(properties.rooms) ? properties.rooms.length : null);
-        const badgeEl = document.createElement("span");
-        badgeEl.className = "evacway-center-occupancy-badge";
-        badgeEl.textContent = roomCount ? `${roomCount} rooms • ${pct}% full` : `${pct}% full`;
-        element.appendChild(badgeEl);
-
-        if (isMine) {
-          const tag = document.createElement("span");
-          tag.className = "evacway-center-tag";
-          tag.textContent = "Your center";
-          element.appendChild(tag);
-        }
 
         element.addEventListener("click", (event) => {
           event.stopPropagation();
@@ -2137,14 +2348,16 @@ const ResidentHome = () => {
 
     showCenterMarkers();
 
+    map.on("zoom", showCenterMarkers);
     map.on("zoomend", showCenterMarkers);
 
     return () => {
+      map.off("zoom", showCenterMarkers);
       map.off("zoomend", showCenterMarkers);
 
       removeCenterMarkers();
     };
-  }, [evacCenters, mapLoaded, myCenter]);
+  }, [evacCenters, mapLoaded, myCenter, buildingsGeoJSON]);
 
   // --------------------------------------------------
   // Native Mapbox Building Layers (clickable buildings instead of room pills)
@@ -3015,6 +3228,23 @@ const ResidentHome = () => {
             const entranceName = chosenEntrance?.name ? ` (${chosenEntrance.name})` : "";
             const arrivalMsg = `You have arrived at ${target.name || "the evacuation center"}${entranceName}!`;
             setArrivalToast(arrivalMsg);
+
+            // Auto check-in if user has assigned center
+            const targetCenterId = target?.id || target?.center_id;
+            if (myCenter && !myCenter.is_checked_in && targetCenterId) {
+              api.autoGeofenceCheckIn({
+                center_id: targetCenterId,
+                resident_id: myCenter.resident_id,
+                family_id: myCenter.family_id,
+                latitude: rawLat,
+                longitude: rawLng,
+              }).then((res) => {
+                if (res.success) {
+                  setMyCenter((prev) => (prev ? { ...prev, is_checked_in: true, checkin_status: "Checked in" } : prev));
+                }
+              }).catch(() => {});
+            }
+
             stopWalkingNavigation(arrivalMsg);
             return;
           }
@@ -3378,6 +3608,10 @@ const ResidentHome = () => {
   // --------------------------------------------------
 
   function handleReportMapClick() {
+    if (!user) {
+      openLoginDialog("Please log in or sign up to report a hazard. Verified accounts help response teams validate danger zones quickly.");
+      return;
+    }
     pickingPurposeRef.current = "hazard";
     setPickingLocation(true);
     setPendingReportLocation(null);
@@ -3895,25 +4129,6 @@ const ResidentHome = () => {
     setSelectedCenter(null);
   }
 
-  function handleRoomRowClick(room) {
-    const map = mapRef.current;
-
-    const lat = Number(room.latitude);
-    const lng = Number(room.longitude);
-
-    if (!map || !Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return;
-    }
-
-    setSelectedCenter(null);
-
-    map.flyTo({
-      center: [lng, lat],
-      zoom: Math.max(map.getZoom(), ROOM_MIN_ZOOM + 1),
-      duration: 900,
-      essential: true,
-    });
-  }
 
   const selectedCenterProperties = selectedCenter?.properties || {};
 
@@ -4039,28 +4254,21 @@ const ResidentHome = () => {
   // Render
   // --------------------------------------------------
 
-  const firstName = myCenter?.household_head_name?.split(" ")[0] || "";
+  const firstName = myCenter?.household_head_name?.split(" ")[0] || myCenter?.resident_name?.split(" ")[0] || user?.name?.split(" ")[0] || "";
   const currentWalkingManeuver =
     route?.walking_steps?.[activeWalkingStep]?.maneuver || null;
 
   const selectedCenterDistance = useMemo(() => {
     if (!myLocation || !selectedCenter) return null;
-    const geomCenter = getGeometryCenter(selectedCenter.geometry);
-    const props = selectedCenter.properties || {};
-    const coords =
-      geomCenter ||
-      getValidCoordinates([
-        props.longitude ?? props.lng,
-        props.latitude ?? props.lat,
-      ]);
-    if (!coords) return null;
-    const meters = getDistanceMeters([myLocation.lat, myLocation.lng], [coords[1], coords[0]]);
+    const centerCoords = getCenterCoordinates(selectedCenter, buildingsGeoJSON);
+    if (!centerCoords) return null;
+    const meters = getDistanceMeters([myLocation.lat, myLocation.lng], [centerCoords.latitude, centerCoords.longitude]);
     if (!Number.isFinite(meters)) return null;
     if (meters >= 1000) {
       return `${(meters / 1000).toFixed(1)} km away`;
     }
     return `${Math.round(meters)} m away`;
-  }, [myLocation, selectedCenter]);
+  }, [myLocation, selectedCenter, buildingsGeoJSON]);
 
   // --------------------------------------------------
   // Sheets: only one open at a time
@@ -4079,28 +4287,6 @@ const ResidentHome = () => {
   // Shared UI pieces
   // --------------------------------------------------
 
-  const mapViewToggle = (
-    <div className="map-view-toggle" role="group" aria-label="Map view">
-      <button
-        type="button"
-        onClick={() => handleMapStyleChange("street")}
-        className={`map-view-btn ${mapStyle === "street" ? "active" : ""}`}
-        aria-pressed={mapStyle === "street"}
-      >
-        <FontAwesomeIcon icon={faMapPin} />
-        <span>Street View</span>
-      </button>
-      <button
-        type="button"
-        onClick={() => handleMapStyleChange("satellite")}
-        className={`map-view-btn ${mapStyle === "satellite" ? "active" : ""}`}
-        aria-pressed={mapStyle === "satellite"}
-      >
-        <FontAwesomeIcon icon={faSatelliteDish} />
-        <span>Satellite View</span>
-      </button>
-    </div>
-  );
 
   const helpIconsList = (
     <div className="help-icon-list">
@@ -4161,11 +4347,16 @@ const ResidentHome = () => {
     myCenter?.is_checked_in || myCenter?.room?.is_checked_in
       ? "Checked in"
       : "Reserved for your household";
+  const centerDisplayName =
+    myCenter?.evacuation_center?.name || "Sogod Central School";
   const roomLabel = hasRoom
     ? (hasBuilding
-        ? `${roomNum} · ${myCenter.room.building_name}`
-        : `Your room: ${roomNum} (not mapped yet)`)
-    : `Your shelter: ${myCenter?.evacuation_center?.name || "Assigned shelter"}`;
+        ? `${centerDisplayName} · ${roomNum} (${myCenter.room.building_name})`
+        : `${centerDisplayName} · ${roomNum}`)
+    : (hasBuilding
+        ? `${centerDisplayName} · ${myCenter.room.building_name}`
+        : centerDisplayName);
+  const fullCenterRoomLabel = roomLabel;
 
   const handleOpenMyRoomBuilding = useCallback(() => {
     if (!myCenter?.room) {
@@ -4243,35 +4434,41 @@ const ResidentHome = () => {
 
       {/* Header (slim 48px bar on phones) */}
       <header className="top-bar">
-        <div className="brand">EvacWay</div>
+        <Link to="/" className="brand brand-link" aria-label="EvacWay Home" title="EvacWay Home">
+          EvacWay
+        </Link>
 
         <div className="top-bar-actions">
-          <div className="top-bar-map-toggle" role="group" aria-label="Map style">
-            <button
-              type="button"
-              className={`top-bar-style-btn ${mapStyle === "street" ? "is-active" : ""}`}
-              onClick={() => handleMapStyleChange("street")}
-            >
-              Map
-            </button>
-            <button
-              type="button"
-              className={`top-bar-style-btn ${mapStyle === "satellite" ? "is-active" : ""}`}
-              onClick={() => handleMapStyleChange("satellite")}
-            >
-              Satellite
-            </button>
-          </div>
 
-          <Link
-            to="/"
-            className="home-ghost-btn"
-            aria-label="Go to home page"
-            title="Home"
-          >
-            <FontAwesomeIcon icon={faHome} />
-            <span className="home-ghost-label">Home</span>
-          </Link>
+          {!user ? (
+            <button
+              type="button"
+              className="header-login-btn"
+              onClick={() => openLoginDialog()}
+              aria-label="Log in to unlock resident features"
+              title="Log In"
+            >
+              <FontAwesomeIcon icon={faRightToBracket} className="header-login-icon" />
+              <span>Log In</span>
+            </button>
+          ) : (
+            <div className="top-bar-user-wrap">
+              <span className="user-greeting-pill" title={`Signed in as ${user.name || user.email || "Resident"}`}>
+                <FontAwesomeIcon icon={faCircleCheck} className="user-greeting-icon" />
+                <span className="user-greeting-name">{firstName || "Resident"}</span>
+              </span>
+              <button
+                type="button"
+                className="header-logout-btn"
+                onClick={handleLogout}
+                aria-label="Sign out"
+                title="Log Out"
+              >
+                <FontAwesomeIcon icon={faRightFromBracket} />
+                <span>Log Out</span>
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -4306,9 +4503,17 @@ const ResidentHome = () => {
                 <span className="your-room-door-icon" aria-hidden="true">
                   <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
                 </span>
-                <span className="your-room-collapsed-title" title={roomLabel}>
-                  {roomLabel}
-                </span>
+                <div className="your-room-text-stack">
+                  <div className="your-room-center-sub" title={centerDisplayName}>
+                    <FontAwesomeIcon icon={faBuildingColumns} className="your-room-center-sub-icon" />
+                    <span className="your-room-center-sub-name">{centerDisplayName}</span>
+                  </div>
+                  <div className="your-room-main-title">
+                    {hasRoom
+                      ? (hasBuilding ? `${roomNum} · ${myCenter.room.building_name}` : roomNum)
+                      : (hasBuilding ? myCenter.room.building_name : "General Shelter")}
+                  </div>
+                </div>
               </div>
               <div className="your-room-collapsed-right">
                 <button
@@ -4354,7 +4559,17 @@ const ResidentHome = () => {
                   <span className="your-room-door-icon" aria-hidden="true">
                     <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
                   </span>
-                  <span className="your-room-expanded-title">{roomLabel}</span>
+                  <div className="your-room-text-stack">
+                    <div className="your-room-center-sub" title={centerDisplayName}>
+                      <FontAwesomeIcon icon={faBuildingColumns} className="your-room-center-sub-icon" />
+                      <span className="your-room-center-sub-name">{centerDisplayName}</span>
+                    </div>
+                    <div className="your-room-main-title">
+                      {hasRoom
+                        ? (hasBuilding ? `${roomNum} · ${myCenter.room.building_name}` : roomNum)
+                        : (hasBuilding ? myCenter.room.building_name : "General Shelter")}
+                    </div>
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -4650,7 +4865,6 @@ const ResidentHome = () => {
             </div>
 
             <div className={isMobile ? "sheet-body" : ""}>
-              {mapViewToggle}
               {helpIconsList}
               <button
                 type="button"
@@ -5379,10 +5593,16 @@ const ResidentHome = () => {
                     <strong>{myCenter.evacuation_center?.name}</strong>
                   </div>
 
+                  {myCenter.room?.building_name && (
+                    <div className="mc-result-row">
+                      <span>Building</span>
+                      <strong>{myCenter.room.building_name}</strong>
+                    </div>
+                  )}
+
                   {myCenter.room?.room_number && (
                     <div className="mc-result-row">
                       <span>Assigned room</span>
-
                       <strong>{myCenter.room.room_number}</strong>
                     </div>
                   )}
@@ -5417,6 +5637,14 @@ const ResidentHome = () => {
               </div>
             ) : (
               <form className="mc-body" onSubmit={handleLookupSubmit}>
+                {!user && (
+                  <div style={{ marginBottom: "14px", padding: "10px 14px", background: "#eff6ff", borderRadius: "10px", border: "1px solid #bfdbfe", fontSize: "13px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                    <span style={{ color: "#1e40af", fontWeight: "500" }}>Have an account? Log in to auto-detect your center and room.</span>
+                    <button type="button" className="ds-btn ds-btn--primary" style={{ height: "32px", fontSize: "12px", padding: "0 12px", flexShrink: 0 }} onClick={() => { closeMyCenter(); openLoginDialog(); }}>
+                      Log In
+                    </button>
+                  </div>
+                )}
                 <p className="mc-hint">
                   Enter the full name of the head of your household to find the
                   evacuation center assigned to you.
@@ -5626,6 +5854,27 @@ const ResidentHome = () => {
         onClose={() => setBuildingModalOpen(false)}
         userHousehold={myCenter}
         isStaff={false}
+      />
+
+      {/* Login and Resident Sign-Up Dialogs */}
+      <LoginDialog
+        dialogRef={loginDialogRef}
+        onOpenSignUp={openSignUpDialog}
+        notice={authModalNotice}
+        onLoginSuccess={(loggedInUser) => {
+          if (loggedInUser?.role !== "resident") {
+            navigate("/dashboard");
+          } else {
+            setReportConfirmation(`Welcome back, ${loggedInUser.name || "Resident"}!`);
+            setTimeout(() => setReportConfirmation(""), 4000);
+          }
+        }}
+      />
+      <ResidentSignUpDialog
+        dialogRef={signUpDialogRef}
+        isOpen={signUpOpen}
+        onClose={() => setSignUpOpen(false)}
+        onOpenLogin={() => openLoginDialog()}
       />
 
     </div>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
@@ -18,19 +18,30 @@ function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const { login } = useAuth();
+  const { user, login } = useAuth();
   const navigate = useNavigate();
+
+  // If already authenticated, redirect straight to the appropriate page
+  useEffect(() => {
+    if (user) {
+      if (user.role === "admin" || user.role === "lgu_personnel") {
+        navigate("/dashboard", { replace: true });
+      } else {
+        navigate("/map", { replace: true });
+      }
+    }
+  }, [user, navigate]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
-      const user = await login(email, password);
-      if (user.role === "admin") {
-        navigate("/admin");
+      const loggedUser = await login(email, password);
+      if (loggedUser.role === "admin" || loggedUser.role === "lgu_personnel") {
+        navigate("/dashboard");
       } else {
-        navigate("/lgu");
+        navigate("/map");
       }
     } catch (err) {
       setError(err.message);
@@ -46,7 +57,7 @@ function Login() {
           <FontAwesomeIcon icon={faShieldHalved} />
         </div>
         <h2 className="login-title">EvacWay Login</h2>
-        <p className="login-subtitle">For LGU Personnel and Admin accounts only</p>
+        <p className="login-subtitle">Sign in to your resident, LGU personnel, or admin account.</p>
 
         {error && (
           <div className="login-error ds-banner ds-banner--danger" role="alert">

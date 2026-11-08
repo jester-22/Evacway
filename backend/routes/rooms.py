@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 from collections import defaultdict
 from datetime import date
 
@@ -72,12 +73,8 @@ def get_rooms(center_id):
         room_data["is_fully_assigned"] = bool((room.capacity or 0) > 0 and assigned >= (room.capacity or 0))
         room_data["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
 
-        # Make sure coordinates are returned as numbers for Mapbox
-        if room.latitude is not None:
-            room_data["latitude"] = float(room.latitude)
-
-        if room.longitude is not None:
-            room_data["longitude"] = float(room.longitude)
+        room_data["latitude"] = None
+        room_data["longitude"] = None
 
         result.append(room_data)
 
@@ -362,18 +359,7 @@ def update_room(room_id):
                     return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
                 room.building_id = building.id
 
-    if 'latitude' in data and 'longitude' in data:
-        lat = data.get('latitude')
-        lng = data.get('longitude')
-        if lat is not None and lng is not None and str(lat).strip() != "" and str(lng).strip() != "":
-            try:
-                room.latitude = float(lat)
-                room.longitude = float(lng)
-            except (TypeError, ValueError):
-                return jsonify({"error": "Invalid room coordinates"}), 400
-        else:
-            room.latitude = None
-            room.longitude = None
+# Room coordinates are deprecated in favor of building mapping
 
     db.session.commit()
 

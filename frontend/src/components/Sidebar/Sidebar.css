@@ -14,6 +14,9 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding-bottom: var(--space-8); /* 32px bottom padding inside the scroll area (§6) */
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
 .sidebar-rail {
@@ -648,6 +651,7 @@
 @media (max-width: 1024px) {
   .dashboard-layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;

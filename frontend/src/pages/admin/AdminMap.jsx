@@ -55,6 +55,7 @@ import {
   useRoomsForCenters,
   useRoomFamilies,
   useBuildingsForCenters,
+  useSogodBoundary,
 } from "../../hooks/useEvacuationQueries";
 import Sidebar from "../../components/Sidebar/Sidebar";
 import DashboardMap, {
@@ -132,6 +133,39 @@ function isPointInPolygon(point, polygonPoints) {
 }
 
 /**
+ * Checks whether a [lng, lat] coordinate is inside a GeoJSON Polygon / MultiPolygon coordinates structure.
+ */
+function isPointInGeoPolygon(point, coordinates) {
+  if (!point || !coordinates || !Array.isArray(coordinates)) return false;
+  const [x, y] = point;
+
+  function checkRing(ring) {
+    if (!ring || ring.length < 3) return false;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = Number(ring[i][0]);
+      const yi = Number(ring[i][1]);
+      const xj = Number(ring[j][0]);
+      const yj = Number(ring[j][1]);
+      const intersect = ((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  if (Array.isArray(coordinates[0]) && typeof coordinates[0][0] === "number") {
+    return checkRing(coordinates);
+  }
+  if (Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0]) && typeof coordinates[0][0][0] === "number") {
+    return checkRing(coordinates[0]);
+  }
+  if (Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0]) && Array.isArray(coordinates[0][0][0])) {
+    return coordinates.some((poly) => checkRing(poly[0]));
+  }
+  return false;
+}
+
+/**
  * Validates that all building vertices are inside the center boundary.
  * Returns { valid: boolean, invalidPoints: Array<{index, point}> }
  */
@@ -198,6 +232,7 @@ export default function AdminMap() {
   // Centers & hazard zones data
   const centersQuery = useEvacuationCenters(true);
   const hazardZonesQuery = useHazardZones();
+  const { data: sogodBoundary = null } = useSogodBoundary();
   const allHazardReportsQuery = useHazardReports("all", {
     enabled: Boolean(deepLinkedHazardId),
   });
@@ -1364,29 +1399,19 @@ export default function AdminMap() {
     const centerId = props.id || center.id;
     setEditingCenter(center);
     setSelectedCenter(center);
-    setFootprintPoints([]);
     const originalPoints = polygonToPoints(center.geometry);
     setCenterEditOriginalPoints(originalPoints);
 
-    // Hide the saved center outline during redraw
+    // If center already has a polygon, load it and open directly in Step 3 (Edit)
     if (originalPoints.length >= 3) {
+      setFootprintPoints(originalPoints);
       setRedrawingCenterId(centerId);
-      
-      
+      setMappingStep("edit");
+    } else {
+      setFootprintPoints([]);
+      setRedrawingCenterId(null);
+      setMappingStep("footprint");
     }
-
-    const rawEntrances = Array.isArray(props.entrances) ? props.entrances : [];
-    const normalizedEntrances = rawEntrances
-      .map((e) => {
-        const lat = Number(e?.lat ?? e?.latitude);
-        const lng = Number(e?.lng ?? e?.longitude);
-        return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
-      })
-      .filter(Boolean);
-    setEntrancePoints(normalizedEntrances);
-
-    setMappingTool("draw");
-    setMappingStep("footprint");
     setIsMapping(true);
     setSaveNotice(null);
     setPlacementToast(null);
@@ -4391,10 +4416,20 @@ export default function AdminMap() {
                       ? "footprint"
                       : mappingStep === "entrance"
                       ? "entrance"
+                      : mappingStep === "edit"
+                      ? "edit"
                       : "confirm"
                   }
                   pendingFootprint={footprintPoints}
                   pendingEntrances={entrancePoints}
+                  editablePolygon={mappingStep === "edit" ? footprintPoints : null}
+                  onEditablePolygonChange={
+                    mappingStep === "edit"
+                      ? (newPoints) => {
+                          setFootprintPoints(newPoints);
+                        }
+                      : null
+                  }
                   onCloseShape={() => {
                     if (footprintPoints.length >= 3) {
                       setMappingStep("entrance");
@@ -4403,8 +4438,18 @@ export default function AdminMap() {
                   onOutsideOutlineClick={() => {
                     showPlacementToast("Entrance must be on the outline");
                   }}
+                  onOutsideSogodClick={() => {
+                    showPlacementToast("Cannot map beyond the Sogod municipality boundary.");
+                  }}
                   onMapClick={(latlng) => {
                     if (mappingTool === "pan") return;
+                    if (sogodBoundary) {
+                      const coords = sogodBoundary.features?.[0]?.geometry?.coordinates;
+                      if (coords && !isPointInGeoPolygon([Number(latlng.lng), Number(latlng.lat)], coords)) {
+                        showPlacementToast("Cannot map beyond the Sogod municipality boundary.");
+                        return;
+                      }
+                    }
                     if (mappingStep === "footprint") {
                       setFootprintPoints((pts) => [...pts, latlng]);
                     } else if (mappingStep === "entrance") {
@@ -4467,6 +4512,11 @@ export default function AdminMap() {
                     "Click inside or near the outline."
                   );
                 }}
+                onOutsideSogodClick={() => {
+                  showPlacementToast(
+                    "Cannot map beyond the Sogod municipality boundary."
+                  );
+                }}
                 onBasemapBuildingClick={handleBasemapBuildingClick}
                 onDoubleTapFinish={handleDoubleTapFinish}
                 onCloseShape={() => {
@@ -4475,6 +4525,13 @@ export default function AdminMap() {
                   }
                 }}
                 onMapClick={(latlng) => {
+                  if (sogodBoundary) {
+                    const coords = sogodBoundary.features?.[0]?.geometry?.coordinates;
+                    if (coords && !isPointInGeoPolygon([Number(latlng.lng), Number(latlng.lat)], coords)) {
+                      showPlacementToast("Cannot map beyond the Sogod municipality boundary.");
+                      return;
+                    }
+                  }
                   if (isPlacingRoom) {
                     handleMapClickForRoom(latlng);
                   } else if (isDrawingBuilding) {

@@ -244,6 +244,7 @@ def _barangay_center_rows(barangay, include_inactive):
             buildings_by_center.setdefault(bld.evacuation_center_id, []).append({
                 "id": bld.id,
                 "name": bld.name or f"Building #{bld.id}",
+                "status": bld.status or "open",
                 "evacuation_center_id": bld.evacuation_center_id,
                 "center_id": bld.evacuation_center_id,
                 "center_name": bld.evacuation_center.name if bld.evacuation_center else None,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
@@ -79,17 +79,69 @@ const MAPBOX_STYLE_SATELLITE = "mapbox://styles/mapbox/satellite-streets-v12";
 const SOGOD_CENTER = [124.996, 10.435];
 
 const SOGOD_BOUNDS = [
-  [124.89, 10.35],
-  [125.11, 10.56],
+  [124.912, 10.368],
+  [125.078, 10.525],
 ];
+
+function isPointInGeoRing(lng, lat, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    const intersect =
+      yi > lat !== yj > lat &&
+      lng < ((xj - xi) * (lat - yi)) / (yj - yi || 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+export function isPointInSogod(lng, lat, boundaryGeoJSON) {
+  const x = Number(lng);
+  const y = Number(lat);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  if (
+    x < SOGOD_BOUNDS[0][0] ||
+    x > SOGOD_BOUNDS[1][0] ||
+    y < SOGOD_BOUNDS[0][1] ||
+    y > SOGOD_BOUNDS[1][1]
+  ) {
+    return false;
+  }
+  const features = boundaryGeoJSON?.features;
+  if (!Array.isArray(features) || features.length === 0) {
+    return true;
+  }
+  for (const feat of features) {
+    const geom = feat?.geometry;
+    if (!geom || !Array.isArray(geom.coordinates)) continue;
+    if (geom.type === "Polygon") {
+      if (geom.coordinates[0] && isPointInGeoRing(x, y, geom.coordinates[0])) {
+        return true;
+      }
+    } else if (geom.type === "MultiPolygon") {
+      for (const poly of geom.coordinates) {
+        if (poly[0] && isPointInGeoRing(x, y, poly[0])) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
 
 const PLACEMENT_MAP_STYLE_KEY = "evacway_placement_map_style";
 
 function getInitialPlacementStyle() {
+  return "streets";
+}
+
+function hasLoadedStyle(map) {
+  if (!map) return false;
   try {
-    return sessionStorage.getItem(PLACEMENT_MAP_STYLE_KEY) || "satellite";
+    return Boolean(map.getStyle());
   } catch {
-    return "satellite";
+    return false;
   }
 }
 
@@ -270,9 +322,14 @@ export function isCenterMapped(center) {
   if (props.has_map !== undefined) {
     return Boolean(props.has_map);
   }
-  const lat = Number(props.latitude ?? center.latitude);
-  const lng = Number(props.longitude ?? center.longitude);
-  return Number.isFinite(lat) && Number.isFinite(lng);
+  const rawLat = props.latitude ?? center.latitude;
+  const rawLng = props.longitude ?? center.longitude;
+  if (rawLat == null || rawLng == null || rawLat === "" || rawLng === "") {
+    return false;
+  }
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+  return Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0);
 }
 
 export function getOccupancyStatus(occupied = 0, capacity = 0) {
@@ -346,10 +403,14 @@ export function getCenterCoordinates(center) {
   }
 
   const props = center.properties || center;
-  const lat = Number(props.latitude ?? center.latitude);
-  const lng = Number(props.longitude ?? center.longitude);
-  if (Number.isFinite(lat) && Number.isFinite(lng)) {
-    return { latitude: lat, longitude: lng };
+  const rawLat = props.latitude ?? center.latitude;
+  const rawLng = props.longitude ?? center.longitude;
+  if (rawLat != null && rawLng != null && rawLat !== "" && rawLng !== "") {
+    const lat = Number(rawLat);
+    const lng = Number(rawLng);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0)) {
+      return { latitude: lat, longitude: lng };
+    }
   }
   return null;
 }
@@ -432,6 +493,7 @@ function DashboardMap({
   hideZoomControls = false,
   onCloseShape,
   onOutsideOutlineClick,
+  onOutsideSogodClick,
   onMapBackgroundClick,
   hiddenCenterId = null,
   hiddenBuildingId = null,
@@ -475,10 +537,9 @@ function DashboardMap({
   const isDrawing =
     drawMode === "footprint" ||
     drawMode === "entrance" ||
+    drawMode === "edit" ||
     drawMode === "confirm";
-  const [mapStyle, setMapStyle] = useState(() => {
-    return isDrawing ? getInitialPlacementStyle() : "streets";
-  });
+  const [mapStyle, setMapStyle] = useState("streets");
   const [styleVersion, setStyleVersion] = useState(0);
   const [currentZoom, setCurrentZoom] = useState(currentZoomProp || 12);
   const userLocationMarkerRef = useRef(null);
@@ -509,17 +570,111 @@ function DashboardMap({
   const onMapClickRef = useRef(onMapClick);
   const onCloseShapeRef = useRef(onCloseShape);
   const onOutsideOutlineClickRef = useRef(onOutsideOutlineClick);
+  const onOutsideSogodClickRef = useRef(onOutsideSogodClick);
   const onDoubleTapFinishRef = useRef(onDoubleTapFinish);
   onMapClickRef.current = onMapClick;
   onCloseShapeRef.current = onCloseShape;
   onOutsideOutlineClickRef.current = onOutsideOutlineClick;
+  onOutsideSogodClickRef.current = onOutsideSogodClick;
   onDoubleTapFinishRef.current = onDoubleTapFinish;
   const fittedRoomBoundsRef = useRef(false);
   const lastFocusRequestedAtRef = useRef(null);
 
   const { rooms: loadedRooms } = useRoomsForCenters(centers);
   const { data: sogodBoundary = null } = useSogodBoundary();
+  const sogodBoundaryRef = useRef(sogodBoundary);
+  sogodBoundaryRef.current = sogodBoundary;
   const { data: roads = null } = useRoadSegments();
+
+  /*
+   * Add/update Sogod municipal boundary
+   * NOTE: Do NOT gate on `map.isStyleLoaded()` because Mapbox sets `isStyleLoaded() === false`
+   * whenever viewport tiles are loading (e.g. right after `flyTo`/`fitBounds`), and `style.load`
+   * will never fire again if the style itself was already loaded.
+   */
+  const updateSogodBoundary = useCallback((mapInstance) => {
+    const map = mapInstance || mapRef.current;
+    const boundaryData = sogodBoundary || sogodBoundaryRef.current;
+    if (!map || !boundaryData) return;
+
+    if (!hasLoadedStyle(map)) {
+      const retry = () => updateSogodBoundary(map);
+      map.once("style.load", retry);
+      map.once("load", retry);
+      return;
+    }
+
+    try {
+      const source = map.getSource("sogod-boundary");
+      if (source) {
+        source.setData(boundaryData);
+      } else {
+        map.addSource("sogod-boundary", {
+          type: "geojson",
+          data: boundaryData,
+        });
+      }
+
+      const casingColor =
+        mapStyle === "satellite"
+          ? "rgba(0, 0, 0, 0.75)"
+          : "rgba(255, 255, 255, 0.9)";
+      const lineColor = mapStyle === "satellite" ? "#38bdf8" : "#1d4ed8";
+
+      // 1. Subtle tint fill for Sogod municipality area
+      if (!map.getLayer("sogod-boundary-fill")) {
+        map.addLayer({
+          id: "sogod-boundary-fill",
+          type: "fill",
+          source: "sogod-boundary",
+          slot: "top",
+          paint: {
+            "fill-color": "#2563eb",
+            "fill-opacity": 0.04,
+          },
+        });
+      }
+
+      // 2. High-contrast casing line
+      if (!map.getLayer("sogod-boundary-casing")) {
+        map.addLayer({
+          id: "sogod-boundary-casing",
+          type: "line",
+          source: "sogod-boundary",
+          slot: "top",
+          paint: {
+            "line-color": casingColor,
+            "line-width": 5,
+          },
+        });
+      } else {
+        map.setPaintProperty("sogod-boundary-casing", "line-color", casingColor);
+      }
+
+      // 3. Crisp dashed boundary line
+      if (!map.getLayer("sogod-boundary-line")) {
+        map.addLayer({
+          id: "sogod-boundary-line",
+          type: "line",
+          source: "sogod-boundary",
+          slot: "top",
+          paint: {
+            "line-color": lineColor,
+            "line-width": 2.5,
+            "line-dasharray": [5, 3],
+          },
+        });
+      } else {
+        map.setPaintProperty("sogod-boundary-line", "line-color", lineColor);
+      }
+    } catch (e) {
+      const retry = () => updateSogodBoundary(map);
+      try {
+        map.once("style.load", retry);
+        map.once("idle", retry);
+      } catch {}
+    }
+  }, [sogodBoundary, mapStyle]);
   const hazardReportsQuery = usePublicHazardReports();
   const hazardReports = useMemo(() => {
     const response = hazardReportsQuery.data;
@@ -873,43 +1028,11 @@ function DashboardMap({
    * Helper to re-add custom sources and layers after a style change
    */
   const readdCustomSourcesAndLayers = (map) => {
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map || !hasLoadedStyle(map)) return;
     suppressPOILayers(map);
 
     // 1. Sogod boundary
-    if (sogodBoundary && !map.getSource("sogod-boundary")) {
-      try {
-        map.addSource("sogod-boundary", {
-          type: "geojson",
-          data: sogodBoundary,
-        });
-        if (!map.getLayer("sogod-boundary-casing")) {
-          map.addLayer({
-            id: "sogod-boundary-casing",
-            type: "line",
-            source: "sogod-boundary",
-            paint: {
-              "line-color": mapStyle === "satellite" ? "rgba(0, 0, 0, 0.65)" : "rgba(255, 255, 255, 0.85)",
-              "line-width": 4.5,
-            },
-          });
-        }
-        if (!map.getLayer("sogod-boundary-line")) {
-          map.addLayer({
-            id: "sogod-boundary-line",
-            type: "line",
-            source: "sogod-boundary",
-            paint: {
-              "line-color": mapStyle === "satellite" ? "#38bdf8" : "#1e3a8a",
-              "line-width": 2.5,
-              "line-dasharray": [4, 3],
-            },
-          });
-        }
-      } catch (e) {
-        // ignore
-      }
-    }
+    updateSogodBoundary(map);
 
     // 2. Roads
     if (roads && !map.getSource("roads")) {
@@ -1073,7 +1196,7 @@ function DashboardMap({
 
       const selectedData = {
         type: "FeatureCollection",
-        features: hasGeom
+        features: hasGeom && !isDrawing && drawMode !== "room"
           ? [
               {
                 type: "Feature",
@@ -1148,6 +1271,11 @@ function DashboardMap({
         // Create vertex handles
         const handles = createVertexHandleMarkers(map, editingBuildingPoints, {
           onVertexDrag: (index, point, isFinal) => {
+            if (!isPointInSogod(point.lng, point.lat, sogodBoundaryRef.current)) {
+              onOutsideSogodClickRef.current?.();
+              if (isFinal) handles.updatePositions(editingBuildingPoints);
+              return;
+            }
             const newPoints = [...editingBuildingPoints];
             newPoints[index] = point;
             onEditingBuildingPointsChange(newPoints, isFinal);
@@ -1159,6 +1287,11 @@ function DashboardMap({
             }
           },
           onMidpointDrag: (index, point, isFinal) => {
+            if (!isPointInSogod(point.lng, point.lat, sogodBoundaryRef.current)) {
+              onOutsideSogodClickRef.current?.();
+              if (isFinal) handles.updatePositions(editingBuildingPoints);
+              return;
+            }
             const newPoints = [...editingBuildingPoints];
             // Insert new vertex after the current index
             newPoints.splice(index + 1, 0, point);
@@ -1235,110 +1368,12 @@ function DashboardMap({
       }
     }
 
-    // Center edit polygon mode: vertex handles for the center footprint being edited
-    if (editablePolygon && editablePolygon.length >= 3 && onEditablePolygonChange) {
-      try {
-        // Clean up existing vertex handles
-        if (map.__centerVertexHandles) {
-          map.__centerVertexHandles.removeAll();
-          map.__centerVertexHandles = null;
-        }
-
-        // Create vertex handles
-        const handles = createVertexHandleMarkers(map, editablePolygon, {
-          onVertexDrag: (index, point, isFinal) => {
-            const newPoints = [...editablePolygon];
-            newPoints[index] = point;
-            onEditablePolygonChange(newPoints, isFinal);
-          },
-          onVertexDelete: (index) => {
-            if (editablePolygon.length > 3) {
-              const newPoints = editablePolygon.filter((_, i) => i !== index);
-              onEditablePolygonChange(newPoints, true);
-            }
-          },
-          onMidpointDrag: (index, point, isFinal) => {
-            const newPoints = [...editablePolygon];
-            // Insert new vertex after the current index
-            newPoints.splice(index + 1, 0, point);
-            onEditablePolygonChange(newPoints, isFinal);
-          },
-          showMidpoints: true,
-          minVertices: 3,
-        });
-
-        map.__centerVertexHandles = handles;
-
-        // Also create/edit the editable polygon layer for the center being edited
-        const editableCoords = [editablePolygon.map((p) => [p.lng, p.lat])];
-        const editableData = {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              properties: { editing: true },
-              geometry: {
-                type: "Polygon",
-                coordinates: editableCoords,
-              },
-            },
-          ],
-        };
-
-        if (!map.getSource("editing-center-footprint")) {
-          map.addSource("editing-center-footprint", {
-            type: "geojson",
-            data: editableData,
-          });
-          map.addLayer({
-            id: "editing-center-fill",
-            type: "fill",
-            source: "editing-center-footprint",
-            slot: "top",
-            paint: {
-              "fill-color": "#2563eb",
-              "fill-opacity": 0.15,
-            },
-          });
-          map.addLayer({
-            id: "editing-center-line",
-            type: "line",
-            source: "editing-center-footprint",
-            slot: "top",
-            paint: {
-              "line-color": "#1d4ed8",
-              "line-width": 3,
-              "line-dasharray": [4, 4],
-            },
-          });
-        } else {
-          map.getSource("editing-center-footprint").setData(editableData);
-        }
-      } catch (e) {
-        // ignore
-      }
-    } else {
-      // Clean up vertex handles and editable layer when not editing
-      if (map.__centerVertexHandles) {
-        map.__centerVertexHandles.removeAll();
-        map.__centerVertexHandles = null;
-      }
-      if (map.getLayer("editing-center-line")) {
-        map.removeLayer("editing-center-line");
-      }
-      if (map.getLayer("editing-center-fill")) {
-        map.removeLayer("editing-center-fill");
-      }
-      if (map.getSource("editing-center-footprint")) {
-        map.removeSource("editing-center-footprint");
-      }
-    }
-
     // 5. Outline / Pending footprint (only for non-mapping display; mapping uses draw-preview)
     try {
       const isMappingStep =
         drawMode === "footprint" ||
         drawMode === "entrance" ||
+        drawMode === "edit" ||
         drawMode === "confirm" ||
         drawMode === "room";
 
@@ -1548,6 +1583,7 @@ function DashboardMap({
         } catch (e) {
           console.warn("Failed to re-add building/center layers on style reload:", e);
         }
+        updateSogodBoundary(map);
         setStyleVersion((v) => v + 1);
       });
     } catch (e) {
@@ -1556,26 +1592,11 @@ function DashboardMap({
   };
 
   /*
-   * Default to Satellite while drawing (remember choice for session)
+   * Track drawMode changes
    */
   useEffect(() => {
-    const wasDrawing =
-      prevDrawModeRef.current === "footprint" ||
-      prevDrawModeRef.current === "entrance" ||
-      prevDrawModeRef.current === "confirm";
-    const isDrawingNow =
-      drawMode === "footprint" ||
-      drawMode === "entrance" ||
-      drawMode === "confirm";
     prevDrawModeRef.current = drawMode;
-
-    if (!wasDrawing && isDrawingNow) {
-      const preferred = getInitialPlacementStyle();
-      if (mapRef.current && mapStyle !== preferred) {
-        changeMapStyle(preferred);
-      }
-    }
-  }, [drawMode, mapStyle]);
+  }, [drawMode]);
 
   /*
    * Start view for drawing:
@@ -1597,9 +1618,15 @@ function DashboardMap({
     const geom = activeCenter?.geometry;
     const bounds = geom ? getGeometryBounds(geom) : null;
     const props = activeCenter?.properties || activeCenter || {};
-    const lat = Number(props.latitude ?? activeCenter?.latitude);
-    const lng = Number(props.longitude ?? activeCenter?.longitude);
-    const hasCoordinates = Number.isFinite(lat) && Number.isFinite(lng);
+    const rawLat = props.latitude ?? activeCenter?.latitude;
+    const rawLng = props.longitude ?? activeCenter?.longitude;
+    const lat = rawLat != null && rawLat !== "" ? Number(rawLat) : NaN;
+    const lng = rawLng != null && rawLng !== "" ? Number(rawLng) : NaN;
+    const hasCoordinates =
+      Number.isFinite(lat) &&
+      Number.isFinite(lng) &&
+      (lat !== 0 || lng !== 0) &&
+      isPointInSogod(lng, lat, sogodBoundaryRef.current);
 
     if (bounds) {
       map.fitBounds(bounds, {
@@ -1623,14 +1650,20 @@ function DashboardMap({
 
       if (firstBarangay && mapboxgl.accessToken) {
         const query = `${firstBarangay}, Sogod, Southern Leyte`;
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?country=ph&proximity=${SOGOD_CENTER[0]},${SOGOD_CENTER[1]}&limit=1&access_token=${mapboxgl.accessToken}`;
+        const bboxParam = `${SOGOD_BOUNDS[0][0]},${SOGOD_BOUNDS[0][1]},${SOGOD_BOUNDS[1][0]},${SOGOD_BOUNDS[1][1]}`;
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?country=ph&bbox=${bboxParam}&proximity=${SOGOD_CENTER[0]},${SOGOD_CENTER[1]}&limit=1&access_token=${mapboxgl.accessToken}`;
 
         fetch(url)
           .then((res) => (res.ok ? res.json() : null))
           .then((data) => {
             const feat = data?.features?.[0];
             const coords = feat?.center || feat?.geometry?.coordinates;
-            if (coords && Array.isArray(coords) && coords.length === 2) {
+            if (
+              coords &&
+              Array.isArray(coords) &&
+              coords.length === 2 &&
+              isPointInSogod(coords[0], coords[1], sogodBoundaryRef.current)
+            ) {
               map.flyTo({
                 center: coords,
                 zoom: 16,
@@ -1687,7 +1720,9 @@ function DashboardMap({
             typeof coords[0] === "number" &&
             typeof coords[1] === "number"
           ) {
-            mappedCoords.push(coords);
+            if (isPointInSogod(coords[0], coords[1], sogodBoundaryRef.current)) {
+              mappedCoords.push(coords);
+            }
             return;
           }
           coords.forEach(collect);
@@ -1695,10 +1730,19 @@ function DashboardMap({
         collect(geom.coordinates);
       } else {
         const props = c.properties || c;
-        const lat = Number(props.latitude ?? c.latitude);
-        const lng = Number(props.longitude ?? c.longitude);
-        if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          mappedCoords.push([lng, lat]);
+        const rawLat = props.latitude ?? c.latitude;
+        const rawLng = props.longitude ?? c.longitude;
+        if (rawLat != null && rawLng != null && rawLat !== "" && rawLng !== "") {
+          const lat = Number(rawLat);
+          const lng = Number(rawLng);
+          if (
+            Number.isFinite(lat) &&
+            Number.isFinite(lng) &&
+            (lat !== 0 || lng !== 0) &&
+            isPointInSogod(lng, lat, sogodBoundaryRef.current)
+          ) {
+            mappedCoords.push([lng, lat]);
+          }
         }
       }
     });
@@ -1778,9 +1822,7 @@ function DashboardMap({
       return;
     }
 
-    const initialStyle = (drawMode === "footprint" || drawMode === "entrance" || drawMode === "confirm")
-      ? (getInitialPlacementStyle() === "streets" ? MAPBOX_STYLE_STREETS : MAPBOX_STYLE_SATELLITE)
-      : MAPBOX_STYLE_STREETS;
+    const initialStyle = MAPBOX_STYLE_STREETS;
 
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
@@ -1789,6 +1831,7 @@ function DashboardMap({
       zoom: 12,
       minZoom: 11,
       maxZoom: 18.5,
+      maxBounds: SOGOD_BOUNDS,
       pitch: 0,
       bearing: 0,
       attributionControl: false,
@@ -1816,6 +1859,19 @@ function DashboardMap({
       const z = map.getZoom();
       setCurrentZoom(z);
       if (onZoomChange) onZoomChange(z);
+      updateSogodBoundary(map);
+    });
+
+    map.on("style.load", () => {
+      updateSogodBoundary(map);
+    });
+
+    map.on("idle", () => {
+      try {
+        if (sogodBoundaryRef.current && hasLoadedStyle(map) && !map.getSource("sogod-boundary")) {
+          updateSogodBoundary(map);
+        }
+      } catch {}
     });
 
     map.on("error", (event) => {
@@ -1844,68 +1900,12 @@ function DashboardMap({
   }, []);
 
   /*
-   * Add/update Sogod boundary
+   * Reactive effect for Sogod boundary updates
    */
   useEffect(() => {
-    const map = mapRef.current;
-
-    if (!map || !mapLoaded || !sogodBoundary || !map.isStyleLoaded()) return;
-
-    try {
-      const source = map.getSource("sogod-boundary");
-
-      if (source) {
-        source.setData(sogodBoundary);
-        if (map.getLayer("sogod-boundary-casing")) {
-          map.setPaintProperty(
-            "sogod-boundary-casing",
-            "line-color",
-            mapStyle === "satellite" ? "rgba(0, 0, 0, 0.65)" : "rgba(255, 255, 255, 0.85)"
-          );
-        }
-        if (map.getLayer("sogod-boundary-line")) {
-          map.setPaintProperty(
-            "sogod-boundary-line",
-            "line-color",
-            mapStyle === "satellite" ? "#38bdf8" : "#1e3a8a"
-          );
-        }
-        return;
-      }
-
-      map.addSource("sogod-boundary", {
-        type: "geojson",
-        data: sogodBoundary,
-      });
-
-      if (!map.getLayer("sogod-boundary-casing")) {
-        map.addLayer({
-          id: "sogod-boundary-casing",
-          type: "line",
-          source: "sogod-boundary",
-          paint: {
-            "line-color": mapStyle === "satellite" ? "rgba(0, 0, 0, 0.65)" : "rgba(255, 255, 255, 0.85)",
-            "line-width": 4.5,
-          },
-        });
-      }
-
-      if (!map.getLayer("sogod-boundary-line")) {
-        map.addLayer({
-          id: "sogod-boundary-line",
-          type: "line",
-          source: "sogod-boundary",
-          paint: {
-            "line-color": mapStyle === "satellite" ? "#38bdf8" : "#1e3a8a",
-            "line-width": 2.5,
-            "line-dasharray": [4, 3],
-          },
-        });
-      }
-    } catch (e) {
-      // Ignored during style reload
-    }
-  }, [mapLoaded, sogodBoundary, styleVersion, mapStyle]);
+    if (!mapLoaded) return;
+    updateSogodBoundary();
+  }, [updateSogodBoundary, mapLoaded, styleVersion]);
 
   /*
    * Roads
@@ -2386,7 +2386,7 @@ function DashboardMap({
 
     const selectedData = {
       type: "FeatureCollection",
-      features: hasGeom
+      features: hasGeom && !isDrawing && drawMode !== "room"
         ? [
             {
               type: "Feature",
@@ -2756,11 +2756,12 @@ function DashboardMap({
   const isMappingStep =
     drawMode === "footprint" ||
     drawMode === "entrance" ||
+    drawMode === "edit" ||
     drawMode === "confirm" ||
     drawMode === "room";
 
   function ensureDrawPreviewLayers(map) {
-    if (!map || !map.getStyle()) return false;
+    if (!map || !hasLoadedStyle(map)) return false;
     try {
       if (!map.getSource("draw-preview")) {
         map.addSource("draw-preview", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -2801,10 +2802,11 @@ function DashboardMap({
   }
 
   function updateDrawPreviewStyle(map, step) {
-    if (!map || !map.getStyle()) return;
+    if (!map || !hasLoadedStyle(map)) return;
     try {
       const isFootprint = step === "footprint";
       const isEntranceOrConfirm = step === "entrance" || step === "confirm";
+      const isEdit = step === "edit";
       const isRoom = step === "room";
 
       // Line: solid for all mapping steps (closing segment handles dashed preview in footprint step)
@@ -2819,16 +2821,18 @@ function DashboardMap({
         map.setPaintProperty("draw-preview-fill", "fill-opacity", 0.15);
       }
 
-      // Circles: radius 4 for entrance/confirm/room (small corner dots), 6/8 for footprint
+      // Circles: hidden in edit (since interactive vertex handles are shown), radius 4 for entrance/confirm/room, 6/8 for footprint
       if (map.getLayer("draw-preview-circle")) {
-        if (isEntranceOrConfirm || isRoom) {
-          // Small corner dots: radius 4, white with #2563eb stroke (all same size)
+        if (isEdit) {
+          map.setLayoutProperty("draw-preview-circle", "visibility", "none");
+        } else if (isEntranceOrConfirm || isRoom) {
+          map.setLayoutProperty("draw-preview-circle", "visibility", "visible");
           map.setPaintProperty("draw-preview-circle", "circle-radius", 4);
           map.setPaintProperty("draw-preview-circle", "circle-color", "#ffffff");
           map.setPaintProperty("draw-preview-circle", "circle-stroke-color", "#2563eb");
           map.setPaintProperty("draw-preview-circle", "circle-stroke-width", 2);
         } else {
-          // Footprint step: larger dots, first point blue
+          map.setLayoutProperty("draw-preview-circle", "visibility", "visible");
           map.setPaintProperty("draw-preview-circle", "circle-radius", ["case", ["==", ["get", "isFirst"], true], 8, 6]);
           map.setPaintProperty("draw-preview-circle", "circle-color", ["case", ["==", ["get", "isFirst"], true], "#2563eb", "#ffffff"]);
           map.setPaintProperty("draw-preview-circle", "circle-stroke-color", "#2563eb");
@@ -2844,7 +2848,7 @@ function DashboardMap({
   }
 
   function rebuildDrawPreview(map, points, step) {
-    if (!map || !map.getStyle()) return;
+    if (!map || !hasLoadedStyle(map)) return;
     // Ensure layers exist (create if missing, no-op if present)
     ensureDrawPreviewLayers(map);
     const features = [];
@@ -2874,12 +2878,14 @@ function DashboardMap({
         features.push({ type: "Feature", properties: { kind: "fill" },
           geometry: { type: "Polygon", coordinates: [ring] } });
       }
-      // Corner dots
-      points.forEach((p, i) => {
-        features.push({ type: "Feature", properties: { kind: "point", isFirst: i === 0 },
-          geometry: { type: "Point",
-            coordinates: [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)] } });
-      });
+      // Corner dots (hidden in edit step, since interactive handles are shown)
+      if (step !== "edit") {
+        points.forEach((p, i) => {
+          features.push({ type: "Feature", properties: { kind: "point", isFirst: i === 0 },
+            geometry: { type: "Point",
+              coordinates: [Number(p.lng ?? p.longitude), Number(p.lat ?? p.latitude)] } });
+        });
+      }
     }
     try {
       const source = map.getSource("draw-preview");
@@ -2890,7 +2896,7 @@ function DashboardMap({
   }
 
   function removeDrawPreview(map) {
-    if (!map || !map.getStyle()) return;
+    if (!map || !hasLoadedStyle(map)) return;
     try {
       if (map.getLayer("draw-preview-circle")) map.removeLayer("draw-preview-circle");
       if (map.getLayer("draw-preview-fill")) map.removeLayer("draw-preview-fill");
@@ -2953,10 +2959,70 @@ function DashboardMap({
       };
     }
   }, [mapLoaded, drawMode, pendingFootprint, styleVersion]);
+
+  /*
+   * Dedicated effect: Interactive vertex handles for Center Edit Step (drawMode === "edit")
+   */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    if (drawMode === "edit" && editablePolygon && editablePolygon.length >= 3 && onEditablePolygonChange) {
+      if (map.__centerVertexHandles) {
+        map.__centerVertexHandles.removeAll();
+        map.__centerVertexHandles = null;
+      }
+
+      const handles = createVertexHandleMarkers(map, editablePolygon, {
+        onVertexDrag: (index, point, isFinal) => {
+          if (!isPointInSogod(point.lng, point.lat, sogodBoundaryRef.current)) {
+            onOutsideSogodClickRef.current?.();
+            if (isFinal) handles.updatePositions(editablePolygon);
+            return;
+          }
+          const newPoints = [...editablePolygon];
+          newPoints[index] = point;
+          onEditablePolygonChange(newPoints, isFinal);
+        },
+        onVertexDelete: (index) => {
+          if (editablePolygon.length > 3) {
+            const newPoints = editablePolygon.filter((_, i) => i !== index);
+            onEditablePolygonChange(newPoints, true);
+          }
+        },
+        onMidpointDrag: (index, point, isFinal) => {
+          if (!isPointInSogod(point.lng, point.lat, sogodBoundaryRef.current)) {
+            onOutsideSogodClickRef.current?.();
+            if (isFinal) handles.updatePositions(editablePolygon);
+            return;
+          }
+          const newPoints = [...editablePolygon];
+          newPoints.splice(index + 1, 0, point);
+          onEditablePolygonChange(newPoints, isFinal);
+        },
+        showMidpoints: true,
+        minVertices: 3,
+      });
+
+      map.__centerVertexHandles = handles;
+
+      return () => {
+        if (map.__centerVertexHandles) {
+          map.__centerVertexHandles.removeAll();
+          map.__centerVertexHandles = null;
+        }
+      };
+    } else {
+      if (map.__centerVertexHandles) {
+        map.__centerVertexHandles.removeAll();
+        map.__centerVertexHandles = null;
+      }
+    }
+  }, [mapLoaded, drawMode, editablePolygon, onEditablePolygonChange]);
   // Apply/remove layer filters for hidden center/building during redraw
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoaded || !map.getStyle()) return;
+    if (!map || !mapLoaded || !hasLoadedStyle(map)) return;
 
     // Center filter
     const centerFill = map.getLayer("evac-centers-fill");
@@ -3130,6 +3196,19 @@ function DashboardMap({
         }
         return;
       }
+      if (
+        drawMode !== "none" &&
+        !isPointInSogod(event.lngLat.lng, event.lngLat.lat, sogodBoundaryRef.current)
+      ) {
+        map.getCanvas().style.cursor = "not-allowed";
+        if (roomCursorMarkerRef.current) {
+          roomCursorMarkerRef.current.getElement().style.display = "none";
+        }
+        if (entranceCursorMarkerRef.current) {
+          entranceCursorMarkerRef.current.getElement().style.display = "none";
+        }
+        return;
+      }
       if (drawMode === "entrance" || drawMode === "room") {
         const hasOutline = pendingFootprint && pendingFootprint.length >= 3;
         // Entrance: same snap + tolerance as the click handler, so the preview
@@ -3246,6 +3325,27 @@ function DashboardMap({
       if (!onMapClickRef.current) return;
       if (mappingTool === "pan") return; // In Pan mode taps place nothing
 
+      // First-corner close: click within 12px of first corner closes the shape
+      if (drawMode === "footprint" && pendingFootprint && pendingFootprint.length >= 3) {
+        const first = pendingFootprint[0];
+        const firstPx = map.project([Number(first.lng ?? first.longitude), Number(first.lat ?? first.latitude)]);
+        const dx = event.point.x - firstPx.x;
+        const dy = event.point.y - firstPx.y;
+        if (Math.sqrt(dx * dx + dy * dy) <= 12) {
+          if (onCloseShapeRef.current) onCloseShapeRef.current();
+          return;
+        }
+      }
+
+      if (!isPointInSogod(event.lngLat.lng, event.lngLat.lat, sogodBoundaryRef.current)) {
+        if (onOutsideSogodClickRef.current) {
+          onOutsideSogodClickRef.current();
+        } else if (onOutsideOutlineClickRef.current) {
+          onOutsideOutlineClickRef.current();
+        }
+        return;
+      }
+
       if (drawMode === "footprint" && onBasemapBuildingClick) {
         try {
           const features = map.queryRenderedFeatures(event.point);
@@ -3259,7 +3359,11 @@ function DashboardMap({
           );
           if (bFeat) {
             const pts = polygonToPoints(bFeat.geometry);
-            if (pts && pts.length >= 3) {
+            if (
+              pts &&
+              pts.length >= 3 &&
+              pts.every((p) => isPointInSogod(p.lng, p.lat, sogodBoundaryRef.current))
+            ) {
               onBasemapBuildingClick(pts);
               return;
             }
@@ -3304,18 +3408,6 @@ function DashboardMap({
       }
       if (entranceCursorMarkerRef.current) {
         entranceCursorMarkerRef.current.getElement().style.display = "none";
-      }
-
-      // First-corner close: click within 12px of first corner closes the shape
-      if (drawMode === "footprint" && pendingFootprint && pendingFootprint.length >= 3) {
-        const first = pendingFootprint[0];
-        const firstPx = map.project([Number(first.lng ?? first.longitude), Number(first.lat ?? first.latitude)]);
-        const dx = event.point.x - firstPx.x;
-        const dy = event.point.y - firstPx.y;
-        if (Math.sqrt(dx * dx + dy * dy) <= 12) {
-          if (onCloseShapeRef.current) onCloseShapeRef.current();
-          return;
-        }
       }
 
       onMapClickRef.current(
@@ -3402,11 +3494,16 @@ function DashboardMap({
     const timeout = setTimeout(async () => {
       setDrawingSearching(true);
       try {
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?country=ph&proximity=${SOGOD_CENTER[0]},${SOGOD_CENTER[1]}&limit=5&access_token=${mapboxgl.accessToken}`;
+        const bboxParam = `${SOGOD_BOUNDS[0][0]},${SOGOD_BOUNDS[0][1]},${SOGOD_BOUNDS[1][0]},${SOGOD_BOUNDS[1][1]}`;
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?country=ph&bbox=${bboxParam}&proximity=${SOGOD_CENTER[0]},${SOGOD_CENTER[1]}&limit=5&access_token=${mapboxgl.accessToken}`;
         const res = await fetch(url);
         if (res.ok) {
           const data = await res.json();
-          setDrawingSearchResults(data.features || []);
+          const filtered = (data.features || []).filter((f) => {
+            const c = f?.center || f?.geometry?.coordinates;
+            return c && isPointInSogod(c[0], c[1], sogodBoundaryRef.current);
+          });
+          setDrawingSearchResults(filtered);
         } else {
           setDrawingSearchResults([]);
         }

@@ -15,11 +15,12 @@ import BarangayManager from "../../components/BarangayManager/BarangayManager";
 import RescueRequestManager from "../../components/RescueRequestManager/RescueRequestManager";
 import SystemAndLogs from "../../components/ActivityLogs/SystemAndLogs";
 import ResidentRegistrations from "../../components/ResidentRegistrations/ResidentRegistrations";
+import EvacueeCheckIn from "../../components/EvacueeCheckIn/EvacueeCheckIn";
 
 function LguDashboard() {
   const requestedTab = new URLSearchParams(location.search).get("tab");
   const notificationId = new URLSearchParams(location.search).get("notificationId");
-  const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "registrations", "settings"].includes(requestedTab) ? requestedTab : "centers");
+  const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "checkin", "registrations", "settings"].includes(requestedTab) ? requestedTab : "centers");
   const [flashNotice, setFlashNotice] = useState(location.state?.flashMessage || "");
   const [focusedReportId, setFocusedReportId] = useState(null);
   const [focusedRescueId, setFocusedRescueId] = useState(null);
@@ -60,12 +61,19 @@ function LguDashboard() {
     }
   }, [location.state]);
 
+  // When visiting /lgu directly without a tab, redirect to operational Dashboard
+  useEffect(() => {
+    if (!requestedTab) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [requestedTab, navigate]);
+
   useEffect(() => {
     if (requestedTab === "data-management") {
       setFlashNotice("Admins only");
       setTab("centers");
       navigate("/lgu?tab=centers", { replace: true });
-    } else if (requestedTab && ["centers", "barangays", "reports", "rescue", "registrations", "settings"].includes(requestedTab)) {
+    } else if (requestedTab && ["centers", "barangays", "reports", "rescue", "checkin", "registrations", "settings"].includes(requestedTab)) {
       setTab(requestedTab);
     }
   }, [requestedTab, navigate]);
@@ -96,6 +104,10 @@ function LguDashboard() {
         setFocusedReportId(notification.resource_id);
         setFocusedRescueId(null);
         setTab("reports");
+      } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
+        setFocusedReportId(null);
+        setFocusedRescueId(null);
+        setTab("registrations");
       } else {
         setFocusedRescueId(notification.resource_id);
         setFocusedReportId(null);
@@ -110,6 +122,10 @@ function LguDashboard() {
       setFocusedReportId(notification.resource_id);
       setFocusedRescueId(null);
       setTab("reports");
+    } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
+      setFocusedReportId(null);
+      setFocusedRescueId(null);
+      setTab("registrations");
     } else {
       setFocusedRescueId(notification.resource_id);
       setFocusedReportId(null);
@@ -151,7 +167,7 @@ function LguDashboard() {
       />
 
       {/* CONTENT */}
-      <div className="dashboard-content" style={{ overflow: "hidden" }}>
+      <div className="dashboard-content">
         {flashNotice && (
           <div
             style={{
@@ -213,6 +229,10 @@ function LguDashboard() {
 
         {tab === "rescue" && (
           <RescueRequestManager key={focusedRescueId ?? "rescue-queue"} initialRequestId={focusedRescueId} onOpenMap={openMapLocation} />
+        )}
+
+        {tab === "checkin" && (
+          <EvacueeCheckIn />
         )}
 
         {tab === "registrations" && <ResidentRegistrations />}

@@ -18,6 +18,7 @@ import {
   faChevronUp,
   faChevronDown,
   faMap,
+  faUserCheck,
 } from "@fortawesome/free-solid-svg-icons";
 
 import "./Sidebar.css";
@@ -68,6 +69,12 @@ const NAV_SECTIONS = [
         key: "rescue",
         label: "Rescue Alerts",
         icon: faLifeRing,
+        roles: ["admin", "lgu_personnel"],
+      },
+      {
+        key: "checkin",
+        label: "Evacuee Check-In",
+        icon: faUserCheck,
         roles: ["admin", "lgu_personnel"],
       },
     ],

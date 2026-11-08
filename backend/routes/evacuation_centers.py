@@ -1,8 +1,10 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func, or_
+from sqlalchemy.orm import joinedload
 from collections import defaultdict
 from datetime import date
 from models import (
+    Amenity,
     db,
     EvacuationCenter,
     EvacuationCenterBuilding,
@@ -13,9 +15,10 @@ from models import (
     Family,
     Resident,
     SystemLog,
+    philippines_now,
 )
 from geoalchemy2.shape import to_shape, from_shape
-from shapely.geometry import mapping, Polygon, MultiPoint
+from shapely.geometry import mapping, Polygon, MultiPoint, Point
 from flask_jwt_extended import get_jwt_identity
 from utils import role_required
 
@@ -238,6 +241,7 @@ def _center_metrics(center):
             {
                 "id": b.id,
                 "name": b.name,
+                "status": b.status or "open",
                 "evacuation_center_id": center.id,
                 "center_name": center.name,
             }
@@ -253,6 +257,17 @@ def _center_metrics(center):
 # =========================================================
 # CENTER TYPE CHANGE VALIDATION
 # =========================================================
+def get_valid_center_types():
+    try:
+        types = [
+            ct.code for ct in CenterType.query.filter_by(is_active=True).all()
+        ]
+        if types:
+            return set(types)
+    except Exception:
+        pass
+    return {'campus', 'single_venue', 'private_property'}
+
 VALID_CENTER_TYPES = {'campus', 'single_venue', 'private_property'}
 
 def validate_center_type_change(center, new_type, current_type=None):
@@ -384,6 +399,8 @@ def center_to_feature(center):
 
     metrics = _center_metrics(center)
 
+    amenities_list = [a.to_dict() for a in center.amenities] if hasattr(center, 'amenities') and center.amenities else []
+    amenity_ids = [a["id"] for a in amenities_list]
     return {
         "type": "Feature",
         "geometry": geometry,
@@ -391,10 +408,17 @@ def center_to_feature(center):
             "id": center.id,
             "name": center.name,
             "center_type": center.center_type or "campus",
+            "center_type_id": center.center_type_id,
+            "center_type_name": center.center_type_name,
             "owner_name": center.owner_name,
             **metrics,
             "building_material": center.building_material,
-            "accessibility_notes": center.accessibility_notes,
+            "building_material_id": center.building_material_id,
+            "amenities": amenities_list,
+            "amenity_ids": amenity_ids,
+            "accessibility_features": amenities_list,
+            "accessibility_feature_ids": amenity_ids,
+            "accessibility_notes": ", ".join(a["name"] for a in amenities_list),
             "hazard_exposure_score": center.hazard_exposure_score,
             "contact_number": center.contact_number,
             "is_active": center.is_active,
@@ -719,13 +743,27 @@ def create_evacuation_center():
     center_type = raw_center_type
     owner_name = str(data.get('owner_name') or '').strip() or None
 
+    center_type_id = data.get('center_type_id')
+    if not center_type_id and center_type:
+        ct = CenterType.query.filter_by(code=center_type).first()
+        if ct:
+            center_type_id = ct.id
+
+    building_material_id = data.get('building_material_id')
+    if not building_material_id and data.get('building_material'):
+        bm = BuildingMaterial.query.filter(
+            (BuildingMaterial.name.ilike(str(data.get('building_material')).strip())) |
+            (BuildingMaterial.code == str(data.get('building_material')).strip().lower())
+        ).first()
+        if bm:
+            building_material_id = bm.id
+
     center = EvacuationCenter(
         name=name,
-        center_type=center_type,
+        center_type_id=center_type_id,
         owner_name=owner_name,
         capacity=capacity,
-        building_material=data.get('building_material'),
-        accessibility_notes=data.get('accessibility_notes'),
+        building_material_id=building_material_id,
         hazard_exposure_score=data.get('hazard_exposure_score'),
         contact_number=data.get('contact_number'),
         is_active=True,
@@ -733,6 +771,10 @@ def create_evacuation_center():
         entrance_geom=entrance_geom,
         managed_by=user_id
     )
+    raw_amenities = data.get('amenity_ids') or data.get('accessibility_feature_ids') or []
+    amenity_ids = [int(x) for x in raw_amenities if str(x).isdigit()]
+    if amenity_ids:
+        center.amenities = Amenity.query.filter(Amenity.id.in_(amenity_ids)).all()
     db.session.add(center)
     db.session.flush()
     db.session.add_all(
@@ -804,6 +846,11 @@ def update_evacuation_center(center_id):
     for field in ['building_material', 'accessibility_notes', 'hazard_exposure_score', 'contact_number', 'owner_name']:
         if field in data:
             setattr(center, field, data[field])
+
+    if 'amenity_ids' in data or 'accessibility_feature_ids' in data:
+        raw_amenities = data.get('amenity_ids') if 'amenity_ids' in data else data.get('accessibility_feature_ids')
+        amenity_ids = [int(x) for x in (raw_amenities or []) if str(x).isdigit()]
+        center.amenities = Amenity.query.filter(Amenity.id.in_(amenity_ids)).all() if amenity_ids else []
 
     if 'center_type' in data:
         raw_type = str(data.get('center_type') or '').strip().lower()
@@ -977,7 +1024,522 @@ def get_center_available_families(center_id):
 
     return jsonify(result), 200
 
+
+# ---------------------------------------------------------------------------
+# EVACUEE ARRIVAL & CHECK-IN ENDPOINTS
+# ---------------------------------------------------------------------------
+
+@centers_bp.route('/api/evacuation-centers/<int:center_id>/check-in', methods=['POST'])
+@role_required('admin', 'lgu_personnel')
+def update_evacuee_check_in(center_id):
+    center = EvacuationCenter.query.get(center_id)
+    if not center:
+        return jsonify({"error": "Evacuation center not found"}), 404
+
+    data = request.get_json() or {}
+    family_id = data.get('family_id')
+    resident_id = data.get('resident_id')
+    resident_ids = data.get('resident_ids')  # Optional list of resident IDs specifically checked in
+    action = data.get('action', 'check_in')  # 'check_in', 'check_out', or 'partial'
+    method = data.get('method', 'manual')    # 'manual' or 'geofence'
+
+    if not family_id and not resident_id and not resident_ids:
+        return jsonify({"error": "family_id, resident_id, or resident_ids is required"}), 400
+
+    target_resident_ids = []
+    family = None
+    if family_id:
+        family = Family.query.get(family_id)
+        if not family:
+            return jsonify({"error": "Family not found"}), 404
+        residents = Resident.query.filter_by(family_id=family_id).all()
+        target_resident_ids = [r.id for r in residents]
+    elif resident_id:
+        res = Resident.query.get(resident_id)
+        if not res:
+            return jsonify({"error": "Resident not found"}), 404
+        target_resident_ids = [res.id]
+        if res.family_id:
+            family = Family.query.get(res.family_id)
+
+    # Find assignments in this center (direct or via room)
+    assignments = (
+        EvacuationAssignment.query
+        .filter(EvacuationAssignment.resident_id.in_(target_resident_ids))
+        .filter(
+            or_(
+                EvacuationAssignment.evacuation_center_id == center_id,
+                EvacuationAssignment.room_id.in_(
+                    db.session.query(EvacuationCenterRoom.id).filter_by(evacuation_center_id=center_id)
+                )
+            )
+        )
+        .all()
+    )
+
+    if not assignments:
+        return jsonify({"error": "No assignments found for this resident/family in this evacuation center"}), 404
+
+    current_user_id = None
+    try:
+        identity = get_jwt_identity()
+        if isinstance(identity, dict):
+            current_user_id = identity.get('id')
+        elif identity:
+            current_user_id = int(identity)
+    except Exception:
+        pass
+
+    now = philippines_now()
+    head_name = family.head_name if family else f"Resident #{resident_id}"
+    fam_code = f" ({family.family_code})" if family and family.family_code else ""
+
+    # Specific member selection check-in (Partial or Full member checklist)
+    if resident_ids is not None:
+        present_set = set(int(rid) for rid in resident_ids)
+        for a in assignments:
+            if a.resident_id in present_set:
+                if not a.checked_in_at:
+                    a.checked_in_at = now
+            else:
+                a.checked_in_at = None
+
+        checked_count = sum(1 for a in assignments if a.checked_in_at is not None)
+        total_assigned = len(assignments)
+
+        if family:
+            if checked_count >= total_assigned and total_assigned > 0:
+                family.evacuation_status = "Evacuated"
+            elif checked_count > 0:
+                family.evacuation_status = "Partially Evacuated"
+            else:
+                family.evacuation_status = "Assigned"
+
+        log_action = f"Updated check-in for {head_name}{fam_code}: {checked_count}/{total_assigned} members present at {center.name}"
+        db.session.add(SystemLog(user_id=current_user_id, action=log_action, timestamp=now))
+        db.session.commit()
+
+        checkin_state = "full" if (checked_count >= total_assigned and total_assigned > 0) else ("partial" if checked_count > 0 else "none")
+
+        return jsonify({
+            "success": True,
+            "message": f"Updated check-in: {checked_count} of {total_assigned} members present.",
+            "checked_in_members": checked_count,
+            "assigned_members": total_assigned,
+            "is_checked_in": checked_count > 0,
+            "checkin_state": checkin_state,
+            "family_id": family_id,
+            "action": "partial_check_in"
+        }), 200
+
+    elif action == 'check_in':
+        for a in assignments:
+            if not a.checked_in_at:
+                a.checked_in_at = now
+        if family:
+            family.evacuation_status = "Evacuated"
+
+        log_action = f"Checked in {head_name}{fam_code} at {center.name} via {method}"
+        db.session.add(SystemLog(user_id=current_user_id, action=log_action, timestamp=now))
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Successfully checked in {head_name} (all members).",
+            "is_checked_in": True,
+            "checkin_state": "full",
+            "checked_in_members": len(assignments),
+            "assigned_members": len(assignments),
+            "checked_in_at": now.isoformat(),
+            "family_id": family_id,
+            "resident_id": resident_id,
+            "action": "check_in"
+        }), 200
+
+    elif action == 'check_out':
+        for a in assignments:
+            a.checked_in_at = None
+        if family:
+            family.evacuation_status = "Assigned"
+
+        log_action = f"Undid check-in for {head_name}{fam_code} at {center.name}"
+        db.session.add(SystemLog(user_id=current_user_id, action=log_action, timestamp=now))
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Check-in undone for {head_name}.",
+            "is_checked_in": False,
+            "checkin_state": "none",
+            "checked_in_members": 0,
+            "assigned_members": len(assignments),
+            "family_id": family_id,
+            "resident_id": resident_id,
+            "action": "check_out"
+        }), 200
+    else:
+        return jsonify({"error": f"Invalid action: {action}"}), 400
+
+
+@centers_bp.route('/api/evacuation-centers/check-in/auto', methods=['POST'])
+def auto_geofence_check_in():
+    data = request.get_json() or {}
+    resident_id = data.get('resident_id')
+    family_id = data.get('family_id')
+    center_id = data.get('center_id')
+    lat = data.get('latitude')
+    lng = data.get('longitude')
+
+    if not center_id or (not resident_id and not family_id):
+        return jsonify({"error": "center_id and resident_id or family_id required"}), 400
+
+    center = EvacuationCenter.query.get(center_id)
+    if not center:
+        return jsonify({"error": "Evacuation center not found"}), 404
+
+    # Validate coordinate overlap / proximity
+    is_inside = False
+    if lat is not None and lng is not None:
+        if center.geom is not None:
+            try:
+                pt = Point(float(lng), float(lat))
+                center_shape = to_shape(center.geom)
+                if center_shape.contains(pt) or center_shape.distance(pt) < 0.00065:
+                    is_inside = True
+            except Exception:
+                pass
+
+        if not is_inside and center.latitude and center.longitude:
+            import math
+            R = 6371000
+            dlat = math.radians(float(center.latitude) - float(lat))
+            dlng = math.radians(float(center.longitude) - float(lng))
+            a = (math.sin(dlat/2)**2 +
+                 math.cos(math.radians(float(lat))) * math.cos(math.radians(float(center.latitude))) *
+                 math.sin(dlng/2)**2)
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+            if R * c <= 75:  # within 75 meters
+                is_inside = True
+
+    if lat is not None and lng is not None and not is_inside:
+        return jsonify({
+            "success": False,
+            "message": "Current location is not inside the evacuation center boundary.",
+            "is_inside": False
+        }), 400
+
+    # Collect target resident IDs
+    target_resident_ids = []
+    family = None
+    if family_id:
+        family = Family.query.get(family_id)
+        if family:
+            residents = Resident.query.filter_by(family_id=family.id).all()
+            target_resident_ids = [r.id for r in residents]
+    elif resident_id:
+        res = Resident.query.get(resident_id)
+        if res:
+            target_resident_ids = [res.id]
+            if res.family_id:
+                family = Family.query.get(res.family_id)
+
+    assignments = (
+        EvacuationAssignment.query
+        .filter(EvacuationAssignment.resident_id.in_(target_resident_ids))
+        .filter(
+            or_(
+                EvacuationAssignment.evacuation_center_id == center_id,
+                EvacuationAssignment.room_id.in_(
+                    db.session.query(EvacuationCenterRoom.id).filter_by(evacuation_center_id=center_id)
+                )
+            )
+        )
+        .all()
+    )
+
+    if not assignments:
+        return jsonify({"error": "No assignment found for this center"}), 404
+
+    now = philippines_now()
+    already_checked_in = all(a.checked_in_at is not None for a in assignments)
+    if not already_checked_in:
+        for a in assignments:
+            if not a.checked_in_at:
+                a.checked_in_at = now
+        if family:
+            family.evacuation_status = "Evacuated"
+
+        head_name = family.head_name if family else f"Resident #{resident_id}"
+        fam_code = f" ({family.family_code})" if family and family.family_code else ""
+        db.session.add(SystemLog(action=f"Auto checked in {head_name}{fam_code} at {center.name} via GPS geofence", timestamp=now))
+        db.session.commit()
+
+    # Find assigned room if any
+    first_room_assignment = next((a for a in assignments if a.room_id is not None), None)
+    room_number = None
+    if first_room_assignment:
+        room_obj = EvacuationCenterRoom.query.get(first_room_assignment.room_id)
+        if room_obj:
+            room_number = room_obj.room_number
+
     return jsonify({
-        "message": f"Evacuation center '{center.name}' deactivated safely.",
-        "center_id": center.id
+        "success": True,
+        "already_checked_in": already_checked_in,
+        "message": f"Welcome! You have arrived at {center.name}." + (f" Your assigned room is {room_number}." if room_number else ""),
+        "is_checked_in": True,
+        "checked_in_at": now.isoformat(),
+        "center_name": center.name,
+        "room_number": room_number
+    }), 200
+
+
+@centers_bp.route('/api/evacuation-centers/check-in-list', methods=['GET'])
+@role_required('admin', 'lgu_personnel')
+def get_check_in_list():
+    center_id_param = request.args.get('center_id')
+    search_query = request.args.get('q', '').strip().lower()
+    status_filter = request.args.get('status', 'all')  # 'all', 'checked_in', 'pending'
+
+    # 1. Fetch active centers with live counts
+    active_centers = EvacuationCenter.query.filter_by(is_active=True).order_by(EvacuationCenter.name.asc()).all()
+    centers_summary = []
+    
+    # Precompute center stats
+    center_assigned_totals = dict(
+        db.session.query(
+            EvacuationAssignment.evacuation_center_id,
+            func.count(EvacuationAssignment.id)
+        ).group_by(EvacuationAssignment.evacuation_center_id).all()
+    )
+    center_checked_totals = dict(
+        db.session.query(
+            EvacuationAssignment.evacuation_center_id,
+            func.count(EvacuationAssignment.id)
+        ).filter(EvacuationAssignment.checked_in_at.isnot(None))
+        .group_by(EvacuationAssignment.evacuation_center_id).all()
+    )
+
+    for c in active_centers:
+        tot_assigned = center_assigned_totals.get(c.id, 0)
+        tot_checked = center_checked_totals.get(c.id, 0)
+        cap = int(c.capacity or 0)
+        centers_summary.append({
+            "id": c.id,
+            "name": c.name,
+            "center_type": c.center_type or "campus",
+            "capacity": cap,
+            "assigned": tot_assigned,
+            "checked_in": tot_checked,
+            "space_left": max(cap - tot_assigned, 0),
+        })
+
+    # 2. Query assigned families with assignments
+    base_filter = []
+    if center_id_param and center_id_param != "all":
+        try:
+            cid = int(center_id_param)
+            base_filter.append(or_(
+                EvacuationAssignment.evacuation_center_id == cid,
+                EvacuationCenterRoom.evacuation_center_id == cid
+            ))
+        except ValueError:
+            pass
+
+    assigned_query = (
+        db.session.query(
+            Family.id.label('family_id'),
+            Family.family_code,
+            Family.head_name,
+            Family.member_count,
+            Family.contact_number,
+            Family.address,
+            Barangay.id.label('barangay_id'),
+            Barangay.name.label('barangay_name'),
+            EvacuationCenter.id.label('center_id'),
+            EvacuationCenter.name.label('center_name'),
+            EvacuationCenterRoom.id.label('room_id'),
+            EvacuationCenterRoom.room_number,
+            EvacuationCenterBuilding.name.label('building_name'),
+            func.count(EvacuationAssignment.id).label('assigned_members'),
+            func.count(EvacuationAssignment.checked_in_at).label('checked_in_members'),
+            func.max(EvacuationAssignment.checked_in_at).label('latest_checked_in_at')
+        )
+        .join(Resident, Resident.family_id == Family.id)
+        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
+        .outerjoin(Barangay, Family.barangay_id == Barangay.id)
+        .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+        .outerjoin(EvacuationCenterBuilding, EvacuationCenterRoom.building_id == EvacuationCenterBuilding.id)
+        .outerjoin(
+            EvacuationCenter,
+            or_(
+                EvacuationAssignment.evacuation_center_id == EvacuationCenter.id,
+                EvacuationCenterRoom.evacuation_center_id == EvacuationCenter.id
+            )
+        )
+    )
+
+    if base_filter:
+        assigned_query = assigned_query.filter(*base_filter)
+
+    assigned_rows = (
+        assigned_query
+        .group_by(
+            Family.id,
+            Family.family_code,
+            Family.head_name,
+            Family.member_count,
+            Family.contact_number,
+            Family.address,
+            Barangay.id,
+            Barangay.name,
+            EvacuationCenter.id,
+            EvacuationCenter.name,
+            EvacuationCenterRoom.id,
+            EvacuationCenterRoom.room_number,
+            EvacuationCenterBuilding.name,
+        )
+        .order_by(Family.head_name.asc())
+        .all()
+    )
+
+    # 3. Precompute vulnerable flags and members per family
+    family_ids = [r.family_id for r in assigned_rows]
+    special_needs_map = defaultdict(list)
+    members_map = defaultdict(list)
+
+    if family_ids:
+        today = date.today()
+        residents = (
+            Resident.query
+            .filter(Resident.family_id.in_(family_ids))
+            .order_by(Resident.is_head_of_family.desc(), Resident.first_name.asc())
+            .all()
+        )
+        all_res_ids = [res.id for res in residents]
+
+        # Get assignment checkin timestamps for each resident in this center
+        assignment_checkin_map = {}
+        if all_res_ids:
+            ass_records = EvacuationAssignment.query.filter(EvacuationAssignment.resident_id.in_(all_res_ids)).all()
+            for a in ass_records:
+                assignment_checkin_map[a.resident_id] = a.checked_in_at
+
+        for res in residents:
+            age = None
+            if res.date_of_birth:
+                age = today.year - res.date_of_birth.year - (
+                    (today.month, today.day) < (res.date_of_birth.month, res.date_of_birth.day)
+                )
+            flags = []
+            if res.is_pwd:
+                flags.append("PWD")
+            if age is not None and age >= 60:
+                flags.append("Senior")
+            if age is not None and age <= 2:
+                flags.append("Infant")
+            if res.is_pregnant:
+                flags.append("Pregnant")
+            if res.is_lactating:
+                flags.append("Lactating")
+            if res.is_solo_parent:
+                flags.append("Solo Parent")
+            if res.needs_assistance:
+                flags.append("Needs Assistance")
+
+            for fl in flags:
+                if fl not in special_needs_map[res.family_id]:
+                    special_needs_map[res.family_id].append(fl)
+
+            chk_time = assignment_checkin_map.get(res.id)
+            members_map[res.family_id].append({
+                "id": res.id,
+                "name": f"{res.first_name} {res.last_name}".strip(),
+                "first_name": res.first_name,
+                "last_name": res.last_name,
+                "relationship": res.relationship_to_head or ("Head" if res.is_head_of_family else "Member"),
+                "is_head": bool(res.is_head_of_family),
+                "is_checked_in": chk_time is not None,
+                "checked_in_at": chk_time.isoformat() if chk_time else None,
+                "special_needs": flags,
+            })
+
+    # 4. Build evacuees list and calculate summary
+    evacuees = []
+    tot_fully_checked_in = 0
+    tot_partially_checked_in = 0
+    tot_pending = 0
+    tot_assigned = 0
+
+    for r in assigned_rows:
+        tot_assigned += 1
+        m_list = members_map.get(r.family_id, [])
+        m_count = len(m_list) if m_list else int(r.assigned_members or r.member_count or 1)
+        chk_count = sum(1 for m in m_list if m["is_checked_in"]) if m_list else int(r.checked_in_members or 0)
+        latest_at = r.latest_checked_in_at.isoformat() if r.latest_checked_in_at else None
+
+        # Determine checkin state
+        if chk_count >= m_count and m_count > 0:
+            checkin_state = "full"
+            tot_fully_checked_in += 1
+        elif chk_count > 0:
+            checkin_state = "partial"
+            tot_partially_checked_in += 1
+        else:
+            checkin_state = "none"
+            tot_pending += 1
+
+        # Apply status filter
+        if status_filter == 'checked_in' and checkin_state != 'full':
+            continue
+        if status_filter == 'partial' and checkin_state != 'partial':
+            continue
+        if status_filter == 'pending' and checkin_state != 'none':
+            continue
+
+        # Apply search query
+        if search_query:
+            member_names = " ".join(m["name"] for m in m_list).lower()
+            target_str = f"{r.head_name or ''} {r.family_code or ''} {r.contact_number or ''} {r.room_number or ''} {r.barangay_name or ''} {r.center_name or ''} {member_names}".lower()
+            if search_query not in target_str:
+                continue
+
+        evacuees.append({
+            "family_id": r.family_id,
+            "family_code": r.family_code,
+            "head_name": r.head_name or "Unnamed Household",
+            "member_count": m_count,
+            "contact_number": r.contact_number,
+            "address": r.address,
+            "barangay_id": r.barangay_id,
+            "barangay_name": r.barangay_name or "Unknown",
+            "center_id": r.center_id,
+            "center_name": r.center_name or "Evacuation Center",
+            "room_id": r.room_id,
+            "room_number": r.room_number,
+            "building_name": r.building_name,
+            "assigned_members": m_count,
+            "checked_in_members": chk_count,
+            "is_checked_in": chk_count > 0,
+            "checkin_state": checkin_state,  # "full" | "partial" | "none"
+            "checked_in_at": latest_at,
+            "checkin_status": (
+                "Fully arrived" if checkin_state == "full"
+                else (f"{chk_count} of {m_count} arrived" if checkin_state == "partial" else "Pending arrival")
+            ),
+            "special_needs": special_needs_map.get(r.family_id, []),
+            "members": m_list,
+        })
+
+    return jsonify({
+        "centers": centers_summary,
+        "evacuees": evacuees,
+        "summary": {
+            "total_assigned": tot_assigned,
+            "total_checked_in": tot_fully_checked_in,
+            "total_partial": tot_partially_checked_in,
+            "total_pending": tot_pending,
+            "total_residents_assigned": sum(e.get("assigned_members", 0) for e in evacuees),
+            "total_residents_checked_in": sum(e.get("checked_in_members", 0) for e in evacuees),
+            "occupancy_rate": round(((tot_fully_checked_in + tot_partially_checked_in) / tot_assigned * 100), 1) if tot_assigned > 0 else 0
+        }
     }), 200

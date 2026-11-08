@@ -2178,6 +2178,211 @@
   min-width: 0;
 }
 
+/* Executive Barangay Hero Header (Page B) */
+.bm-hero-header {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 22px 24px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bm-hero-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bm-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #f8fafc;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bm-back-btn:hover {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+
+.bm-hero-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bm-hero-chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.bm-hero-chip.location {
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #dbeafe;
+}
+
+.bm-hero-chip.census {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.bm-hero-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.bm-hero-info {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.bm-hero-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bm-hero-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+
+.bm-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bm-hero-badge.complete {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.bm-hero-badge.pending {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.bm-hero-desc {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.bm-hero-metrics {
+  display: flex;
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 10px 20px;
+  gap: 18px;
+  flex-shrink: 0;
+}
+
+.bm-hero-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.bm-hm-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+}
+
+.bm-hm-val {
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.bm-hero-metric-divider {
+  width: 1px;
+  height: 24px;
+  background: #cbd5e1;
+}
+
+.bm-segmented-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  width: fit-content;
+  flex-wrap: wrap;
+}
+
+.bm-segmented-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bm-segmented-tab:hover {
+  color: #0f172a;
+}
+
+.bm-segmented-tab.active {
+  background: #ffffff;
+  color: #2563eb;
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
 /* Topbar & Section Switcher in Page B */
 .bm-dashboard-topbar {
   display: flex;
@@ -2384,56 +2589,107 @@
 /* Summary Stats Grid */
 .bm-stats-grid-4 {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
 .bm-stat-card {
-  padding: 16px 18px;
+  padding: 18px 20px;
   background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.02);
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.bm-stat-card:hover {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.07);
+  border-color: #cbd5e1;
+}
+
+.bm-stat-icon-wrapper {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.bm-stat-content {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 0;
 }
 
-.bm-stat-card.accent-green {
-  border-left: 4px solid #16a34a;
-}
-
-.bm-stat-card.accent-amber {
-  border-left: 4px solid #d97706;
+.bm-stat-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .bm-stat-label {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   color: #64748b;
+  margin-bottom: 2px;
 }
 
 .bm-stat-value {
-  font-size: 25px;
+  font-size: 26px;
   font-weight: 800;
   color: #0f172a;
   line-height: 1.15;
+  letter-spacing: -0.02em;
 }
 
-.bm-stat-card.accent-green .bm-stat-value {
-  color: #15803d;
+.bm-stat-pct-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 9999px;
 }
 
-.bm-stat-card.accent-amber .bm-stat-value {
-  color: #b45309;
+.bm-stat-pct-pill.emerald {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.bm-stat-mini-progress {
+  width: 100%;
+  height: 4px;
+  border-radius: 9999px;
+  background: #f1f5f9;
+  margin: 6px 0 4px;
+  overflow: hidden;
+}
+
+.bm-stat-mini-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.4s ease;
+}
+
+.bm-stat-mini-fill.emerald {
+  background: #10b981;
 }
 
 .bm-stat-sub {
   font-size: 12px;
   color: #64748b;
+  margin-top: 2px;
 }
 
 /* Main Section Cards on Barangay Overview */
@@ -2564,7 +2820,8 @@
 
 .bm-table-wrap {
   width: 100%;
-  overflow-x: auto;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .bm-table {
@@ -2599,6 +2856,156 @@
 
 .bm-table tbody tr:hover {
   background: #f8fafc;
+}
+
+.bm-clickable-row {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.bm-clickable-row:hover {
+  background-color: #f1f5f9 !important;
+}
+
+.bm-barangay-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bm-count-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.bm-progress-cell {
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.bm-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.bm-progress-numbers {
+  color: #475569;
+}
+
+.bm-pct-chip {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 9999px;
+}
+
+.bm-pct-chip.full {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.bm-pct-chip.partial {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.bm-pct-chip.zero {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.bm-progress-track {
+  width: 100%;
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.bm-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.4s ease;
+}
+
+.bm-progress-fill.full {
+  background: #10b981;
+}
+
+.bm-progress-fill.partial {
+  background: #f59e0b;
+}
+
+.bm-progress-fill.zero {
+  background: #cbd5e1;
+}
+
+.bm-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bm-status-chip.complete {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.bm-status-chip.warning {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.bm-centers-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #f1f5f9;
+  color: #334155;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.bm-inspect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  background: #ffffff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bm-inspect-btn:hover {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.2);
 }
 
 .bm-th-right,
@@ -3058,8 +3465,7 @@ label.bm-form-field > textarea:focus {
 .bm-table-wrap {
   width: 100%;
   max-width: 100%;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow-x: hidden;
 }
 
 .bm-dialog {
@@ -3094,7 +3500,7 @@ label.bm-form-field > textarea:focus {
   vertical-align: middle;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .bm-desktop-only {
     display: none !important;
   }
@@ -3102,6 +3508,89 @@ label.bm-form-field > textarea:focus {
   .bm-mobile-only {
     display: flex !important;
     flex-direction: column !important;
+    gap: 12px;
+  }
+
+  .barangay-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .barangay-workspace-tabs {
+    width: 100%;
+    display: flex;
+  }
+
+  .barangay-workspace-tabs button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .barangay-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .barangay-filter-actions {
+    width: 100%;
+  }
+
+  .barangay-filter-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .bm-hero-header {
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .bm-hero-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+
+  .bm-hero-metrics {
+    width: 100%;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 10px 8px;
+  }
+
+  .bm-hero-metric-divider {
+    display: none;
+  }
+
+  .bm-segmented-tabs {
+    width: 100%;
+    display: flex;
+  }
+
+  .bm-segmented-tab {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 768px) {
+  .barangay-page {
+    padding: 14px 12px;
+  }
+
+  .bm-stats-grid-4 {
+    grid-template-columns: 1fr;
+  }
+
+  .bm-hero-metrics {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
   }
 
   .bm-dashboard-topbar {

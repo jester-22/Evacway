@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 from collections import defaultdict
 from datetime import date
 import re
@@ -511,14 +512,8 @@ def suggest_rooms_for_buildings(center_id):
     if not buildings:
         return jsonify({"suggestions": []})
 
-    # Find rooms that have latitude/longitude but are not linked to a building (or suggest for all mapped)
-    mapped_rooms = EvacuationCenterRoom.query.filter_by(
-        evacuation_center_id=center_id,
-        is_active=True
-    ).filter(
-        EvacuationCenterRoom.latitude.isnot(None),
-        EvacuationCenterRoom.longitude.isnot(None)
-    ).all()
+    # Room coordinates have been deprecated in favor of direct building linkage
+    mapped_rooms = []
 
     building_polys = []
     for b in buildings:
@@ -715,76 +710,73 @@ def get_building_details(building_id):
 
         room_data["my_household"] = my_household
 
-        # ROLE-BASED ACCESS:
-        if is_staff:
-            # Group assignments by family for staff view
-            family_members_map = defaultdict(list)
-            for a in r_assignments:
-                res = residents_by_id.get(a.resident_id)
-                if not res:
-                    continue
+        # Group assignments by family (available for both staff and room overview)
+        family_members_map = defaultdict(list)
+        for a in r_assignments:
+            res = residents_by_id.get(a.resident_id)
+            if not res:
+                continue
+            fam = families_by_id.get(res.family_id)
 
-                age = None
-                if res.date_of_birth:
-                    today = date.today()
-                    age = today.year - res.date_of_birth.year - (
-                        (today.month, today.day) < (res.date_of_birth.month, res.date_of_birth.day)
-                    )
+            age = None
+            if res.date_of_birth:
+                today = date.today()
+                age = today.year - res.date_of_birth.year - (
+                    (today.month, today.day) < (res.date_of_birth.month, res.date_of_birth.day)
+                )
 
-                flags = []
-                if res.is_pwd: flags.append("PWD")
-                if age is not None and age >= 60: flags.append("Senior")
-                if age is not None and age <= 2: flags.append("Infant")
-                if res.is_pregnant: flags.append("Pregnant")
-                if res.is_lactating: flags.append("Lactating")
-                if res.is_solo_parent: flags.append("Solo Parent")
+            flags = []
+            if res.is_pwd: flags.append("PWD")
+            if age is not None and age >= 60: flags.append("Senior")
+            if age is not None and age <= 2: flags.append("Infant")
+            if res.is_pregnant: flags.append("Pregnant")
+            if res.is_lactating: flags.append("Lactating")
+            if res.is_solo_parent: flags.append("Solo Parent")
 
-                family_members_map[res.family_id].append({
-                    "resident_id": res.id,
-                    "full_name": res.get_full_name(),
-                    "household_head_name": fam.head_name if fam else res.get_full_name(),
-                    "contact_number": (fam.contact_number if fam else None) or res.alternate_contact,
-                    "special_needs": flags,
-                    "is_checked_in": a.checked_in_at is not None,
-                    "checked_in_at": a.checked_in_at.isoformat() if a.checked_in_at else None,
-                    "checkin_status": "Checked in" if a.checked_in_at is not None else "Not yet arrived",
-                })
+            contact_num = ((fam.contact_number if fam else None) or res.alternate_contact) if is_staff else None
 
-            families_list = []
-            for fam_id, mems in family_members_map.items():
-                fam = families_by_id.get(fam_id)
-                all_flags = []
-                for m in mems:
-                    for f in m["special_needs"]:
-                        if f not in all_flags:
-                            all_flags.append(f)
+            family_members_map[res.family_id].append({
+                "resident_id": res.id,
+                "full_name": res.get_full_name(),
+                "household_head_name": fam.head_name if fam else res.get_full_name(),
+                "contact_number": contact_num,
+                "special_needs": flags,
+                "is_checked_in": a.checked_in_at is not None,
+                "checked_in_at": a.checked_in_at.isoformat() if a.checked_in_at else None,
+                "checkin_status": "Checked in" if a.checked_in_at is not None else "Not yet arrived",
+            })
 
-                head_name = (fam.head_name if fam else mems[0]["household_head_name"]) or mems[0]["full_name"]
-                contact = (fam.contact_number if fam else None) or mems[0]["contact_number"] or "N/A"
-                total_mems = len(mems) or (fam.member_count if fam else 1)
-                checked_in_mems = sum(1 for m in mems if m["is_checked_in"])
-                is_fam_checked_in = checked_in_mems > 0
+        families_list = []
+        for fam_id, mems in family_members_map.items():
+            fam = families_by_id.get(fam_id)
+            all_flags = []
+            for m in mems:
+                for f in m["special_needs"]:
+                    if f not in all_flags:
+                        all_flags.append(f)
 
-                families_list.append({
-                    "family_id": fam_id,
-                    "head_name": head_name,
-                    "member_count": total_mems,
-                    "assigned_members": len(mems),
-                    "checked_in_members": checked_in_mems,
-                    "is_checked_in": is_fam_checked_in,
-                    "checkin_status": "Checked in" if is_fam_checked_in else "Not yet arrived",
-                    "contact_number": contact,
-                    "special_needs": all_flags,
-                    "members": mems,
-                })
+            head_name = (fam.head_name if fam else mems[0]["household_head_name"]) or mems[0]["full_name"]
+            contact = ((fam.contact_number if fam else None) or mems[0]["contact_number"] or "N/A") if is_staff else None
+            total_mems = len(mems) or (fam.member_count if fam else 1)
+            checked_in_mems = sum(1 for m in mems if m["is_checked_in"])
+            is_fam_checked_in = checked_in_mems > 0
 
-            # Sort families alphabetically by head_name
-            families_list.sort(key=lambda x: (x["head_name"] or "").casefold())
-            room_data["families"] = families_list
-        else:
-            # PUBLIC / RESIDENT VIEW:
-            # Strictly do NOT include family names or contacts of other people!
-            room_data["families"] = None
+            families_list.append({
+                "family_id": fam_id,
+                "head_name": head_name,
+                "member_count": total_mems,
+                "assigned_members": len(mems),
+                "checked_in_members": checked_in_mems,
+                "is_checked_in": is_fam_checked_in,
+                "checkin_status": "Checked in" if is_fam_checked_in else "Not yet arrived",
+                "contact_number": contact,
+                "special_needs": all_flags,
+                "members": mems,
+            })
+
+        # Sort families alphabetically by head_name
+        families_list.sort(key=lambda x: (x["head_name"] or "").casefold())
+        room_data["families"] = families_list
 
         detailed_rooms.append(room_data)
 

@@ -381,6 +381,23 @@ class EvacuationCenter(BaseModel):
         nullable=True
     )
 
+    evacuation_open_date = db.Column(
+        db.Date,
+        nullable=True
+    )
+
+    evacuation_status = db.Column(
+        db.String(30),
+        nullable=True,
+        default='standby',
+        server_default='standby'
+    )
+
+    evacuation_event_name = db.Column(
+        db.String(150),
+        nullable=True
+    )
+
     max_rooms = db.Column(
         db.Integer,
         nullable=True
@@ -530,6 +547,13 @@ class EvacuationCenter(BaseModel):
             "hazard_exposure_score": self.hazard_exposure_score,
             "contact_number": self.contact_number,
             "is_active": self.is_active,
+            "evacuation_open_date": (
+                self.evacuation_open_date.isoformat()
+                if self.evacuation_open_date
+                else None
+            ),
+            "evacuation_status": self.evacuation_status or "standby",
+            "evacuation_event_name": self.evacuation_event_name,
 
             "created_at": (
                 self.created_at.isoformat()

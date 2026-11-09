@@ -172,12 +172,12 @@ function Sidebar({
       }
     };
     refreshPendingCount();
-    const interval = window.setInterval(refreshPendingCount, 60000);
+    const interval = window.setInterval(refreshPendingCount, 15000);
     return () => {
       active = false;
       window.clearInterval(interval);
     };
-  }, [role]);
+  }, [role, tab]);
 
   // Close drawer on Escape key
   useEffect(() => {

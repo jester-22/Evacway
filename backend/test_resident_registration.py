@@ -17,7 +17,12 @@ from models import (
     ResidentAccount,
     RosterYear,
     EvacuationAssignment,
+    Amenity,
+    center_amenities,
+    CenterType,
+    BuildingMaterial,
     EvacuationCenterRoom,
+    StaffNotification,
     SystemLog,
     User,
 )
@@ -59,6 +64,10 @@ class ResidentRegistrationApiTests(unittest.TestCase):
 
         db.metadata.create_all(bind=db.engine, tables=[
             User.__table__,
+            Amenity.__table__,
+            center_amenities,
+            CenterType.__table__,
+            BuildingMaterial.__table__,
             Family.__table__,
             RosterYear.__table__,
             EvacuationAssignment.__table__,
@@ -66,6 +75,7 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             Resident.__table__,
             ResidentAccount.__table__,
             ResidentRegistrationRequest.__table__,
+            StaffNotification.__table__,
             SystemLog.__table__,
         ])
         with db.engine.begin() as connection:
@@ -73,7 +83,7 @@ class ResidentRegistrationApiTests(unittest.TestCase):
                 'CREATE TABLE barangays (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, population INTEGER, geom BLOB)'
             ))
             connection.execute(text(
-                'CREATE TABLE evacuation_centers (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, capacity INTEGER, building_material VARCHAR(50), accessibility_notes TEXT, hazard_exposure_score FLOAT, contact_number VARCHAR(20), is_active BOOLEAN DEFAULT 1, center_type VARCHAR(50), owner_name VARCHAR(150), max_rooms INTEGER, geom BLOB, entrance_geom BLOB, managed_by INTEGER, created_at DATETIME)'
+                'CREATE TABLE evacuation_centers (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, capacity INTEGER, building_material VARCHAR(50), building_material_id INTEGER, accessibility_notes TEXT, hazard_exposure_score FLOAT, contact_number VARCHAR(20), is_active BOOLEAN DEFAULT 1, center_type VARCHAR(50), center_type_id INTEGER, owner_name VARCHAR(150), evacuation_open_date DATE, evacuation_status VARCHAR(30) DEFAULT \'standby\', evacuation_event_name VARCHAR(150), max_rooms INTEGER, geom BLOB, entrance_geom BLOB, managed_by INTEGER, created_at DATETIME)'
             ))
 
     @classmethod

@@ -305,6 +305,14 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     }
   }, [reports, selected]);
 
+  // Clear any pending notification for this hazard report when opened
+  useEffect(() => {
+    if (!selected?.id) return;
+    api.clearNotificationsByResource("hazard_report", selected.id)
+      .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
+      .catch(() => {});
+  }, [selected?.id, queryClient]);
+
   // Resolve barangay for selected report
   useEffect(() => {
     if (!selected) {

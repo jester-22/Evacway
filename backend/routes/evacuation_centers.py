@@ -1,10 +1,17 @@
-from flask import Blueprint, request, jsonify
+import io
+import re
+from flask import Blueprint, request, jsonify, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import joinedload
 from collections import defaultdict
 from datetime import date
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 from models import (
     Amenity,
+    CenterType,
+    BuildingMaterial,
     db,
     EvacuationCenter,
     EvacuationCenterBuilding,
@@ -244,6 +251,7 @@ def _center_metrics(center):
                 "status": b.status or "open",
                 "evacuation_center_id": center.id,
                 "center_name": center.name,
+                "is_mapped": b.geom is not None,
             }
             for b in center_buildings
         ],
@@ -475,6 +483,378 @@ def build_multipoint(points):
         else:
             raise ValueError("Invalid entrance point format.")
     return MultiPoint(coords)
+
+
+# ---------------------------------------------------------
+# EVACUATION CENTERS EXCEL TEMPLATE, EXPORT & IMPORT
+# ---------------------------------------------------------
+CENTER_IMPORT_HEADERS = {
+    'name': {'center_name', 'name', 'evacuation_center', 'center', 'shelter_name'},
+    'barangays': {'barangays_served', 'barangay', 'barangays', 'barangay_names', 'covered_barangays'},
+    'capacity': {'capacity', 'max_capacity', 'target_capacity', 'total_capacity'},
+    'center_type': {'center_type', 'type', 'facility_type', 'center_type_code'},
+    'building_material': {'building_material', 'material', 'structure_material'},
+    'amenities': {'amenities', 'accessibility_features', 'features', 'facilities', 'amenity_names'},
+    'contact_number': {'contact_number', 'contact', 'phone', 'telephone', 'mobile_number'},
+    'owner_name': {'owner_name', 'owner', 'property_owner'},
+    'hazard_score': {'hazard_score', 'hazard_exposure_score', 'hazard_exposure'},
+}
+
+
+@centers_bp.route('/api/evacuation-centers/template', methods=['GET'])
+@role_required('admin')
+def download_center_template():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Evacuation Centers'
+
+    headers = [
+        'Center Name', 'Barangays Served', 'Capacity', 'Center Type',
+        'Building Material', 'Amenities', 'Contact Number', 'Owner Name', 'Hazard Exposure Score'
+    ]
+    ws.append(headers)
+
+    # Sample rows for user guidance
+    ws.append([
+        'Sogod Central School', 'San Jose, Poblacion', 450, 'Campus',
+        'Reinforced Concrete', 'Wheelchair Ramp, PWD Restroom, First Aid Station, Kitchen',
+        '09171234567', '', 2.0
+    ])
+    ws.append([
+        'Municipal Multi-Purpose Gymnasium', 'Poblacion', 350, 'Single Venue',
+        'Steel Frame', 'Wheelchair Ramp, Emergency Generator, Potable Water, PWD Restroom',
+        '09181234567', '', 1.5
+    ])
+    ws.append([
+        'St. Joseph Parish Social Hall', 'San Jose', 120, 'Private Property',
+        'Reinforced Concrete', 'Wheelchair Ramp, Kitchen',
+        '09191234567', 'Diocese of Maasin', 2.0
+    ])
+
+    # Reference sheet with active DB options
+    ws_ref = wb.create_sheet('Allowed Values & Guide')
+    ws_ref.append(['EVACUATION CENTERS IMPORT REFERENCE GUIDE'])
+    ws_ref.append([''])
+    ws_ref.append(['INSTRUCTIONS:'])
+    ws_ref.append(['1. Center Name: Required unique name of the shelter facility.'])
+    ws_ref.append(['2. Barangays Served: Comma-separated names of barangays this center caters to.'])
+    ws_ref.append(['3. Capacity: Maximum evacuee capacity (positive integer).'])
+    ws_ref.append(['4. Center Type: Enter one from the available Center Types list below.'])
+    ws_ref.append(['5. Building Material: (Optional) Enter one from the Building Materials list below.'])
+    ws_ref.append(['6. Amenities: (Optional) Comma-separated list of amenities/features from the Amenities list below.'])
+    ws_ref.append(['7. Contact Number & Owner: (Optional) Contact information and owner name (especially for private property).'])
+    ws_ref.append(['8. Map Placement: After importing, centers will appear as Active and can have their GPS polygon/rooms placed on the Map.'])
+    ws_ref.append([''])
+
+    # Section: Active Center Types
+    ws_ref.append(['AVAILABLE CENTER TYPES:'])
+    ws_ref.append(['Type Name', 'Code', 'Description'])
+    for ct in CenterType.query.filter_by(is_active=True).order_by(CenterType.display_order.asc(), CenterType.name.asc()).all():
+        ws_ref.append([ct.name, ct.code, ct.description or ''])
+    ws_ref.append([''])
+
+    # Section: Active Building Materials
+    ws_ref.append(['AVAILABLE BUILDING MATERIALS:'])
+    ws_ref.append(['Material Name', 'Code', 'Description'])
+    for bm in BuildingMaterial.query.filter_by(is_active=True).order_by(BuildingMaterial.display_order.asc(), BuildingMaterial.name.asc()).all():
+        ws_ref.append([bm.name, bm.code, bm.description or ''])
+    ws_ref.append([''])
+
+    # Section: Active Amenities
+    ws_ref.append(['AVAILABLE AMENITIES & ACCESSIBILITY:'])
+    ws_ref.append(['Amenity Name', 'Code', 'Description'])
+    for a in Amenity.query.filter_by(is_active=True).order_by(Amenity.display_order.asc(), Amenity.name.asc()).all():
+        ws_ref.append([a.name, a.code, a.description or ''])
+    ws_ref.append([''])
+
+    # Section: Registered Barangays
+    ws_ref.append(['REGISTERED BARANGAYS:'])
+    ws_ref.append(['Barangay Name'])
+    for b in Barangay.query.order_by(Barangay.name.asc()).all():
+        ws_ref.append([b.name])
+
+    output = io.BytesIO()
+    wb.save(output)
+    return Response(
+        output.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="evacway-centers-template.xlsx"'},
+    )
+
+
+@centers_bp.route('/api/evacuation-centers/export', methods=['GET'])
+@role_required('admin')
+def export_evacuation_centers():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Evacuation Centers'
+
+    headers = [
+        'Center Name', 'Barangays Served', 'Capacity', 'Center Type',
+        'Building Material', 'Amenities', 'Rooms Count', 'Contact Number',
+        'Owner Name', 'Hazard Exposure Score', 'Status', 'Mapped on Map'
+    ]
+    ws.append(headers)
+
+    centers = EvacuationCenter.query.order_by(EvacuationCenter.name.asc()).all()
+    for c in centers:
+        brgys = ', '.join(cb.barangay.name for cb in c.barangay_links if cb.barangay)
+        ct_name = c.center_type_ref.name if c.center_type_ref else (c.center_type or 'Campus')
+        bm_name = c.building_material_ref.name if c.building_material_ref else (c.building_material or '—')
+        amenities = ', '.join(a.name for a in c.amenities) if hasattr(c, 'amenities') and c.amenities else '—'
+        rooms_count = len(c.rooms) if c.rooms else 0
+        has_geom = 'Yes' if c.geom is not None else 'No'
+
+        ws.append([
+            c.name,
+            brgys or 'None',
+            c.capacity or 0,
+            ct_name,
+            bm_name,
+            amenities,
+            rooms_count,
+            c.contact_number or '',
+            c.owner_name or '',
+            c.hazard_exposure_score if c.hazard_exposure_score is not None else '',
+            'Active' if c.is_active else 'Inactive',
+            has_geom
+        ])
+
+    output = io.BytesIO()
+    wb.save(output)
+    return Response(
+        output.getvalue(),
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="EvacWay-Evacuation-Centers.xlsx"'},
+    )
+
+
+@centers_bp.route('/api/evacuation-centers/upload', methods=['POST'])
+@role_required('admin')
+def upload_evacuation_centers():
+    if 'file' not in request.files:
+        return jsonify({'error': 'Please select an Excel file (.xlsx) to upload.'}), 400
+
+    file_storage = request.files['file']
+    filename = file_storage.filename or ''
+    if not (filename.lower().endswith('.xlsx') or filename.lower().endswith('.xls')):
+        return jsonify({'error': 'Please upload an Excel file (.xlsx).'}), 400
+
+    try:
+        wb = load_workbook(io.BytesIO(file_storage.read()), read_only=True, data_only=True)
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        raw_headers = next(rows_iter, None)
+    except Exception as e:
+        return jsonify({'error': f'Could not read Excel workbook: {str(e)}'}), 400
+
+    if not raw_headers:
+        return jsonify({'error': 'The uploaded Excel file has no headers or data.'}), 400
+
+    col_map = {}
+    for idx, h in enumerate(raw_headers):
+        if not h:
+            continue
+        norm_h = re.sub(r'[^a-z0-9]+', '_', str(h).strip().casefold()).strip('_')
+        for field, aliases in CENTER_IMPORT_HEADERS.items():
+            if norm_h in aliases:
+                col_map[field] = idx
+
+    if 'name' not in col_map:
+        return jsonify({'error': 'Missing required column: "Center Name"'}), 400
+
+    # Preload reference lookups
+    center_types = CenterType.query.all()
+    ct_lookup = {}
+    default_ct_id = 1
+    for ct in center_types:
+        ct_lookup[ct.code.casefold()] = ct.id
+        ct_lookup[ct.name.casefold()] = ct.id
+        if ct.code.casefold() == 'campus':
+            default_ct_id = ct.id
+    if not default_ct_id and center_types:
+        default_ct_id = center_types[0].id
+
+    building_materials = BuildingMaterial.query.all()
+    bm_lookup = {}
+    for bm in building_materials:
+        bm_lookup[bm.code.casefold()] = bm.id
+        bm_lookup[bm.name.casefold()] = bm.id
+
+    amenities = Amenity.query.all()
+    amenity_lookup = {}
+    for a in amenities:
+        amenity_lookup[a.code.casefold()] = a
+        amenity_lookup[a.name.casefold()] = a
+
+    barangays = Barangay.query.all()
+    barangay_lookup = {}
+    for b in barangays:
+        barangay_lookup[b.name.casefold()] = b.id
+        clean_name = re.sub(r'[^a-z0-9]+', '', b.name.casefold())
+        barangay_lookup[clean_name] = b.id
+
+    user_id = get_jwt_identity()
+    created_count = 0
+    updated_count = 0
+    errors = []
+    warnings = []
+    row_num = 1
+
+    idx_name = col_map.get('name')
+    idx_brgy = col_map.get('barangays')
+    idx_cap = col_map.get('capacity')
+    idx_type = col_map.get('center_type')
+    idx_mat = col_map.get('building_material')
+    idx_amen = col_map.get('amenities')
+    idx_phone = col_map.get('contact_number')
+    idx_owner = col_map.get('owner_name')
+    idx_score = col_map.get('hazard_score')
+
+    for row in rows_iter:
+        row_num += 1
+        raw_name = str(row[idx_name] or '').strip() if idx_name is not None and idx_name < len(row) else ''
+        if not raw_name:
+            continue
+
+        # Capacity
+        cap_val = 0
+        if idx_cap is not None and idx_cap < len(row) and row[idx_cap] is not None:
+            try:
+                cap_val = max(0, int(float(str(row[idx_cap]).strip())))
+            except (ValueError, TypeError):
+                cap_val = 0
+
+        # Center Type
+        ct_id = default_ct_id
+        if idx_type is not None and idx_type < len(row) and row[idx_type]:
+            type_str = str(row[idx_type]).strip().casefold()
+            if type_str in ct_lookup:
+                ct_id = ct_lookup[type_str]
+            else:
+                warnings.append(f"Row {row_num} ('{raw_name}'): Unknown center type '{row[idx_type]}', defaulted to Campus.")
+
+        # Building Material
+        bm_id = None
+        if idx_mat is not None and idx_mat < len(row) and row[idx_mat]:
+            mat_str = str(row[idx_mat]).strip().casefold()
+            if mat_str in bm_lookup:
+                bm_id = bm_lookup[mat_str]
+            else:
+                # Fuzzy partial match
+                for key, val in bm_lookup.items():
+                    if key in mat_str or mat_str in key:
+                        bm_id = val
+                        break
+
+        # Contact & Owner
+        phone = str(row[idx_phone] or '').strip() if idx_phone is not None and idx_phone < len(row) and row[idx_phone] else None
+        owner = str(row[idx_owner] or '').strip() if idx_owner is not None and idx_owner < len(row) and row[idx_owner] else None
+
+        # Hazard Score
+        hazard_score = None
+        if idx_score is not None and idx_score < len(row) and row[idx_score] is not None:
+            try:
+                hazard_score = float(str(row[idx_score]).strip())
+            except (ValueError, TypeError):
+                hazard_score = None
+
+        # Amenities
+        matched_amenities = []
+        if idx_amen is not None and idx_amen < len(row) and row[idx_amen]:
+            raw_amen_tokens = re.split(r'[,;\n]+', str(row[idx_amen]).strip())
+            seen_amen_ids = set()
+            for token in raw_amen_tokens:
+                token_clean = token.strip().casefold()
+                if not token_clean:
+                    continue
+                matched_a = amenity_lookup.get(token_clean)
+                if not matched_a:
+                    for a_key, a_obj in amenity_lookup.items():
+                        if a_key in token_clean or token_clean in a_key:
+                            matched_a = a_obj
+                            break
+                if matched_a and matched_a.id not in seen_amen_ids:
+                    matched_amenities.append(matched_a)
+                    seen_amen_ids.add(matched_a.id)
+
+        # Barangays Served
+        matched_brgy_ids = []
+        if idx_brgy is not None and idx_brgy < len(row) and row[idx_brgy]:
+            raw_brgy_tokens = re.split(r'[,;\n]+', str(row[idx_brgy]).strip())
+            seen_b_ids = set()
+            for b_token in raw_brgy_tokens:
+                b_clean = b_token.strip().casefold()
+                if not b_clean:
+                    continue
+                b_id = barangay_lookup.get(b_clean)
+                if not b_id:
+                    b_id = barangay_lookup.get(re.sub(r'[^a-z0-9]+', '', b_clean))
+                if b_id and b_id not in seen_b_ids:
+                    matched_brgy_ids.append(b_id)
+                    seen_b_ids.add(b_id)
+
+        # Check existing center by name
+        existing_center = EvacuationCenter.query.filter(
+            func.lower(EvacuationCenter.name) == raw_name.casefold()
+        ).first()
+
+        if existing_center:
+            existing_center.capacity = cap_val
+            existing_center.center_type_id = ct_id
+            if bm_id is not None:
+                existing_center.building_material_id = bm_id
+            if phone:
+                existing_center.contact_number = phone
+            if owner:
+                existing_center.owner_name = owner
+            if hazard_score is not None:
+                existing_center.hazard_exposure_score = hazard_score
+            if matched_amenities:
+                existing_center.amenities = matched_amenities
+            if matched_brgy_ids:
+                CenterBarangay.query.filter_by(center_id=existing_center.id).delete()
+                for b_id in matched_brgy_ids:
+                    db.session.add(CenterBarangay(center_id=existing_center.id, barangay_id=b_id))
+            updated_count += 1
+        else:
+            new_center = EvacuationCenter(
+                name=raw_name,
+                capacity=cap_val,
+                center_type_id=ct_id,
+                building_material_id=bm_id,
+                contact_number=phone,
+                owner_name=owner,
+                hazard_exposure_score=hazard_score,
+                is_active=True,
+                managed_by=user_id,
+            )
+            if matched_amenities:
+                new_center.amenities = matched_amenities
+            db.session.add(new_center)
+            db.session.flush()
+
+            for b_id in matched_brgy_ids:
+                db.session.add(CenterBarangay(center_id=new_center.id, barangay_id=b_id))
+            created_count += 1
+
+    db.session.commit()
+
+    if user_id:
+        db.session.add(SystemLog(
+            user_id=user_id,
+            action=f"Imported evacuation centers via Excel: created {created_count}, updated {updated_count}"
+        ))
+        db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'created_count': created_count,
+        'updated_count': updated_count,
+        'total_processed': created_count + updated_count,
+        'warnings': warnings,
+        'errors': errors,
+    }), 200
 
 
 @centers_bp.route('/api/evacuation-centers', methods=['GET'])
@@ -875,10 +1255,28 @@ def update_evacuation_center(center_id):
         if geom_val.get('type') == 'Polygon' and geom_val.get('coordinates'):
             polygon_data = geom_val['coordinates'][0]
 
+    reset_buildings_count = 0
     if polygon_data is not None:
         try:
+            old_poly = None
+            if center.geom is not None:
+                try:
+                    old_poly = to_shape(center.geom)
+                except Exception:
+                    old_poly = None
+
             polygon = build_polygon(polygon_data)
+            polygon_changed = old_poly is None or not old_poly.equals_exact(polygon, 1e-7)
             center.geom = from_shape(polygon, srid=4326)
+
+            if polygon_changed:
+                center_buildings = EvacuationCenterBuilding.query.filter_by(
+                    evacuation_center_id=center.id
+                ).all()
+                for b in center_buildings:
+                    if b.geom is not None:
+                        b.geom = None
+                        reset_buildings_count += 1
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
@@ -899,7 +1297,10 @@ def update_evacuation_center(center_id):
     db.session.add(SystemLog(user_id=user_id, action=f"Edited evacuation center: {center.name}"))
     db.session.commit()
 
-    return jsonify(center_to_feature(center))
+    feature = center_to_feature(center)
+    if reset_buildings_count > 0 and isinstance(feature.get("properties"), dict):
+        feature["properties"]["reset_buildings_count"] = reset_buildings_count
+    return jsonify(feature)
 
 
 @centers_bp.route('/api/evacuation-centers/<int:center_id>/allowed-center-types', methods=['GET'])
@@ -1293,18 +1694,10 @@ def auto_geofence_check_in():
     }), 200
 
 
-@centers_bp.route('/api/evacuation-centers/check-in-list', methods=['GET'])
-@role_required('admin', 'lgu_personnel')
-def get_check_in_list():
-    center_id_param = request.args.get('center_id')
-    search_query = request.args.get('q', '').strip().lower()
-    status_filter = request.args.get('status', 'all')  # 'all', 'checked_in', 'pending'
-
-    # 1. Fetch active centers with live counts
+def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='all', date_filter=None):
     active_centers = EvacuationCenter.query.filter_by(is_active=True).order_by(EvacuationCenter.name.asc()).all()
     centers_summary = []
-    
-    # Precompute center stats
+
     center_assigned_totals = dict(
         db.session.query(
             EvacuationAssignment.evacuation_center_id,
@@ -1331,18 +1724,56 @@ def get_check_in_list():
             "assigned": tot_assigned,
             "checked_in": tot_checked,
             "space_left": max(cap - tot_assigned, 0),
+            "evacuation_open_date": c.evacuation_open_date.isoformat() if c.evacuation_open_date else None,
+            "evacuation_status": c.evacuation_status or "standby",
+            "evacuation_event_name": c.evacuation_event_name or "",
         })
 
-    # 2. Query assigned families with assignments
+    active_sched = None
+    if center_id_param and str(center_id_param).strip() != "all":
+        try:
+            cid = int(center_id_param)
+            matched_c = next((c for c in active_centers if c.id == cid), None)
+            if matched_c:
+                active_sched = {
+                    "center_id": matched_c.id,
+                    "center_name": matched_c.name,
+                    "evacuation_open_date": matched_c.evacuation_open_date.isoformat() if matched_c.evacuation_open_date else None,
+                    "evacuation_status": matched_c.evacuation_status or "standby",
+                    "evacuation_event_name": matched_c.evacuation_event_name or "",
+                }
+        except (ValueError, TypeError):
+            pass
+
+    if not active_sched:
+        open_c = next((c for c in active_centers if c.evacuation_status == "open"), None)
+        target_c = open_c or next((c for c in active_centers if c.evacuation_open_date), None)
+        if target_c:
+            active_sched = {
+                "center_id": "all",
+                "center_name": "All Evacuation Centers" if open_c else target_c.name,
+                "evacuation_open_date": target_c.evacuation_open_date.isoformat() if target_c.evacuation_open_date else None,
+                "evacuation_status": target_c.evacuation_status or "standby",
+                "evacuation_event_name": target_c.evacuation_event_name or "",
+            }
+        else:
+            active_sched = {
+                "center_id": "all",
+                "center_name": "All Evacuation Centers",
+                "evacuation_open_date": None,
+                "evacuation_status": "standby",
+                "evacuation_event_name": "",
+            }
+
     base_filter = []
-    if center_id_param and center_id_param != "all":
+    if center_id_param and str(center_id_param).strip() != "all":
         try:
             cid = int(center_id_param)
             base_filter.append(or_(
                 EvacuationAssignment.evacuation_center_id == cid,
                 EvacuationCenterRoom.evacuation_center_id == cid
             ))
-        except ValueError:
+        except (ValueError, TypeError):
             pass
 
     assigned_query = (
@@ -1402,7 +1833,6 @@ def get_check_in_list():
         .all()
     )
 
-    # 3. Precompute vulnerable flags and members per family
     family_ids = [r.family_id for r in assigned_rows]
     special_needs_map = defaultdict(list)
     members_map = defaultdict(list)
@@ -1417,7 +1847,6 @@ def get_check_in_list():
         )
         all_res_ids = [res.id for res in residents]
 
-        # Get assignment checkin timestamps for each resident in this center
         assignment_checkin_map = {}
         if all_res_ids:
             ass_records = EvacuationAssignment.query.filter(EvacuationAssignment.resident_id.in_(all_res_ids)).all()
@@ -1460,10 +1889,10 @@ def get_check_in_list():
                 "is_head": bool(res.is_head_of_family),
                 "is_checked_in": chk_time is not None,
                 "checked_in_at": chk_time.isoformat() if chk_time else None,
+                "checked_in_dt": chk_time,
                 "special_needs": flags,
             })
 
-    # 4. Build evacuees list and calculate summary
     evacuees = []
     tot_fully_checked_in = 0
     tot_partially_checked_in = 0
@@ -1477,7 +1906,6 @@ def get_check_in_list():
         chk_count = sum(1 for m in m_list if m["is_checked_in"]) if m_list else int(r.checked_in_members or 0)
         latest_at = r.latest_checked_in_at.isoformat() if r.latest_checked_in_at else None
 
-        # Determine checkin state
         if chk_count >= m_count and m_count > 0:
             checkin_state = "full"
             tot_fully_checked_in += 1
@@ -1488,7 +1916,6 @@ def get_check_in_list():
             checkin_state = "none"
             tot_pending += 1
 
-        # Apply status filter
         if status_filter == 'checked_in' and checkin_state != 'full':
             continue
         if status_filter == 'partial' and checkin_state != 'partial':
@@ -1496,7 +1923,16 @@ def get_check_in_list():
         if status_filter == 'pending' and checkin_state != 'none':
             continue
 
-        # Apply search query
+        if date_filter:
+            has_date_match = False
+            for m in m_list:
+                dt_val = m.get("checked_in_dt")
+                if dt_val and dt_val.strftime("%Y-%m-%d") == date_filter:
+                    has_date_match = True
+                    break
+            if not has_date_match:
+                continue
+
         if search_query:
             member_names = " ".join(m["name"] for m in m_list).lower()
             target_str = f"{r.head_name or ''} {r.family_code or ''} {r.contact_number or ''} {r.room_number or ''} {r.barangay_name or ''} {r.center_name or ''} {member_names}".lower()
@@ -1520,7 +1956,7 @@ def get_check_in_list():
             "assigned_members": m_count,
             "checked_in_members": chk_count,
             "is_checked_in": chk_count > 0,
-            "checkin_state": checkin_state,  # "full" | "partial" | "none"
+            "checkin_state": checkin_state,
             "checked_in_at": latest_at,
             "checkin_status": (
                 "Fully arrived" if checkin_state == "full"
@@ -1530,16 +1966,426 @@ def get_check_in_list():
             "members": m_list,
         })
 
+    summary = {
+        "total_assigned": tot_assigned,
+        "total_checked_in": tot_fully_checked_in,
+        "total_partial": tot_partially_checked_in,
+        "total_pending": tot_pending,
+        "total_residents_assigned": sum(e.get("assigned_members", 0) for e in evacuees),
+        "total_residents_checked_in": sum(e.get("checked_in_members", 0) for e in evacuees),
+        "occupancy_rate": round(((tot_fully_checked_in + tot_partially_checked_in) / tot_assigned * 100), 1) if tot_assigned > 0 else 0
+    }
+
+    return centers_summary, evacuees, summary, active_sched, active_centers
+
+
+@centers_bp.route('/api/evacuation-centers/check-in-list', methods=['GET'])
+@role_required('admin', 'lgu_personnel')
+def get_check_in_list():
+    center_id_param = request.args.get('center_id')
+    search_query = request.args.get('q', '').strip().lower()
+    status_filter = request.args.get('status', 'all')
+    date_filter = request.args.get('date')
+
+    centers_summary, evacuees, summary, active_sched, _ = _get_checkin_dataset(
+        center_id_param=center_id_param,
+        search_query=search_query,
+        status_filter=status_filter,
+        date_filter=date_filter
+    )
+
     return jsonify({
         "centers": centers_summary,
         "evacuees": evacuees,
-        "summary": {
-            "total_assigned": tot_assigned,
-            "total_checked_in": tot_fully_checked_in,
-            "total_partial": tot_partially_checked_in,
-            "total_pending": tot_pending,
-            "total_residents_assigned": sum(e.get("assigned_members", 0) for e in evacuees),
-            "total_residents_checked_in": sum(e.get("checked_in_members", 0) for e in evacuees),
-            "occupancy_rate": round(((tot_fully_checked_in + tot_partially_checked_in) / tot_assigned * 100), 1) if tot_assigned > 0 else 0
+        "evacuation_schedule": active_sched,
+        "summary": summary
+    }), 200
+
+
+@centers_bp.route('/api/evacuation-centers/schedule', methods=['GET', 'POST', 'PUT'])
+@role_required('admin', 'lgu_personnel')
+def manage_evacuation_schedule():
+    active_centers = EvacuationCenter.query.filter_by(is_active=True).order_by(EvacuationCenter.name.asc()).all()
+
+    if request.method == 'GET':
+        center_id_param = request.args.get('center_id')
+        target_center = None
+        if center_id_param and str(center_id_param).strip() != 'all':
+            try:
+                target_center = next((c for c in active_centers if c.id == int(center_id_param)), None)
+            except (ValueError, TypeError):
+                pass
+
+        open_c = next((c for c in active_centers if c.evacuation_status == "open"), None)
+        active_c = target_center or open_c or next((c for c in active_centers if c.evacuation_open_date), None)
+
+        return jsonify({
+            "schedule": {
+                "center_id": target_center.id if target_center else "all",
+                "center_name": target_center.name if target_center else ("All Evacuation Centers" if open_c else "All Centers"),
+                "evacuation_open_date": active_c.evacuation_open_date.isoformat() if (active_c and active_c.evacuation_open_date) else None,
+                "evacuation_status": active_c.evacuation_status if active_c else "standby",
+                "evacuation_event_name": active_c.evacuation_event_name if active_c else "",
+            },
+            "centers": [
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "evacuation_open_date": c.evacuation_open_date.isoformat() if c.evacuation_open_date else None,
+                    "evacuation_status": c.evacuation_status or "standby",
+                    "evacuation_event_name": c.evacuation_event_name or "",
+                }
+                for c in active_centers
+            ]
+        }), 200
+
+    # Write operations require admin role
+    identity = get_jwt_identity()
+    user_role = identity.get('role') if isinstance(identity, dict) else None
+    if not user_role:
+        from models import User
+        u = User.query.get(int(identity) if str(identity).isdigit() else None)
+        if u:
+            user_role = u.role
+    if user_role != 'admin':
+        return jsonify({"error": "Admin role required to configure evacuation opening date."}), 403
+
+    data = request.get_json() or {}
+    center_id_target = data.get('center_id', 'all')
+    raw_date = data.get('evacuation_open_date')
+    evac_status = (data.get('evacuation_status') or 'standby').strip().lower()
+    event_name = (data.get('evacuation_event_name') or '').strip()
+
+    parsed_date = None
+    if raw_date:
+        try:
+            if isinstance(raw_date, str):
+                parsed_date = date.fromisoformat(raw_date.strip())
+            elif isinstance(raw_date, date):
+                parsed_date = raw_date
+        except Exception as e:
+            return jsonify({"error": f"Invalid date format (expected YYYY-MM-DD): {e}"}), 400
+
+    if evac_status not in ['open', 'standby', 'closed']:
+        evac_status = 'standby'
+
+    updated_count = 0
+    if str(center_id_target).strip() == 'all':
+        for c in active_centers:
+            c.evacuation_open_date = parsed_date
+            c.evacuation_status = evac_status
+            if event_name or 'evacuation_event_name' in data:
+                c.evacuation_event_name = event_name
+            updated_count += 1
+    else:
+        try:
+            cid = int(center_id_target)
+            target = EvacuationCenter.query.get(cid)
+            if not target:
+                return jsonify({"error": f"Evacuation center #{cid} not found."}), 404
+            target.evacuation_open_date = parsed_date
+            target.evacuation_status = evac_status
+            if event_name or 'evacuation_event_name' in data:
+                target.evacuation_event_name = event_name
+            updated_count = 1
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid center_id."}), 400
+
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Evacuation schedule saved for {updated_count} center(s).",
+        "schedule": {
+            "center_id": center_id_target,
+            "evacuation_open_date": parsed_date.isoformat() if parsed_date else None,
+            "evacuation_status": evac_status,
+            "evacuation_event_name": event_name,
         }
     }), 200
+
+
+@centers_bp.route('/api/evacuation-centers/check-in/report', methods=['GET'])
+@centers_bp.route('/api/evacuation-centers/check-in/export', methods=['GET'])
+@role_required('admin', 'lgu_personnel')
+def export_check_in_report():
+    center_id_param = request.args.get('center_id', 'all')
+    status_filter = request.args.get('status', 'all')
+    date_filter = request.args.get('date')
+    search_query = request.args.get('q', '').strip().lower()
+
+    centers_summary, evacuees, summary, active_sched, active_centers = _get_checkin_dataset(
+        center_id_param=center_id_param,
+        search_query=search_query,
+        status_filter=status_filter,
+        date_filter=date_filter
+    )
+
+    wb = Workbook()
+
+    # -------------------------------------------------------------
+    # Sheet 1: Arrivals & Check-In Roster
+    # -------------------------------------------------------------
+    ws1 = wb.active
+    ws1.title = "Arrivals & Check-In Roster"
+    ws1.views.sheetView[0].showGridLines = True
+
+    font_title = Font(name="Calibri", size=14, bold=True, color="1E3A8A")
+    font_subtitle = Font(name="Calibri", size=10, italic=True, color="475569")
+    font_meta = Font(name="Calibri", size=10, color="334155")
+    font_header = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    font_data = Font(name="Calibri", size=10, color="0F172A")
+    font_checked = Font(name="Calibri", size=10, bold=True, color="166534")
+    font_pending = Font(name="Calibri", size=10, color="64748B")
+
+    fill_header = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+    fill_zebra = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+    fill_checked = PatternFill(start_color="DCFCE7", end_color="DCFCE7", fill_type="solid")
+    fill_pending = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+
+    thin_border_side = Side(border_style="thin", color="CBD5E1")
+    border_cell = Border(left=thin_border_side, right=thin_border_side, top=thin_border_side, bottom=thin_border_side)
+
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_left = Alignment(horizontal="left", vertical="center")
+
+    center_name_label = "All Evacuation Centers"
+    if center_id_param and str(center_id_param).strip() != "all":
+        try:
+            cid = int(center_id_param)
+            c_match = next((c for c in active_centers if c.id == cid), None)
+            if c_match:
+                center_name_label = c_match.name
+        except Exception:
+            pass
+
+    open_date_str = active_sched.get("evacuation_open_date") or "Not set"
+    evac_status_str = (active_sched.get("evacuation_status") or "Standby").title()
+    event_label = active_sched.get("evacuation_event_name") or "Standard Evacuation Operation"
+    now_str = philippines_now().strftime("%B %d, %Y %I:%M %p")
+
+    # Title block
+    ws1["A1"] = "EVACWAY — EVACUEE ARRIVAL & CHECK-IN REPORT"
+    ws1["A1"].font = font_title
+    ws1["A2"] = f"Municipality of Sogod, Southern Leyte • MDRRMO Roster • Generated: {now_str}"
+    ws1["A2"].font = font_subtitle
+    ws1["A3"] = f"Center: {center_name_label} | Event: {event_label} | Scheduled Opening: {open_date_str} ({evac_status_str}) | Filter: {status_filter.title()}"
+    ws1["A3"].font = font_meta
+
+    headers1 = [
+        "#",
+        "Family Code",
+        "Head of Household",
+        "Member Full Name",
+        "Relationship",
+        "Arrival Status",
+        "Arrival Time",
+        "Assigned Shelter",
+        "Building & Room",
+        "Origin Barangay",
+        "Purok / Address",
+        "Special Needs / Health",
+        "Contact Number"
+    ]
+
+    for col_idx, h in enumerate(headers1, start=1):
+        cell = ws1.cell(row=5, column=col_idx, value=h)
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.alignment = align_center if col_idx in [1, 6, 7] else align_left
+        cell.border = border_cell
+
+    row_num = 6
+    record_idx = 1
+    for ev in evacuees:
+        members = ev.get("members") or []
+        bldg_room = ""
+        if ev.get("building_name") or ev.get("room_number"):
+            parts = []
+            if ev.get("building_name"):
+                parts.append(ev.get("building_name"))
+            if ev.get("room_number"):
+                parts.append(f"Room {ev.get('room_number')}")
+            bldg_room = " · ".join(parts)
+        else:
+            bldg_room = "General Venue"
+
+        if members:
+            for m in members:
+                is_chk = m.get("is_checked_in")
+                chk_dt = m.get("checked_in_dt")
+                time_str = chk_dt.strftime("%Y-%m-%d %I:%M %p") if chk_dt else "—"
+                needs_str = ", ".join(m.get("special_needs") or []) or "—"
+
+                row_values = [
+                    record_idx,
+                    ev.get("family_code"),
+                    ev.get("head_name"),
+                    m.get("name"),
+                    m.get("relationship"),
+                    "Checked In" if is_chk else "Pending Arrival",
+                    time_str,
+                    ev.get("center_name"),
+                    bldg_room,
+                    ev.get("barangay_name"),
+                    ev.get("address") or "—",
+                    needs_str,
+                    ev.get("contact_number") or "—"
+                ]
+
+                is_even = (row_num % 2 == 0)
+                current_fill = fill_zebra if is_even else None
+
+                for col_idx, val in enumerate(row_values, start=1):
+                    cell = ws1.cell(row=row_num, column=col_idx, value=val)
+                    cell.font = font_data
+                    cell.border = border_cell
+                    if current_fill:
+                        cell.fill = current_fill
+                    if col_idx in [1, 7]:
+                        cell.alignment = align_center
+                    elif col_idx == 6:
+                        cell.alignment = align_center
+                        if is_chk:
+                            cell.fill = fill_checked
+                            cell.font = font_checked
+                        else:
+                            cell.fill = fill_pending
+                            cell.font = font_pending
+                    else:
+                        cell.alignment = align_left
+
+                row_num += 1
+                record_idx += 1
+        else:
+            is_chk = ev.get("checkin_state") == "full"
+            time_str = ev.get("checked_in_at") or "—"
+            row_values = [
+                record_idx,
+                ev.get("family_code"),
+                ev.get("head_name"),
+                ev.get("head_name"),
+                "Head",
+                "Checked In" if is_chk else "Pending Arrival",
+                time_str,
+                ev.get("center_name"),
+                bldg_room,
+                ev.get("barangay_name"),
+                ev.get("address") or "—",
+                ", ".join(ev.get("special_needs") or []) or "—",
+                ev.get("contact_number") or "—"
+            ]
+            for col_idx, val in enumerate(row_values, start=1):
+                cell = ws1.cell(row=row_num, column=col_idx, value=val)
+                cell.font = font_data
+                cell.border = border_cell
+                if col_idx in [1, 7]:
+                    cell.alignment = align_center
+                elif col_idx == 6:
+                    cell.alignment = align_center
+                    cell.fill = fill_checked if is_chk else fill_pending
+                    cell.font = font_checked if is_chk else font_pending
+                else:
+                    cell.alignment = align_left
+            row_num += 1
+            record_idx += 1
+
+    # Auto-adjust column widths for Sheet 1
+    for col in ws1.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            if cell.row < 5:
+                continue
+            val_str = str(cell.value or "")
+            if len(val_str) > max_len:
+                max_len = len(val_str)
+        ws1.column_dimensions[col_letter].width = max(max_len + 3, 11)
+
+    # -------------------------------------------------------------
+    # Sheet 2: Centers Overview & Status
+    # -------------------------------------------------------------
+    ws2 = wb.create_sheet(title="Centers Schedule & Capacity")
+    ws2.views.sheetView[0].showGridLines = True
+
+    ws2["A1"] = "EVACUATION CENTERS SCHEDULE & CAPACITY SUMMARY"
+    ws2["A1"].font = font_title
+    ws2["A2"] = f"Municipality of Sogod • Generated: {now_str}"
+    ws2["A2"].font = font_subtitle
+
+    headers2 = [
+        "Center Name",
+        "Center Type",
+        "Total Capacity",
+        "Assigned Households",
+        "Checked In (Arrived)",
+        "Space Remaining",
+        "Occupancy Rate",
+        "Scheduled Open Date",
+        "Evacuation Status",
+        "Event / Purpose"
+    ]
+
+    for col_idx, h in enumerate(headers2, start=1):
+        cell = ws2.cell(row=4, column=col_idx, value=h)
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.alignment = align_center if col_idx in [3, 4, 5, 6, 7, 8, 9] else align_left
+        cell.border = border_cell
+
+    for s_idx, cs in enumerate(centers_summary, start=5):
+        assigned_val = cs.get("assigned", 0)
+        checked_val = cs.get("checked_in", 0)
+        cap_val = cs.get("capacity", 0)
+        occ_rate = f"{round((checked_val / cap_val * 100), 1)}%" if cap_val > 0 else "0.0%"
+
+        row_vals = [
+            cs.get("name"),
+            (cs.get("center_type") or "Campus").title(),
+            cap_val,
+            assigned_val,
+            checked_val,
+            cs.get("space_left", 0),
+            occ_rate,
+            cs.get("evacuation_open_date") or "—",
+            (cs.get("evacuation_status") or "Standby").title(),
+            cs.get("evacuation_event_name") or "—"
+        ]
+
+        is_even = (s_idx % 2 == 0)
+        current_fill = fill_zebra if is_even else None
+
+        for col_idx, val in enumerate(row_vals, start=1):
+            cell = ws2.cell(row=s_idx, column=col_idx, value=val)
+            cell.font = font_data
+            cell.border = border_cell
+            if current_fill:
+                cell.fill = current_fill
+            if col_idx in [3, 4, 5, 6, 7, 8, 9]:
+                cell.alignment = align_center
+            else:
+                cell.alignment = align_left
+
+    for col in ws2.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            if cell.row < 4:
+                continue
+            val_str = str(cell.value or "")
+            if len(val_str) > max_len:
+                max_len = len(val_str)
+        ws2.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename_center = re.sub(r'[^a-zA-Z0-9_\-]', '_', center_name_label.replace(" ", "_"))
+    date_slug = philippines_now().strftime("%Y%m%d")
+    safe_filename = f"EvacWay-Arrival-Report-{filename_center}-{date_slug}.xlsx"
+
+    return Response(
+        output.getvalue(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={safe_filename}"}
+    )

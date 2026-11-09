@@ -39,6 +39,8 @@ import {
   faHome,
   faPlaceOfWorship,
   faWarehouse,
+  faExpand,
+  faCompress,
 } from "@fortawesome/free-solid-svg-icons";
 
 import { api } from "../../services/api";
@@ -63,6 +65,7 @@ import DashboardMap, {
   getOccupancyStatus,
   getCenterCoordinates,
   isPointInOrNearPolygon,
+  isBuildingInsideCenter,
 } from "../../components/DashboardMap/DashboardMap";
 import CenterPlacementFlow, { polygonToPoints } from "../../components/CenterPlacementFlow/CenterPlacementFlow";
 import RoomDetailsModal from "../../components/EvacuationCenter/RoomDetailsModal";
@@ -83,8 +86,8 @@ function getPolygonCentroid(geometry) {
     geometry.type === "Polygon"
       ? geometry.coordinates[0]
       : Array.isArray(geometry.coordinates[0]?.[0])
-      ? geometry.coordinates[0][0]
-      : geometry.coordinates[0];
+        ? geometry.coordinates[0][0]
+        : geometry.coordinates[0];
   if (!coords || !Array.isArray(coords) || coords.length === 0) return null;
   let sumLng = 0;
   let sumLat = 0;
@@ -166,18 +169,19 @@ function isPointInGeoPolygon(point, coordinates) {
 }
 
 /**
- * Validates that all building vertices are inside the center boundary.
+ * Validates that all building vertices and edges stay strictly inside the center boundary.
  * Returns { valid: boolean, invalidPoints: Array<{index, point}> }
  */
 function validateBuildingInsideCenter(buildingPoints, centerPoints) {
   if (!centerPoints || centerPoints.length < 3) return { valid: true, invalidPoints: [] };
   const invalidPoints = [];
   buildingPoints.forEach((point, index) => {
-    if (!isPointInOrNearPolygon(point, centerPoints, 15)) {
+    if (!isPointInOrNearPolygon(point, centerPoints, 0.1)) {
       invalidPoints.push({ index, point });
     }
   });
-  return { valid: invalidPoints.length === 0, invalidPoints };
+  const edgesInside = isBuildingInsideCenter(buildingPoints, centerPoints, true);
+  return { valid: invalidPoints.length === 0 && edgesInside, invalidPoints };
 }
 
 const MOBILE_BREAKPOINT = 768;
@@ -289,13 +293,13 @@ export default function AdminMap() {
       ...(Array.isArray(allHazardReportsQuery.data)
         ? allHazardReportsQuery.data
         : allHazardReportsQuery.data?.data ||
-          allHazardReportsQuery.data?.reports ||
-          []),
+        allHazardReportsQuery.data?.reports ||
+        []),
       ...(Array.isArray(publicHazardReportsQuery.data)
         ? publicHazardReportsQuery.data
         : publicHazardReportsQuery.data?.data ||
-          publicHazardReportsQuery.data?.reports ||
-          []),
+        publicHazardReportsQuery.data?.reports ||
+        []),
     ];
     return (
       all.find((r) => String(r.id) === String(deepLinkedHazardId)) || null
@@ -384,7 +388,7 @@ export default function AdminMap() {
       setTimeout(() => {
         try {
           trigger.focus();
-        } catch (e) {}
+        } catch (e) { }
       }, 0);
     }
   }, []);
@@ -394,7 +398,7 @@ export default function AdminMap() {
       const timer = setTimeout(() => {
         try {
           centerModalDialogRef.current?.focus();
-        } catch (e) {}
+        } catch (e) { }
       }, 20);
       return () => clearTimeout(timer);
     }
@@ -488,6 +492,8 @@ export default function AdminMap() {
   const [buildingEditOriginalPoints, setBuildingEditOriginalPoints] = useState([]);
   const [buildingEditUndoStack, setBuildingEditUndoStack] = useState([]);
   const [buildingEditBoundaryError, setBuildingEditBoundaryError] = useState(null);
+  const [isRedrawingBuildingFromScratch, setIsRedrawingBuildingFromScratch] = useState(false);
+  const [isFullView, setIsFullView] = useState(false);
 
   // Center redraw state
   const [redrawingCenterId, setRedrawingCenterId] = useState(null);
@@ -729,7 +735,7 @@ export default function AdminMap() {
         selectedBuildingDetail &&
         String(selectedBuildingDetail.properties?.id ?? selectedBuildingDetail.id) === String(bId)
       ) {
-        api.getBuildingDetails(bId).then(setBuildingDetailsData).catch(() => {});
+        api.getBuildingDetails(bId).then(setBuildingDetailsData).catch(() => { });
       }
     } catch (err) {
       console.error("Failed to update building rooms:", err);
@@ -786,24 +792,55 @@ export default function AdminMap() {
   const handleDoubleTapFinish = useCallback(() => {
     if (isDrawingBuilding && addBuildingStep === "draw") {
       if (newBuildingPoints.length >= 3) {
+        const centerPoints = selectedCenter?.geometry ? polygonToPoints(selectedCenter.geometry) : [];
+        if (centerPoints.length >= 3 && !isBuildingInsideCenter(newBuildingPoints, centerPoints, true)) {
+          showPlacementToast("Building must stay inside the evacuation center boundary.");
+          return;
+        }
         setAddBuildingStep("name");
         showPlacementToast("Outline finished. Now name your building.");
       } else {
         showPlacementToast("Click at least 3 corners before finishing.");
       }
+    } else if (isDrawingBuilding && redrawingBuildingId && isRedrawingBuildingFromScratch) {
+      if (newBuildingPoints.length >= 3) {
+        const centerPoints = selectedCenter?.geometry ? polygonToPoints(selectedCenter.geometry) : [];
+        if (centerPoints.length >= 3 && !isBuildingInsideCenter(newBuildingPoints, centerPoints, true)) {
+          showPlacementToast("Building must stay inside the evacuation center boundary.");
+          return;
+        }
+        setIsRedrawingBuildingFromScratch(false);
+      } else {
+        showPlacementToast("Click at least 3 corners before finishing.");
+      }
     }
-  }, [isDrawingBuilding, addBuildingStep, newBuildingPoints.length]);
+  }, [isDrawingBuilding, addBuildingStep, redrawingBuildingId, isRedrawingBuildingFromScratch, newBuildingPoints, selectedCenter]);
 
   const handleBasemapBuildingClick = useCallback((pts) => {
+    const centerPoints = selectedCenter?.geometry ? polygonToPoints(selectedCenter.geometry) : [];
+    if (centerPoints.length >= 3 && !isBuildingInsideCenter(pts, centerPoints, true)) {
+      showPlacementToast("Building must stay inside the evacuation center boundary.");
+      return;
+    }
     if (isDrawingBuilding && addBuildingStep === "draw") {
       setNewBuildingPoints(pts);
       showPlacementToast("Basemap outline selected. Double-click or click Next to name.");
+    } else if (isDrawingBuilding && redrawingBuildingId && (isRedrawingBuildingFromScratch || newBuildingPoints.length === 0)) {
+      setNewBuildingPoints(pts);
+      setIsRedrawingBuildingFromScratch(false);
+      showPlacementToast("Basemap outline selected.");
     }
-  }, [isDrawingBuilding, addBuildingStep]);
+  }, [isDrawingBuilding, addBuildingStep, redrawingBuildingId, isRedrawingBuildingFromScratch, newBuildingPoints.length, selectedCenter]);
 
   const handleSaveBuildingWithRooms = async () => {
     if (newBuildingPoints.length < 3) {
       alert("Please click at least 3 corners on the map to define the building outline.");
+      setAddBuildingStep("draw");
+      return;
+    }
+    const centerPoints = selectedCenter?.geometry ? polygonToPoints(selectedCenter.geometry) : [];
+    if (centerPoints.length >= 3 && !isBuildingInsideCenter(newBuildingPoints, centerPoints, true)) {
+      showPlacementToast("Building must stay inside the evacuation center boundary.");
       setAddBuildingStep("draw");
       return;
     }
@@ -858,9 +895,8 @@ export default function AdminMap() {
 
         // Small toast with "Back to center" link per change_3_deep_links
         setSaveNotice({
-          message: `${savedName} saved - ${roomCountLinked} ${
-            roomCountLinked === 1 ? "room" : "rooms"
-          } linked`,
+          message: `${savedName} saved - ${roomCountLinked} ${roomCountLinked === 1 ? "room" : "rooms"
+            } linked`,
           centerId: selectedCenterId,
         });
       }
@@ -877,18 +913,20 @@ export default function AdminMap() {
     setIsDrawingBuilding(false);
     // Restore building layer filter (un-hide the saved outline) if we were redrawing
     if (redrawingBuildingId) {
-      
-      
-      
-      
+
+
+
+
     }
     setRedrawingBuildingId(null);
+    setIsRedrawingBuildingFromScratch(false);
     setAddBuildingStep(null);
     setNewBuildingName("");
     setNewBuildingRoomIds([]);
     setNewBuildingPoints([]);
     setBuildingEditOriginalPoints([]);
     setBuildingEditUndoStack([]);
+    setBuildingEditBoundaryError(null);
     setPanelHeaderMenuOpen(false);
   };
 
@@ -902,7 +940,9 @@ export default function AdminMap() {
 
     if (!valid) {
       setBuildingEditBoundaryError(
-        `Keep the building inside the center boundary. ${invalidPoints.length} vertex${invalidPoints.length !== 1 ? 'es' : ''} outside.`
+        invalidPoints.length > 0
+          ? `Keep the building inside the center boundary. ${invalidPoints.length} vertex${invalidPoints.length !== 1 ? "es" : ""} outside.`
+          : "Keep the building completely inside the evacuation center boundary."
       );
       return;
     }
@@ -924,6 +964,7 @@ export default function AdminMap() {
       const bldId = redrawingBuildingId;
       setIsDrawingBuilding(false);
       setRedrawingBuildingId(null);
+      setIsRedrawingBuildingFromScratch(false);
       setNewBuildingPoints([]);
       setBuildingEditOriginalPoints([]);
       setBuildingEditUndoStack([]);
@@ -954,6 +995,10 @@ export default function AdminMap() {
       const previousPoints = buildingEditUndoStack[buildingEditUndoStack.length - 1];
       setNewBuildingPoints(previousPoints);
       setBuildingEditUndoStack((prev) => prev.slice(0, -1));
+      setBuildingEditBoundaryError(null);
+      if (previousPoints.length >= 3) {
+        setIsRedrawingBuildingFromScratch(false);
+      }
     }
   }, [buildingEditUndoStack]);
 
@@ -962,6 +1007,8 @@ export default function AdminMap() {
     if (buildingEditOriginalPoints.length > 0) {
       setNewBuildingPoints(buildingEditOriginalPoints);
       setBuildingEditUndoStack([]);
+      setBuildingEditBoundaryError(null);
+      setIsRedrawingBuildingFromScratch(false);
     }
   }, [buildingEditOriginalPoints]);
 
@@ -972,6 +1019,8 @@ export default function AdminMap() {
       setBuildingEditUndoStack((prev) => [...prev, newBuildingPoints]);
     }
     setNewBuildingPoints([]);
+    setBuildingEditBoundaryError(null);
+    setIsRedrawingBuildingFromScratch(true);
   }, [newBuildingPoints]);
 
   // Handler for building vertex handle changes during edit mode
@@ -980,8 +1029,9 @@ export default function AdminMap() {
     if (isFinal) {
       setBuildingEditUndoStack((prev) => [...prev, newBuildingPoints]);
     }
+    setBuildingEditBoundaryError(null);
     setNewBuildingPoints(newPoints);
-  }, []);
+  }, [newBuildingPoints]);
 
   const unassignedRooms = useMemo(() => {
     return selectedCenterRooms.filter(
@@ -1313,7 +1363,7 @@ export default function AdminMap() {
           setGeoBarangay(resolved);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     return () => {
       cancelled = true;
@@ -1401,6 +1451,17 @@ export default function AdminMap() {
     setSelectedCenter(center);
     const originalPoints = polygonToPoints(center.geometry);
     setCenterEditOriginalPoints(originalPoints);
+
+    const existingEntrances = Array.isArray(props.entrances)
+      ? props.entrances
+        .map((e) => ({
+          lat: Number(e.lat ?? e.latitude),
+          lng: Number(e.lng ?? e.longitude),
+        }))
+        .filter((e) => Number.isFinite(e.lat) && Number.isFinite(e.lng))
+      : [];
+    setEntrancePoints(existingEntrances);
+    setCenterEditOriginalEntrances(existingEntrances);
 
     // If center already has a polygon, load it and open directly in Step 3 (Edit)
     if (originalPoints.length >= 3) {
@@ -1540,18 +1601,23 @@ export default function AdminMap() {
     setPlacementToast(null);
     // Restore center outline if we were redrawing
     if (redrawingCenterId) {
-      
-      
+
+
       setRedrawingCenterId(null);
       setCenterEditOriginalPoints([]);
     }
   }
 
-  // Handle step change with entrance filtering when moving from footprint to entrance
+  // Handle step change with entrance filtering when moving from footprint to entrance or edit to confirm
   const handleStepChange = useCallback((nextStep) => {
-    if (nextStep === "entrance" && mappingStep === "footprint") {
+    if (
+      (nextStep === "entrance" && mappingStep === "footprint") ||
+      (nextStep === "confirm" && mappingStep === "edit")
+    ) {
       const savedEntrances = entrancePoints;
-      setCenterEditOriginalEntrances(savedEntrances);
+      if (centerEditOriginalEntrances.length === 0 && savedEntrances.length > 0) {
+        setCenterEditOriginalEntrances(savedEntrances);
+      }
       const footprint = footprintPoints;
       let removedCount = 0;
       // Re-snap each entrance onto the (possibly edited) outline; drop ones now > 15 m away
@@ -1569,12 +1635,17 @@ export default function AdminMap() {
         filtered.push({ ...ent, lng: snapped.lng, lat: snapped.lat });
       });
       setEntrancePoints(filtered);
+      if (nextStep === "confirm" && filtered.length === 0) {
+        showPlacementToast("Center outline moved. Please place at least one entrance on the new outline.");
+        setMappingStep("entrance");
+        return;
+      }
       if (removedCount > 0) {
         showPlacementToast(removedCount + " entrance(s) removed: outside the new outline.");
       }
     }
     setMappingStep(nextStep);
-  }, [mappingStep, footprintPoints, entrancePoints, showPlacementToast]);
+  }, [mappingStep, footprintPoints, entrancePoints, centerEditOriginalEntrances.length, showPlacementToast]);
 
   // Save placement flow (outline + entrances)
   async function handleSaveMapPlacement() {
@@ -1623,17 +1694,19 @@ export default function AdminMap() {
       return;
     }
 
-    // Refresh data after a successful save without failing the save operation
+    // Refresh centers and buildings after a successful save
     try {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.evacuationCenters(true),
-      });
+      await invalidateEvacuationQueries(queryClient);
+      await refetchBuildings();
     } catch (refreshErr) {
-      console.warn("Failed to refresh centers query after successful save:", refreshErr);
+      console.warn("Failed to refresh queries after successful save:", refreshErr);
     }
 
     const updatedName =
       editingCenter.properties?.name || editingCenter.name || "Center";
+    const resetBuildingsCount = Number(
+      savedCenterFeature?.properties?.reset_buildings_count || 0
+    );
 
     if (redrawingCenterId) {
       setRedrawingCenterId(null);
@@ -1643,25 +1716,39 @@ export default function AdminMap() {
     setIsMapping(false);
     setEditingCenter(null);
     setPanelCollapsed(false);
-    // Set selectedCenter from refetched centers list by id (never from response copy)
+    // Set selectedCenter from refetched centers list by id (or saved feature)
     const refetchedCenters = queryClient.getQueryData(queryKeys.evacuationCenters(true));
+    let matchedCenter = savedCenterFeature || null;
     if (refetchedCenters?.features) {
       const match = refetchedCenters.features.find((c) => {
         const cid = c.properties?.id ?? c.id;
         return String(cid) === String(centerId);
       });
-      if (match) setSelectedCenter(match);
+      if (match) matchedCenter = match;
+    }
+    if (matchedCenter) {
+      setSelectedCenter({ ...matchedCenter, _focusAt: Date.now() });
     }
     setFootprintPoints([]);
     setEntrancePoints([]);
+    setCenterEditOriginalEntrances([]);
     setMappingStep("footprint");
     setPlacementToast(null);
     setSavingMap(false);
 
-    setSaveNotice({
-      centerId,
-      message: `Saved outline and entrances for ${updatedName}`,
-    });
+    if (resetBuildingsCount > 0) {
+      setCenterModalOpen(true);
+      setSaveNotice({
+        centerId,
+        message: `Updated outline for ${updatedName}. Please remap its ${resetBuildingsCount} ${resetBuildingsCount === 1 ? "building" : "buildings"
+          } inside the new boundary.`,
+      });
+    } else {
+      setSaveNotice({
+        centerId,
+        message: `Saved outline and entrances for ${updatedName}`,
+      });
+    }
   }
 
   // Select a center: ease map to center and open Center details modal over the map
@@ -1709,9 +1796,22 @@ export default function AdminMap() {
 
   function handleNotificationSelect(notification) {
     const path = isAdmin ? "/admin" : "/lgu";
-    const tab =
-      notification.resource_type === "hazard_report" ? "reports" : "rescue";
-    navigate(`${path}?tab=${tab}&notificationId=${notification.id}`);
+    let tab = "rescue";
+    if (notification.resource_type === "hazard_report") {
+      tab = "reports";
+    } else if (
+      notification.resource_type === "resident_registration" ||
+      notification.resource_type === "resident_account"
+    ) {
+      tab = "registrations";
+    }
+    const params = new URLSearchParams({
+      tab,
+      notificationId: String(notification.id),
+      resourceType: String(notification.resource_type || ""),
+      resourceId: String(notification.resource_id ?? ""),
+    });
+    navigate(`${path}?${params.toString()}`);
   }
 
   // List calculations
@@ -1753,7 +1853,7 @@ export default function AdminMap() {
     const isSelected =
       selectedCenter &&
       String(selectedCenter.properties?.id ?? selectedCenter.id) ===
-        String(centerId);
+      String(centerId);
     const active = Boolean(props.is_active);
     const roomCount =
       roomsCountByCenterId[centerId] ??
@@ -1773,18 +1873,18 @@ export default function AdminMap() {
       capacity <= 0
         ? "#94a3b8"
         : isFull
-        ? "#dc2626"
-        : occPct >= 70
-        ? "#d97706"
-        : occupied > 0
-        ? "#16a34a"
-        : "#94a3b8";
+          ? "#dc2626"
+          : occPct >= 70
+            ? "#d97706"
+            : occupied > 0
+              ? "#16a34a"
+              : "#94a3b8";
 
     const barangayLabel =
       props.barangays && props.barangays.length > 0
         ? props.barangays
-            .map((b) => displayEntityName(b.name || b))
-            .join(", ")
+          .map((b) => displayEntityName(b.name || b))
+          .join(", ")
         : displayEntityName(props.barangay_name || props.address) || "Sogod";
 
     const centerType = props.center_type || "campus";
@@ -2010,9 +2110,8 @@ export default function AdminMap() {
             {props.name || "Evacuation Center"}
           </h2>
           <span
-            className={`admin-map-detail-badge ${
-              active ? "is-active" : "is-inactive"
-            }`}
+            className={`admin-map-detail-badge ${active ? "is-active" : "is-inactive"
+              }`}
           >
             {active ? "Active" : "Inactive"}
           </span>
@@ -2114,8 +2213,8 @@ export default function AdminMap() {
                       !active
                         ? "Activate this center to map rooms."
                         : !mapped
-                        ? "Place the center outline first."
-                        : `Map rooms for ${props.name || "center"}`
+                          ? "Place the center outline first."
+                          : `Map rooms for ${props.name || "center"}`
                     }
                     onClick={() => {
                       setPanelSubView("map_rooms");
@@ -2167,8 +2266,8 @@ export default function AdminMap() {
                       !active
                         ? "Activate this center to map rooms."
                         : !mapped
-                        ? "Place the center outline first."
-                        : `Map rooms for ${props.name || "center"}`
+                          ? "Place the center outline first."
+                          : `Map rooms for ${props.name || "center"}`
                     }
                     onClick={() => {
                       setPanelSubView("map_rooms");
@@ -2360,10 +2459,10 @@ export default function AdminMap() {
               {selectedBuildingDetail
                 ? (bDetailProps.name || "Building Details")
                 : addBuildingStep
-                ? "Add Building"
-                : mapRoomsTab === "points"
-                ? "Place Room Points"
-                : "Buildings"}
+                  ? "Add Building"
+                  : mapRoomsTab === "points"
+                    ? "Place Room Points"
+                    : "Buildings"}
             </h2>
             <div className="admin-map-rooms-center-name">
               {props.name || "Evacuation Center"}
@@ -2491,10 +2590,11 @@ export default function AdminMap() {
                       const bOrigPoints = polygonToPoints(selectedBuildingDetail?.geometry);
                       setBuildingEditOriginalPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
                       setBuildingEditUndoStack([]);
+                      setBuildingEditBoundaryError(null);
+                      setIsRedrawingBuildingFromScratch(bOrigPoints.length < 3);
                       setRedrawingBuildingId(bDetailId);
                       // Initialize with existing polygon points so vertex handles appear for editing
                       setNewBuildingPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
-
                     }}
                   >
                     <FontAwesomeIcon icon={faArrowsRotate} />
@@ -3189,210 +3289,223 @@ export default function AdminMap() {
                       </button>
                     </div>
                   ) : (
-                centerBuildings.map((b) => {
-                  const bProps = b.properties || {};
-                  const bId = bProps.id ?? b.id;
-                  const bName = bProps.name || "Building";
-                  const roomCount = bProps.room_count || 0;
-                  const bCap = bProps.capacity || 0;
-                  const bOcc = bProps.occupied || 0;
-                  const bAssigned = bProps.assigned ?? 0;
-                  const occPct = bCap > 0 ? Math.min(100, Math.round((bOcc / bCap) * 100)) : (bProps.occupancy_pct ?? bProps.occupancy_percentage ?? 0);
-                  const assignedPct = bCap > 0 ? Math.min(100, Math.round((bAssigned / bCap) * 100)) : 0;
-                  const isFullyAssigned = bCap > 0 && bAssigned >= bCap;
-                  const occStatus = bCap === 0 ? "Closed" : bOcc >= bCap ? "Full" : occPct >= 70 ? "Near Capacity" : "Available";
-                  const statusColor = bProps.fill_color || bProps.status_color || (bCap === 0 ? "#94a3b8" : bOcc >= bCap ? "#dc2626" : occPct >= 70 ? "#d97706" : "#16a34a");
-                  const isSelected = String(selectedBuildingId) === String(bId);
+                    centerBuildings.map((b) => {
+                      const bProps = b.properties || {};
+                      const bId = bProps.id ?? b.id;
+                      const bName = bProps.name || "Building";
+                      const isBuildingMapped = Boolean(b.geometry?.coordinates?.[0]?.length >= 4 || bProps.is_mapped);
+                      const roomCount = bProps.room_count || 0;
+                      const bCap = bProps.capacity || 0;
+                      const bOcc = bProps.occupied || 0;
+                      const bAssigned = bProps.assigned ?? 0;
+                      const occPct = bCap > 0 ? Math.min(100, Math.round((bOcc / bCap) * 100)) : (bProps.occupancy_pct ?? bProps.occupancy_percentage ?? 0);
+                      const assignedPct = bCap > 0 ? Math.min(100, Math.round((bAssigned / bCap) * 100)) : 0;
+                      const isFullyAssigned = bCap > 0 && bAssigned >= bCap;
+                      const occStatus = bCap === 0 ? "Closed" : bOcc >= bCap ? "Full" : occPct >= 70 ? "Near Capacity" : "Available";
+                      const statusColor = bProps.fill_color || bProps.status_color || (bCap === 0 ? "#94a3b8" : bOcc >= bCap ? "#dc2626" : occPct >= 70 ? "#d97706" : "#16a34a");
+                      const isSelected = String(selectedBuildingId) === String(bId);
 
-                  // Muted subline: occupied & assigned vs capacity
-                  const subline =
-                    roomCount > 0
-                      ? `${bOcc} of ${bCap} here · ${bAssigned} assigned`
-                      : "No rooms linked yet";
+                      // Muted subline: occupied & assigned vs capacity
+                      const subline =
+                        roomCount > 0
+                          ? `${bOcc} of ${bCap} here · ${bAssigned} assigned`
+                          : "No rooms linked yet";
 
-                  // Exception-only badge: Only show for Full, Near Capacity, or Closed
-                  const isException =
-                    occStatus === "Full" ||
-                    occStatus === "Near Capacity" ||
-                    occStatus === "Closed";
+                      // Exception-only badge: Only show for Full, Near Capacity, or Closed
+                      const isException =
+                        occStatus === "Full" ||
+                        occStatus === "Near Capacity" ||
+                        occStatus === "Closed";
 
-                  // Linked rooms for manage count
-                  const linkedRooms = selectedCenterRooms.filter(
-                    (r) => String(r.building_id) === String(bId)
-                  );
+                      // Linked rooms for manage count
+                      const linkedRooms = selectedCenterRooms.filter(
+                        (r) => String(r.building_id) === String(bId)
+                      );
 
-                  return (
-                    <div
-                      key={bId}
-                      className={`admin-bld-row ${isSelected ? "is-selected" : ""}`}
-                      onClick={() => handleSelectBuildingRow(b)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleSelectBuildingRow(b);
-                        }
-                      }}
-                      aria-label={`${bName}, ${bOcc} of ${bCap} here, ${bAssigned} assigned, ${occStatus}`}
-                    >
-                      {/* Swatch */}
-                      <div
-                        className="admin-bld-swatch"
-                        style={{ backgroundColor: statusColor }}
-                        aria-hidden="true"
-                      />
-
-                      {/* Info */}
-                      <div className="admin-bld-info">
-                        <div className="admin-bld-name" title={bName}>
-                          {bName}
-                        </div>
-                        <div className="admin-bld-subline" title={subline}>
-                          {subline}
-                        </div>
-                      </div>
-
-                      {/* Right side stats & overflow */}
-                      <div
-                        className="admin-bld-right"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <span className="admin-bld-pct">{occPct}%</span>
-
-                        {isFullyAssigned && (
-                          <span
-                            className="admin-bld-exception-badge"
-                            style={{
-                              backgroundColor: "#f1f5f9",
-                              color: "#475569",
-                              border: "1px solid #cbd5e1",
-                            }}
-                          >
-                            Fully assigned
-                          </span>
-                        )}
-
-                        {/* Exception-only badge */}
-                        {isException && (
-                          <span
-                            className={`admin-bld-exception-badge ${occStatus.toLowerCase().replace(/\s+/g, "-")}`}
-                          >
-                            {occStatus}
-                          </span>
-                        )}
-
-                        {/* "..." Overflow Menu */}
-                        <div className="admin-bld-overflow-wrap">
-                          <button
-                            type="button"
-                            className="admin-bld-overflow-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActiveOverflowMenuId(activeOverflowMenuId === bId ? null : bId);
-                            }}
-                            aria-label={`Options for ${bName}`}
-                            aria-haspopup="true"
-                            aria-expanded={activeOverflowMenuId === bId}
-                          >
-                            <FontAwesomeIcon icon={faEllipsisVertical} />
-                          </button>
-
-                          {activeOverflowMenuId === bId && (
-                            <div className="admin-bld-dropdown-menu" role="menu">
-                              <button
-                                type="button"
-                                role="menuitem"
-                                className="admin-bld-menu-item"
-                                onClick={() => {
-                                  setActiveOverflowMenuId(null);
-                                  setRenamingBuilding(b);
-                                  setRenameValue(bName);
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faPen} />
-                                <span>Rename</span>
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                className="admin-bld-menu-item"
-                                onClick={() => {
-                                  setActiveOverflowMenuId(null);
-                                  setManagingRoomsBuilding(b);
-                                  setManagingRoomIds(linkedRooms.map((r) => r.id));
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faLink} />
-                                <span>Link / unlink rooms</span>
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                className="admin-bld-menu-item"
-                                onClick={() => {
-                                  setActiveOverflowMenuId(null);
-                                  const bOrigPoints = polygonToPoints(b.geometry);
-                                  setBuildingEditOriginalPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
-                                  setBuildingEditUndoStack([]);
-                                  setIsDrawingBuilding(true);
-                                  setRedrawingBuildingId(bId);
-                                  setNewBuildingPoints([]);
-        
-        
-        
-        
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faArrowsRotate} />
-                                <span>Redraw outline</span>
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                className="admin-bld-menu-item is-danger"
-                                onClick={() => {
-                                  setActiveOverflowMenuId(null);
-                                  setDeletingBuilding(b);
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faTrashCan} />
-                                <span>Delete building</span>
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 4px Bottom Bar */}
-                      <div className="admin-bld-bottom-bar-track" style={{ position: "relative" }}>
-                        {assignedPct > 0 && (
-                          <div
-                            style={{
-                              position: "absolute",
-                              top: 0,
-                              left: 0,
-                              height: "100%",
-                              width: `${Math.min(100, assignedPct)}%`,
-                              backgroundColor: "#94a3b8",
-                              opacity: 0.45,
-                            }}
-                          />
-                        )}
+                      return (
                         <div
-                          className="admin-bld-bottom-bar-fill"
-                          style={{
-                            position: "relative",
-                            zIndex: 2,
-                            width: `${Math.min(100, occPct)}%`,
-                            backgroundColor: statusColor,
+                          key={bId}
+                          className={`admin-bld-row ${isSelected ? "is-selected" : ""}`}
+                          onClick={() => handleSelectBuildingRow(b)}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              handleSelectBuildingRow(b);
+                            }
                           }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+                          aria-label={`${bName}, ${bOcc} of ${bCap} here, ${bAssigned} assigned, ${occStatus}`}
+                        >
+                          {/* Swatch */}
+                          <div
+                            className="admin-bld-swatch"
+                            style={{ backgroundColor: statusColor }}
+                            aria-hidden="true"
+                          />
+
+                          {/* Info */}
+                          <div className="admin-bld-info">
+                            <div className="admin-bld-name" title={bName}>
+                              {bName}
+                            </div>
+                            <div className="admin-bld-subline" title={subline}>
+                              {subline}
+                            </div>
+                          </div>
+
+                          {/* Right side stats & overflow */}
+                          <div
+                            className="admin-bld-right"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {!isBuildingMapped && (
+                              <span
+                                className="admin-bld-exception-badge"
+                                style={{
+                                  backgroundColor: "#fffbeb",
+                                  color: "#b45309",
+                                  border: "1px solid #fde68a",
+                                }}
+                              >
+                                Not mapped
+                              </span>
+                            )}
+
+                            <span className="admin-bld-pct">{occPct}%</span>
+
+                            {isFullyAssigned && (
+                              <span
+                                className="admin-bld-exception-badge"
+                                style={{
+                                  backgroundColor: "#f1f5f9",
+                                  color: "#475569",
+                                  border: "1px solid #cbd5e1",
+                                }}
+                              >
+                                Fully assigned
+                              </span>
+                            )}
+
+                            {/* Exception-only badge */}
+                            {isException && (
+                              <span
+                                className={`admin-bld-exception-badge ${occStatus.toLowerCase().replace(/\s+/g, "-")}`}
+                              >
+                                {occStatus}
+                              </span>
+                            )}
+
+                            {/* "..." Overflow Menu */}
+                            <div className="admin-bld-overflow-wrap">
+                              <button
+                                type="button"
+                                className="admin-bld-overflow-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveOverflowMenuId(activeOverflowMenuId === bId ? null : bId);
+                                }}
+                                aria-label={`Options for ${bName}`}
+                                aria-haspopup="true"
+                                aria-expanded={activeOverflowMenuId === bId}
+                              >
+                                <FontAwesomeIcon icon={faEllipsisVertical} />
+                              </button>
+
+                              {activeOverflowMenuId === bId && (
+                                <div className="admin-bld-dropdown-menu" role="menu">
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="admin-bld-menu-item"
+                                    onClick={() => {
+                                      setActiveOverflowMenuId(null);
+                                      setRenamingBuilding(b);
+                                      setRenameValue(bName);
+                                    }}
+                                  >
+                                    <FontAwesomeIcon icon={faPen} />
+                                    <span>Rename</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="admin-bld-menu-item"
+                                    onClick={() => {
+                                      setActiveOverflowMenuId(null);
+                                      setManagingRoomsBuilding(b);
+                                      setManagingRoomIds(linkedRooms.map((r) => r.id));
+                                    }}
+                                  >
+                                    <FontAwesomeIcon icon={faLink} />
+                                    <span>Link / unlink rooms</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="admin-bld-menu-item"
+                                    onClick={() => {
+                                      setActiveOverflowMenuId(null);
+                                      setSelectedBuildingDetail(b);
+                                      const bOrigPoints = polygonToPoints(b.geometry);
+                                      setBuildingEditOriginalPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
+                                      setBuildingEditUndoStack([]);
+                                      setBuildingEditBoundaryError(null);
+                                      setIsRedrawingBuildingFromScratch(bOrigPoints.length < 3);
+                                      setIsDrawingBuilding(true);
+                                      setRedrawingBuildingId(bId);
+                                      setNewBuildingPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
+                                    }}
+                                  >
+                                    <FontAwesomeIcon icon={faArrowsRotate} />
+                                    <span>{isBuildingMapped ? "Redraw outline" : "Map building"}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="admin-bld-menu-item is-danger"
+                                    onClick={() => {
+                                      setActiveOverflowMenuId(null);
+                                      setDeletingBuilding(b);
+                                    }}
+                                  >
+                                    <FontAwesomeIcon icon={faTrashCan} />
+                                    <span>Delete building</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 4px Bottom Bar */}
+                          <div className="admin-bld-bottom-bar-track" style={{ position: "relative" }}>
+                            {assignedPct > 0 && (
+                              <div
+                                style={{
+                                  position: "absolute",
+                                  top: 0,
+                                  left: 0,
+                                  height: "100%",
+                                  width: `${Math.min(100, assignedPct)}%`,
+                                  backgroundColor: "#94a3b8",
+                                  opacity: 0.45,
+                                }}
+                              />
+                            )}
+                            <div
+                              className="admin-bld-bottom-bar-fill"
+                              style={{
+                                position: "relative",
+                                zIndex: 2,
+                                width: `${Math.min(100, occPct)}%`,
+                                backgroundColor: statusColor,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </>
               )}
             </>
@@ -3435,11 +3548,9 @@ export default function AdminMap() {
                     <div
                       key={room.id}
                       id={`admin-room-row-${room.id}`}
-                      className={`admin-map-room-row ${
-                        isMapped ? "is-mapped" : "is-unmapped"
-                      } ${isCurrent ? "is-current-placing" : ""} ${
-                        isHovered ? "is-hovered-room" : ""
-                      } ${isSelected ? "is-selected-room" : ""}`}
+                      className={`admin-map-room-row ${isMapped ? "is-mapped" : "is-unmapped"
+                        } ${isCurrent ? "is-current-placing" : ""} ${isHovered ? "is-hovered-room" : ""
+                        } ${isSelected ? "is-selected-room" : ""}`}
                       role="listitem"
                       onMouseEnter={() => setHoveredRoomId(room.id)}
                       onMouseLeave={() => setHoveredRoomId(null)}
@@ -3565,9 +3676,8 @@ export default function AdminMap() {
         >
           <button
             type="button"
-            className={`admin-map-filter-btn ${
-              filter === "all" ? "is-active" : ""
-            }`}
+            className={`admin-map-filter-btn ${filter === "all" ? "is-active" : ""
+              }`}
             onClick={() => setFilter("all")}
           >
             <span>All {allCentersList.length}</span>
@@ -3575,9 +3685,8 @@ export default function AdminMap() {
 
           <button
             type="button"
-            className={`admin-map-filter-btn ${
-              filter === "mapped" ? "is-active" : ""
-            }`}
+            className={`admin-map-filter-btn ${filter === "mapped" ? "is-active" : ""
+              }`}
             onClick={() => setFilter("mapped")}
           >
             <span>Mapped {mappedCount}</span>
@@ -3585,9 +3694,8 @@ export default function AdminMap() {
 
           <button
             type="button"
-            className={`admin-map-filter-btn ${
-              filter === "unmapped" ? "is-active" : ""
-            }`}
+            className={`admin-map-filter-btn ${filter === "unmapped" ? "is-active" : ""
+              }`}
             onClick={() => setFilter("unmapped")}
           >
             <span>Not mapped {unmappedCount}</span>
@@ -3731,7 +3839,7 @@ export default function AdminMap() {
       barangays.length > 0
         ? barangays.map((b) => displayEntityName(b.name || b)).join(", ")
         : displayEntityName(props.barangay_name || props.address) ||
-          "Sogod, Southern Leyte";
+        "Sogod, Southern Leyte";
     const addressText = displayEntityName(props.address);
 
     const isVenueOrHouse = props.center_type && props.center_type !== "campus";
@@ -4156,10 +4264,10 @@ export default function AdminMap() {
                         (bCap <= 0
                           ? "#94a3b8"
                           : bOcc >= bCap
-                          ? "#dc2626"
-                          : bOccPct >= 70
-                          ? "#d97706"
-                          : "#16a34a");
+                            ? "#dc2626"
+                            : bOccPct >= 70
+                              ? "#d97706"
+                              : "#16a34a");
                       // Building mapped status
                       const bMapped = Boolean(b.geometry && b.geometry.coordinates && b.geometry.coordinates.length > 0);
                       const bMappedChip = bMapped
@@ -4169,6 +4277,8 @@ export default function AdminMap() {
                       // Building polygon action handler
                       const handleBuildingPolygonAction = (e) => {
                         e.stopPropagation(); // Prevent row click (zoom to building)
+                        setSelectedBuildingDetail(b);
+                        setBuildingEditBoundaryError(null);
                         if (bMapped) {
                           // Edit existing building polygon
                           const points = polygonToPoints(b.geometry);
@@ -4176,6 +4286,7 @@ export default function AdminMap() {
                           setBuildingEditOriginalPoints(points);
                           // Clear undo stack
                           setBuildingEditUndoStack([]);
+                          setIsRedrawingBuildingFromScratch(points.length < 3);
                           // Load existing polygon points so vertex handles appear for editing
                           setNewBuildingPoints(points.length >= 3 ? points : []);
                           setRedrawingBuildingId(bId);
@@ -4187,6 +4298,7 @@ export default function AdminMap() {
                           setNewBuildingPoints([]);
                           setBuildingEditOriginalPoints([]);
                           setBuildingEditUndoStack([]);
+                          setIsRedrawingBuildingFromScratch(true);
                           setRedrawingBuildingId(bId);
                           setIsDrawingBuilding(true);
                           handleCloseCenterModal();
@@ -4362,11 +4474,10 @@ export default function AdminMap() {
 
       <div className="dashboard-content">
         <main
-          className={`admin-map-page ${
-            panelCollapsed ? "is-panel-collapsed" : ""
-          } ${isMapping ? "in-mapping-mode" : ""} ${
-            selectedCenter ? "has-selected-center" : ""
-          } mobile-snap-${mobileSheetSnap}`}
+          className={`admin-map-page ${panelCollapsed ? "is-panel-collapsed" : ""
+            } ${isMapping ? "in-mapping-mode" : ""} ${isFullView || isDrawingBuilding || isPlacingRoom ? "is-full-view" : ""
+            } ${selectedCenter ? "has-selected-center" : ""
+            } mobile-snap-${mobileSheetSnap}`}
           aria-label="Admin Map View"
         >
           {/* ---------------------------------------------------------
@@ -4415,10 +4526,10 @@ export default function AdminMap() {
                     mappingStep === "footprint"
                       ? "footprint"
                       : mappingStep === "entrance"
-                      ? "entrance"
-                      : mappingStep === "edit"
-                      ? "edit"
-                      : "confirm"
+                        ? "entrance"
+                        : mappingStep === "edit"
+                          ? "edit"
+                          : "confirm"
                   }
                   pendingFootprint={footprintPoints}
                   pendingEntrances={entrancePoints}
@@ -4426,13 +4537,13 @@ export default function AdminMap() {
                   onEditablePolygonChange={
                     mappingStep === "edit"
                       ? (newPoints) => {
-                          setFootprintPoints(newPoints);
-                        }
+                        setFootprintPoints(newPoints);
+                      }
                       : null
                   }
                   onCloseShape={() => {
                     if (footprintPoints.length >= 3) {
-                      setMappingStep("entrance");
+                      handleStepChange("entrance");
                     }
                   }}
                   onOutsideOutlineClick={() => {
@@ -4464,6 +4575,7 @@ export default function AdminMap() {
                       );
                     }
                   }}
+                  buildingsGeoJSON={buildingsGeoJSON}
                   hiddenCenterId={redrawingCenterId || undefined}
                   hiddenBuildingId={redrawingBuildingId || undefined}
                 />
@@ -4473,6 +4585,20 @@ export default function AdminMap() {
                 centers={centers}
                 hazardZones={hazardZones}
                 selectedCenter={selectedCenter}
+                topRightSlot={
+                  !isDrawingBuilding && !isPlacingRoom ? (
+                    <button
+                      type="button"
+                      className={`admin-map-fullview-btn ${isFullView ? "is-active" : ""}`}
+                      onClick={() => setIsFullView((v) => !v)}
+                      title={isFullView ? "Exit full view" : "Expand map to full view"}
+                      aria-label={isFullView ? "Exit full view" : "Expand map to full view"}
+                    >
+                      <FontAwesomeIcon icon={isFullView ? faCompress : faExpand} />
+                      <span>{isFullView ? "Exit full view" : "Full view"}</span>
+                    </button>
+                  ) : null
+                }
                 panelSubView={panelSubView}
                 editingCenter={editingCenter}
                 currentZoom={mapZoom}
@@ -4495,13 +4621,36 @@ export default function AdminMap() {
                 hideZoomControls={false}
                 hiddenCenterId={redrawingCenterId || undefined}
                 hiddenBuildingId={redrawingBuildingId || undefined}
-                drawMode={isDrawingBuilding ? "footprint" : isPlacingRoom ? "room" : "none"}
+                drawMode={
+                  isDrawingBuilding && redrawingBuildingId && !isRedrawingBuildingFromScratch && newBuildingPoints.length >= 3
+                    ? "edit"
+                    : isDrawingBuilding
+                      ? "footprint"
+                      : isPlacingRoom
+                        ? "room"
+                        : "none"
+                }
                 pendingFootprint={
                   isDrawingBuilding
                     ? newBuildingPoints
                     : (isPlacingRoom || panelSubView === "map_rooms") && selectedCenter?.geometry
+                      ? polygonToPoints(selectedCenter.geometry)
+                      : []
+                }
+                editablePolygon={
+                  isDrawingBuilding && redrawingBuildingId && !isRedrawingBuildingFromScratch && newBuildingPoints.length >= 3
+                    ? newBuildingPoints
+                    : null
+                }
+                onEditablePolygonChange={
+                  isDrawingBuilding && redrawingBuildingId && !isRedrawingBuildingFromScratch && newBuildingPoints.length >= 3
+                    ? handleEditingBuildingPointsChange
+                    : null
+                }
+                centerBoundaryPolygon={
+                  (isDrawingBuilding || isPlacingRoom) && selectedCenter?.geometry
                     ? polygonToPoints(selectedCenter.geometry)
-                    : []
+                    : null
                 }
                 // Building edit mode props
                 editingBuildingId={isDrawingBuilding && redrawingBuildingId ? redrawingBuildingId : null}
@@ -4509,7 +4658,9 @@ export default function AdminMap() {
                 onEditingBuildingPointsChange={isDrawingBuilding && redrawingBuildingId ? handleEditingBuildingPointsChange : null}
                 onOutsideOutlineClick={() => {
                   showPlacementToast(
-                    "Click inside or near the outline."
+                    isDrawingBuilding
+                      ? "Building must stay inside the evacuation center boundary."
+                      : "Click inside or near the outline."
                   );
                 }}
                 onOutsideSogodClick={() => {
@@ -4522,6 +4673,13 @@ export default function AdminMap() {
                 onCloseShape={() => {
                   if (isDrawingBuilding && addBuildingStep === "draw") {
                     handleDoubleTapFinish();
+                  } else if (isDrawingBuilding && redrawingBuildingId && isRedrawingBuildingFromScratch && newBuildingPoints.length >= 3) {
+                    const centerPts = selectedCenter?.geometry ? polygonToPoints(selectedCenter.geometry) : [];
+                    if (centerPts.length >= 3 && !isBuildingInsideCenter(newBuildingPoints, centerPts, true)) {
+                      showPlacementToast("Building must stay inside the evacuation center boundary.");
+                      return;
+                    }
+                    setIsRedrawingBuildingFromScratch(false);
                   }
                 }}
                 onMapClick={(latlng) => {
@@ -4535,10 +4693,19 @@ export default function AdminMap() {
                   if (isPlacingRoom) {
                     handleMapClickForRoom(latlng);
                   } else if (isDrawingBuilding) {
-                    // Allow adding points by clicking in ALL building drawing modes:
-                    // - Adding a new building
-                    // - Mapping an unmapped building
-                    // - Editing an existing building (redrawingBuildingId is set)
+                    // Only allow adding points by clicking when drawing a new building or redrawing from scratch
+                    if (redrawingBuildingId && !isRedrawingBuildingFromScratch && newBuildingPoints.length >= 3) {
+                      return;
+                    }
+                    const centerPts = selectedCenter?.geometry ? polygonToPoints(selectedCenter.geometry) : [];
+                    if (
+                      centerPts.length >= 3 &&
+                      !isBuildingInsideCenter([...newBuildingPoints, latlng], centerPts, false)
+                    ) {
+                      showPlacementToast("Building must stay inside the evacuation center boundary.");
+                      return;
+                    }
+                    setBuildingEditBoundaryError(null);
                     setNewBuildingPoints((pts) => [...pts, latlng]);
                   }
                 }}
@@ -4593,6 +4760,7 @@ export default function AdminMap() {
               </div>
             )}
 
+
             {/* Building edit toolbar (full-screen like center edit) */}
             {isDrawingBuilding && redrawingBuildingId && (
               <div className="admin-map-building-edit-bar" role="toolbar" aria-label="Building edit actions">
@@ -4609,7 +4777,7 @@ export default function AdminMap() {
                 <div className="admin-map-building-edit-actions">
                   <button
                     type="button"
-                    className="admin-map-btn admin-map-btn-secondary"
+                    className="admin-map-building-edit-btn is-secondary"
                     onClick={handleUndoBuildingEdit}
                     disabled={buildingEditUndoStack.length === 0}
                     title="Undo last change"
@@ -4620,7 +4788,7 @@ export default function AdminMap() {
                   </button>
                   <button
                     type="button"
-                    className="admin-map-btn admin-map-btn-secondary"
+                    className="admin-map-building-edit-btn is-secondary"
                     onClick={handleResetBuildingEdit}
                     disabled={buildingEditOriginalPoints.length === 0}
                     title="Reset to original outline"
@@ -4631,7 +4799,7 @@ export default function AdminMap() {
                   </button>
                   <button
                     type="button"
-                    className="admin-map-btn admin-map-btn-secondary"
+                    className="admin-map-building-edit-btn is-secondary"
                     onClick={handleRedrawBuildingEdit}
                     title="Redraw from scratch"
                     aria-label="Redraw"
@@ -4641,7 +4809,7 @@ export default function AdminMap() {
                   </button>
                   <button
                     type="button"
-                    className="admin-map-btn admin-map-btn-primary"
+                    className="admin-map-building-edit-btn is-primary"
                     onClick={handleSaveBuildingOutline}
                     disabled={newBuildingPoints.length < 3 || isSavingBuilding}
                     title="Save building outline"
@@ -4652,7 +4820,7 @@ export default function AdminMap() {
                   </button>
                   <button
                     type="button"
-                    className="admin-map-btn admin-map-btn-danger"
+                    className="admin-map-building-edit-btn is-danger"
                     onClick={handleCancelDrawingBuilding}
                     disabled={isSavingBuilding}
                     title="Cancel editing"
@@ -4712,7 +4880,7 @@ export default function AdminMap() {
           {/* ---------------------------------------------------------
               DESKTOP FLOATING PANEL (Width 360px, left 16px, top 16px)
               --------------------------------------------------------- */}
-          {!isMobile && !panelCollapsed && !isMapping && !isDrawingBuilding && (
+          {!isMobile && !panelCollapsed && !isMapping && !(isDrawingBuilding && redrawingBuildingId) && (
             <aside
               className="admin-map-floating-panel"
               aria-label="Evacuation Centers Panel"
@@ -4777,7 +4945,7 @@ export default function AdminMap() {
           {/* ---------------------------------------------------------
               MOBILE BOTTOM SHEET (Visible <= 768px: collapsed 120px, half, full)
               --------------------------------------------------------- */}
-          {isMobile && !isMapping && !isDrawingBuilding && (
+          {isMobile && !isMapping && !(isDrawingBuilding && redrawingBuildingId) && (
             <section
               className={`admin-map-bottom-sheet is-open snap-${mobileSheetSnap}`}
               role="region"
@@ -4791,8 +4959,8 @@ export default function AdminMap() {
                     prev === "collapsed"
                       ? "half"
                       : prev === "half"
-                      ? "full"
-                      : "collapsed"
+                        ? "full"
+                        : "collapsed"
                   );
                 }}
                 aria-label={`Centers panel height: ${mobileSheetSnap}. Tap to change height.`}
@@ -4830,16 +4998,16 @@ export default function AdminMap() {
                               prev === "collapsed"
                                 ? "half"
                                 : prev === "half"
-                                ? "full"
-                                : "collapsed"
+                                  ? "full"
+                                  : "collapsed"
                             );
                           }}
                           aria-label={
                             mobileSheetSnap === "collapsed"
                               ? "Expand centers sheet"
                               : mobileSheetSnap === "half"
-                              ? "Maximize centers sheet"
-                              : "Collapse centers sheet"
+                                ? "Maximize centers sheet"
+                                : "Collapse centers sheet"
                           }
                         >
                           <FontAwesomeIcon

@@ -1763,29 +1763,6 @@
   .family-summary {
     grid-template-columns: 1fr;
   }
-  .barangay-filter-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding: 8px 12px;
-  }
-  .barangay-filter-bar::-webkit-scrollbar {
-    display: none;
-  }
-  .barangay-search {
-    flex: 0 0 180px;
-    min-width: 150px;
-    max-width: 220px;
-    min-height: 38px;
-  }
-  .barangay-filter-actions {
-    flex: 0 0 auto;
-    flex-wrap: nowrap;
-  }
 }
 
 .barangay-page {
@@ -3501,6 +3478,12 @@ label.bm-form-field > textarea:focus {
 }
 
 @media (max-width: 900px) {
+  .barangay-page {
+    height: auto;
+    min-height: 100%;
+    overflow-y: visible;
+  }
+
   .bm-desktop-only {
     display: none !important;
   }
@@ -3531,6 +3514,15 @@ label.bm-form-field > textarea:focus {
     flex-direction: column;
     align-items: stretch;
     gap: 10px;
+  }
+
+  .barangay-search {
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    min-height: 44px;
+    height: 44px;
   }
 
   .barangay-filter-actions {
@@ -3585,7 +3577,52 @@ label.bm-form-field > textarea:focus {
   }
 
   .bm-stats-grid-4 {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .bm-stat-card {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+
+  .bm-stat-icon-wrapper {
+    width: 34px;
+    height: 34px;
+    font-size: 14px;
+    border-radius: 9px;
+  }
+
+  .bm-stat-value {
+    font-size: 20px;
+  }
+
+  .bm-stat-sub {
+    font-size: 11px;
+  }
+
+  .bm-mobile-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .bm-hh-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .bm-hh-search-box {
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 44px;
+    height: 44px;
+  }
+
+  .bm-hh-filter-select {
+    width: 100%;
+    min-height: 44px;
   }
 
   .bm-hero-metrics {
@@ -3634,10 +3671,12 @@ label.bm-form-field > textarea:focus {
 }
 
 @media (max-width: 480px) {
-  .bm-stats-grid-4,
-  .bm-feature-metrics,
-  .bm-mobile-card-grid {
+  .bm-feature-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .bm-mobile-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

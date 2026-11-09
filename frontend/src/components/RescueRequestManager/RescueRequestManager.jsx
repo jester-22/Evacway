@@ -171,11 +171,16 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     }
   }, [initialRequestId]);
 
-  // Reset map image fallback state when selected request changes
+  // Reset map image fallback state and clear any notification when selected request changes
   useEffect(() => {
     setMapImgFailed(false);
     setLightboxImage(null);
-  }, [selectedId]);
+    if (selectedId != null) {
+      api.clearNotificationsByResource("rescue_request", selectedId)
+        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
+        .catch(() => { });
+    }
+  }, [selectedId, queryClient]);
 
   // Refresh data when window becomes visible
   useEffect(() => {
@@ -437,7 +442,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
               <span>All Clear · 0 open alerts</span>
             )}
           </span>
-          
+
         </div>
       </header>
 
@@ -597,9 +602,8 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                   >
                     {/* Status Left Pillar / Icon */}
                     <div
-                      className={`rescue-row-icon-box ${
-                        isStillOpen ? "is-open" : isResolved ? "is-resolved" : "is-in-progress"
-                      }`}
+                      className={`rescue-row-icon-box ${isStillOpen ? "is-open" : isResolved ? "is-resolved" : "is-in-progress"
+                        }`}
                       aria-hidden="true"
                     >
                       <FontAwesomeIcon
@@ -607,8 +611,8 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                           isStillOpen
                             ? faTriangleExclamation
                             : isResolved
-                            ? faCircleCheck
-                            : faTruckFast
+                              ? faCircleCheck
+                              : faTruckFast
                         }
                       />
                     </div>
@@ -666,9 +670,8 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                       </span>
                       <div className="rescue-row-time-meta">
                         <span
-                          className={`rescue-row-timer ${timeStatus.statusClass} ${
-                            timeStatus.isUrgent ? "is-urgent" : ""
-                          }`}
+                          className={`rescue-row-timer ${timeStatus.statusClass} ${timeStatus.isUrgent ? "is-urgent" : ""
+                            }`}
                         >
                           <FontAwesomeIcon icon={timeStatus.icon} />
                           <span>{timeStatus.text}</span>
@@ -676,9 +679,9 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                         <small className="rescue-row-date">
                           {item.created_at
                             ? new Date(item.created_at).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
                             : ""}
                         </small>
                       </div>
@@ -723,11 +726,10 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                     </span>
                     {selectedTimeStatus && (
                       <span
-                        className={`rescue-drawer-wait-pill ${
-                          isOpenStatus(selected.status) && selectedTimeStatus.isUrgent
+                        className={`rescue-drawer-wait-pill ${isOpenStatus(selected.status) && selectedTimeStatus.isUrgent
                             ? "is-urgent"
                             : ""
-                        }`}
+                          }`}
                       >
                         <FontAwesomeIcon icon={selectedTimeStatus.icon} /> {selectedTimeStatus.text}
                       </span>
@@ -822,7 +824,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                     </div>
 
                     {Array.isArray(selected.proof_images) &&
-                    selected.proof_images.length > 0 ? (
+                      selected.proof_images.length > 0 ? (
                       <div className="rescue-proof-gallery">
                         {selected.proof_images.map((img, idx) => {
                           const fullUrl = resolveProofImageUrl(img);

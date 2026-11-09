@@ -1741,11 +1741,17 @@
    ========================================================= */
 
 @media (max-width: 768px) {
-  /* Use dynamic viewport height so mobile browser address bars do not cut off */
-  .ecm-container {
+  /* Use dynamic viewport height only in map view; allow list/detail views to scroll naturally */
+  .ecm-container.in-map-view {
     height: 100vh;
     height: 100dvh;
     overflow: hidden;
+  }
+
+  .ecm-container.in-list-view {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
   }
 
   /* Single compact top bar combining title, toggle, filter trigger, and primary action */

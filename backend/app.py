@@ -94,6 +94,13 @@ def handle_500_error(e):
     return jsonify({"error": "Internal server error"}), 500
 
 
+@app.cli.command("init-db")
+def init_db():
+    """Create all database tables."""
+    db.create_all()
+    print("Database tables initialized successfully.")
+
+
 # =========================================================
 # STATIC UPLOADS FALLBACK & HOME
 # =========================================================

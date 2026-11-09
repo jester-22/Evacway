@@ -1,4 +1,4 @@
-const BASE_URL = "http://127.0.0.1:5000";
+const BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
 
 function getToken() {
   return localStorage.getItem("evacway_token");
@@ -115,6 +115,18 @@ export const api = {
   markNotificationRead: (id) =>
     request(`/api/notifications/${id}/read`, { method: "POST" }),
 
+  clearNotificationsByResource: (resourceType, resourceId) =>
+    request("/api/notifications/clear-resource", {
+      method: "POST",
+      body: JSON.stringify({
+        resource_type: resourceType,
+        resource_id: resourceId,
+      }),
+    }),
+
+  clearAllNotifications: () =>
+    request("/api/notifications", { method: "DELETE" }),
+
   getVapidPublicKey: () => request("/api/push/vapid-public-key"),
 
   savePushSubscription: (subscription) =>
@@ -211,6 +223,19 @@ export const api = {
   getAllowedCenterTypes: (centerId) =>
     request(`/api/evacuation-centers/${centerId}/allowed-center-types`),
 
+  downloadCenterTemplate: () => requestFile("/api/evacuation-centers/template"),
+
+  uploadCenters: (file) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request("/api/evacuation-centers/upload", {
+      method: "POST",
+      body: formData,
+    });
+  },
+
+  exportCenters: () => requestFile("/api/evacuation-centers/export"),
+
   getCheckInList: (params = {}) => {
     const searchParams = new URLSearchParams();
     Object.entries(params).forEach(([key, val]) => {
@@ -221,6 +246,28 @@ export const api = {
     const qs = searchParams.toString();
     return request(`/api/evacuation-centers/check-in-list${qs ? `?${qs}` : ""}`);
   },
+
+  exportCheckInReport: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, val]) => {
+      if (val !== undefined && val !== null && val !== "") {
+        searchParams.set(key, val);
+      }
+    });
+    const qs = searchParams.toString();
+    return requestFile(`/api/evacuation-centers/check-in/report${qs ? `?${qs}` : ""}`);
+  },
+
+  getEvacuationSchedule: (centerId) => {
+    const qs = centerId && centerId !== "all" ? `?center_id=${centerId}` : "";
+    return request(`/api/evacuation-centers/schedule${qs}`);
+  },
+
+  updateEvacuationSchedule: (payload) =>
+    request("/api/evacuation-centers/schedule", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   updateEvacueeCheckIn: (centerId, data) =>
     request(`/api/evacuation-centers/${centerId}/check-in`, {

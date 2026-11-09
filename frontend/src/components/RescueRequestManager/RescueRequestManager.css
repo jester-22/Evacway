@@ -1305,7 +1305,7 @@
    ========================================================================== */
 @media (max-width: 1024px) {
   .rescue-stat-cards {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .rescue-request-card {
@@ -1314,45 +1314,200 @@
 }
 
 @media (max-width: 768px) {
+  .rescue-queue-page {
+    padding: 14px 12px;
+    gap: 14px;
+  }
+
+  .rescue-queue-header {
+    gap: 10px;
+  }
+
+  .rescue-queue-title-area h1 {
+    font-size: 20px;
+  }
+
+  .rescue-queue-subtitle {
+    font-size: 12.5px;
+    margin-top: 4px;
+  }
+
+  /* Compact 2x2 KPI summary grid on mobile */
+  .rescue-stat-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .rescue-stat-card {
+    padding: 12px 14px;
+    gap: 8px;
+    border-radius: 12px;
+  }
+
+  .rescue-stat-label {
+    font-size: 12px;
+  }
+
+  .rescue-stat-icon-wrap {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+
+  .rescue-stat-value {
+    font-size: 22px;
+  }
+
+  .rescue-stat-hint {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Stack search bar & status filter tabs cleanly without vertical flex-basis bug */
+  .rescue-filter-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .rescue-search-wrapper {
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .rescue-search-input {
+    height: 42px;
+    min-height: 42px;
+    font-size: 14px;
+  }
+
+  .rescue-status-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
+  }
+
+  .rescue-status-tab {
+    justify-content: center;
+    padding: 6px 8px;
+    min-height: 38px;
+    font-size: 12px;
+    gap: 5px;
+  }
+
+  /* Mobile Rescue Alert Card:
+     Row 1: Icon + Requester Identity (full width)
+     Row 2: Barangay, People/Photo pills & Description
+     Row 3: Status Badge (left) + Waiting/Resolved Timer (right) */
   .rescue-request-card {
-    grid-template-columns: 44px 1fr auto;
-    gap: 12px;
+    grid-template-columns: 40px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px 12px;
+    padding: 14px;
+    border-radius: 12px;
+  }
+
+  .rescue-row-icon-box {
+    grid-column: 1;
+    grid-row: 1;
+    width: 40px;
+    height: 40px;
+    font-size: 15px;
+  }
+
+  .rescue-row-ident-col {
+    grid-column: 2;
+    grid-row: 1;
   }
 
   .rescue-row-location-col {
-    grid-column: 2 / -1;
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .rescue-row-desc {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .rescue-row-status-col {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding-top: 10px;
+    border-top: 1px solid #f1f5f9;
+    white-space: normal;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .rescue-row-chevron {
     display: none;
   }
 
+  /* Mobile Drawer / Bottom Sheet */
+  .rescue-drawer-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+
+  .rescue-drawer {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92dvh;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .rescue-drawer-header {
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .rescue-drawer-header h2 {
+    font-size: 18px;
+  }
+
+  .rescue-drawer-body {
+    padding: 16px;
+  }
+
   .rescue-drawer-grid {
     grid-template-columns: 1fr;
+    gap: 12px;
   }
 
   .rescue-status-actions {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 }
 
 @media (max-width: 520px) {
   .rescue-stat-cards {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
-  .rescue-filter-toolbar {
-    flex-direction: column;
-    align-items: stretch;
+  .rescue-stat-card {
+    padding: 10px 12px;
+  }
+
+  .rescue-stat-value {
+    font-size: 20px;
   }
 
   .rescue-status-tabs {
-    width: 100%;
-    justify-content: stretch;
-  }
-
-  .rescue-status-tab {
-    flex: 1;
-    justify-content: center;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
   }
 }

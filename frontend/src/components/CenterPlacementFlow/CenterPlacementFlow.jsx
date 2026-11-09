@@ -254,8 +254,12 @@ export default function CenterPlacementFlow({
       onFootprintPointsChange(footprintPoints.slice(0, -1));
     } else if (step === "entrance" && entrancePoints.length > 0 && onEntrancePointsChange) {
       onEntrancePointsChange(entrancePoints.slice(0, -1));
-    } else if (step === "edit" && editPolygonPoints && editPolygonPoints.length > 0 && onEditPolygonPointsChange) {
-      onEditPolygonPointsChange(editPolygonPoints.slice(0, -1));
+    } else if (step === "edit") {
+      if (editPolygonPoints && editPolygonPoints.length > 3 && onEditPolygonPointsChange) {
+        onEditPolygonPointsChange(editPolygonPoints.slice(0, -1));
+      } else if (footprintPoints.length > 3 && onFootprintPointsChange) {
+        onFootprintPointsChange(footprintPoints.slice(0, -1));
+      }
     }
   }, [step, footprintPoints, entrancePoints, editPolygonPoints, onFootprintPointsChange, onEntrancePointsChange, onEditPolygonPointsChange]);
 
@@ -265,10 +269,17 @@ export default function CenterPlacementFlow({
       onFootprintPointsChange([]);
     } else if (step === "entrance" && entrancePoints.length > 0 && onEntrancePointsChange) {
       onEntrancePointsChange([]);
-    } else if (step === "edit" && editPolygonPoints && editPolygonPoints.length > 0 && onEditPolygonPointsChange) {
-      onEditPolygonPointsChange([]);
+    } else if (step === "edit") {
+      if (editPolygonPoints && editPolygonPoints.length > 0 && onEditPolygonPointsChange) {
+        onEditPolygonPointsChange([]);
+      } else if (footprintPoints.length > 0 && onFootprintPointsChange) {
+        onFootprintPointsChange([]);
+      }
+      if (onStepChange) {
+        onStepChange("footprint");
+      }
     }
-  }, [step, footprintPoints.length, entrancePoints.length, editPolygonPoints, onFootprintPointsChange, onEntrancePointsChange, onEditPolygonPointsChange]);
+  }, [step, footprintPoints.length, entrancePoints.length, editPolygonPoints, onFootprintPointsChange, onEntrancePointsChange, onEditPolygonPointsChange, onStepChange]);
 
   // Keyboard Shortcuts:
   // Escape asks "Discard this placement?" when any point exists
@@ -384,11 +395,11 @@ export default function CenterPlacementFlow({
   const canUndo =
     (step === "footprint" && footprintPoints.length > 0) ||
     (step === "entrance" && entrancePoints.length > 0) ||
-    (step === "edit" && editPolygonPoints && editPolygonPoints.length > 0);
+    (step === "edit" && activeEditPoints && activeEditPoints.length > 3);
   const canClear =
     (step === "footprint" && footprintPoints.length > 0) ||
     (step === "entrance" && entrancePoints.length > 0) ||
-    (step === "edit" && editPolygonPoints && editPolygonPoints.length > 0);
+    (step === "edit" && activeEditPoints && activeEditPoints.length > 0);
 
   // Stepper state numbers
   const stepIndex = step === "footprint" ? 1 : step === "entrance" ? 2 : step === "edit" ? 3 : 4;

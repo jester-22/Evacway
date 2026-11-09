@@ -27,6 +27,8 @@ from models import (
     EvacuationCenterBuilding,
     EvacuationCenterRoom,
     EvacuationCenter,
+    CenterType,
+    BuildingMaterial,
     SystemLog,
     RosterYear,
 )
@@ -69,7 +71,7 @@ families_bp = Blueprint('families', __name__)
 
 FAMILY_EXPORT_FIELDS = [
     'family_code', 'head_name', 'member_count', 'barangay',
-    'contact_number', 'address', 'evacuation_center',
+    'contact_number', 'address', 'evacuation_center', 'center_type',
     'buildings', 'rooms', 'assigned_members', 'evacuation_status',
 ]
 
@@ -327,6 +329,8 @@ def _family_list_rows(families):
             EvacuationCenterBuilding.name.label('building_name'),
             func.count(EvacuationAssignment.id),
             func.count(EvacuationAssignment.checked_in_at),
+            CenterType.name.label('center_type_name'),
+            BuildingMaterial.name.label('building_material_name'),
         )
         .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
         .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
@@ -337,6 +341,8 @@ def _family_list_rows(families):
                 EvacuationCenterRoom.evacuation_center_id == EvacuationCenter.id
             )
         )
+        .outerjoin(CenterType, EvacuationCenter.center_type_id == CenterType.id)
+        .outerjoin(BuildingMaterial, EvacuationCenter.building_material_id == BuildingMaterial.id)
         .outerjoin(EvacuationCenterBuilding, EvacuationCenterRoom.building_id == EvacuationCenterBuilding.id)
         .filter(Resident.family_id.in_(family_ids))
         .group_by(
@@ -348,6 +354,8 @@ def _family_list_rows(families):
             EvacuationCenterRoom.capacity,
             EvacuationCenterRoom.building_id,
             EvacuationCenterBuilding.name,
+            CenterType.name,
+            BuildingMaterial.name,
         )
         .all()
     )
@@ -363,12 +371,16 @@ def _family_list_rows(families):
         building_name,
         assigned_count,
         checked_in_count,
+        center_type_name,
+        building_material_name,
     ) in assignment_rows:
         c_in = int(checked_in_count or 0)
         resolved_b_name = (building_name or f'Building #{building_id}') if building_id else None
         assignments_by_family[family_id].append({
             'center_id': center_id,
             'center': center_name,
+            'center_type': center_type_name or 'Campus',
+            'building_material': building_material_name or '',
             'building_id': building_id,
             'building': resolved_b_name,
             'building_name': resolved_b_name,
@@ -402,6 +414,8 @@ def _family_list_rows(families):
             'remarks': (head_member.remarks if head_member and head_member.remarks else next((m.remarks for m in family_members if m.remarks), None)),
             'assignments': assignments,
             'evacuation_center': ', '.join(dict.fromkeys(item['center'] for item in assignments if item.get('center'))) or None,
+            'center_type': ', '.join(dict.fromkeys(item['center_type'] for item in assignments if item.get('center_type'))) or None,
+            'building_material': ', '.join(dict.fromkeys(item['building_material'] for item in assignments if item.get('building_material'))) or None,
             'buildings': ', '.join(dict.fromkeys((item['building'] or 'Unmapped') for item in assignments if item.get('building') or item.get('center'))) or None,
             'rooms': ', '.join(dict.fromkeys(str(item['room']) for item in assignments if item.get('room'))) or None,
             'current_center_id': primary_assignment['center_id'] if primary_assignment else None,
@@ -522,7 +536,7 @@ def list_families():
 
 
 @families_bp.route('/api/families/export', methods=['GET'])
-@role_required('admin', 'lgu_personnel')
+@role_required('admin')
 def export_families():
     export_format = request.args.get('format', 'xlsx').strip().lower()
     query = _family_query(
@@ -559,7 +573,7 @@ def export_families():
         'Member Name', 'Relationship', 'Date of Birth', 'Gender',
         'Is PWD', 'Disability Type', 'Is Pregnant', 'Is Lactating',
         'Solo Parent', 'Needs Assistance', 'Medical Notes',
-        'Evacuation Center', 'Building', 'Room', 'Evacuation Status'
+        'Evacuation Center', 'Center Type', 'Building Material', 'Building', 'Room', 'Evacuation Status'
     ]
     ws_residents.append(res_headers)
 
@@ -571,6 +585,8 @@ def export_families():
         f_contact = row.get('contact_number') or ''
         f_addr = row.get('address') or ''
         evac_center = row.get('evacuation_center') or 'Unassigned'
+        center_type = row.get('center_type') or '—'
+        building_material = row.get('building_material') or '—'
         buildings = row.get('buildings') or ''
         rooms = row.get('rooms') or ''
         status = row.get('evacuation_status') or 'unassigned'
@@ -591,21 +607,21 @@ def export_families():
                     'Yes' if m.get('is_solo_parent') else 'No',
                     'Yes' if m.get('needs_assistance') else 'No',
                     m.get('medical_notes') or '',
-                    evac_center, buildings, rooms, status
+                    evac_center, center_type, building_material, buildings, rooms, status
                 ])
         else:
             ws_residents.append([
                 f_code, h_name, b_name, f_contact, f_addr,
                 h_name, 'Head', '', '',
                 'No', '', 'No', 'No', 'No', 'No', '',
-                evac_center, buildings, rooms, status
+                evac_center, center_type, building_material, buildings, rooms, status
             ])
 
     # Sheet 2: Households Summary
     ws_households = wb.create_sheet('Households Summary')
     hh_headers = [
         'Family Code', 'Head of Family', 'Barangay', 'Contact Number', 'Address',
-        'Total Members', 'Assigned Members', 'Evacuation Center', 'Building', 'Room', 'Status'
+        'Total Members', 'Assigned Members', 'Evacuation Center', 'Center Type', 'Building', 'Room', 'Status'
     ]
     ws_households.append(hh_headers)
 
@@ -619,6 +635,7 @@ def export_families():
             row.get('member_count') or 0,
             row.get('assigned_members') or 0,
             row.get('evacuation_center') or 'Unassigned',
+            row.get('center_type') or '—',
             row.get('buildings') or '',
             row.get('rooms') or '',
             row.get('evacuation_status') or 'unassigned',
@@ -634,7 +651,7 @@ def export_families():
 
 
 @families_bp.route('/api/families/template', methods=['GET'])
-@role_required('admin', 'lgu_personnel')
+@role_required('admin')
 def download_family_template():
     workbook = Workbook()
     sheet = workbook.active

@@ -18,11 +18,13 @@
 
 .dm-root {
   width: 100%;
-  max-width: 1300px;
+  max-width: 100%;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 /* Header */
@@ -914,19 +916,27 @@
   gap: 8px;
 }
 
-/* Barangays Table */
-.dm-table-wrap {
+/* Tables & Table Wrappers */
+.dm-table-wrap,
+.dm-table-wrapper {
   width: 100%;
-  overflow-x: auto;
-  border-radius: 9px;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  border-radius: 12px;
   border: 1px solid var(--line, #e2e8f0);
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
 .dm-table {
   width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   text-align: left;
-  font-size: 13.5px;
+  font-size: 13px;
+  box-sizing: border-box;
 }
 
 .dm-table thead tr {
@@ -935,19 +945,42 @@
 }
 
 .dm-table th {
-  padding: 12px 16px;
+  padding: 10px 10px;
   font-weight: 700;
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted, #64748b);
+  background: #f8fafc;
+  white-space: normal;
+  line-height: 1.3;
+  vertical-align: middle;
+  box-sizing: border-box;
 }
 
 .dm-table td {
-  padding: 12px 16px;
+  padding: 10px 10px;
   border-bottom: 1px solid var(--line, #e2e8f0);
   color: var(--text-0, #0f172a);
   vertical-align: middle;
+  box-sizing: border-box;
+  word-break: break-word;
+  overflow: hidden;
+}
+
+.dm-nested-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.dm-nested-table th {
+  font-size: 10.5px;
+  padding: 8px 10px;
+}
+
+.dm-nested-table td {
+  font-size: 12px;
+  padding: 8px 10px;
 }
 
 .dm-table tbody tr:hover {
@@ -1292,11 +1325,12 @@
 }
 
 /* ==========================================================================
-   RESPONSIVE BREAKPOINTS
+   RESPONSIVE BREAKPOINTS (Tablet / Mobile <= 1024px)
+   Matches Sidebar drawer threshold so mobile cards take over seamlessly
    ========================================================================== */
-@media (max-width: 720px) {
+@media (max-width: 1024px) {
   .dm-page {
-    padding: 14px 16px;
+    padding: 12px 14px;
   }
 
   .dm-summary-grid {
@@ -1311,16 +1345,27 @@
     display: flex !important;
     flex-direction: column;
     gap: 12px;
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .dm-subtabs {
     width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .dm-subtabs::-webkit-scrollbar {
+    display: none;
   }
 
   .dm-subtab-btn {
-    flex: 1;
+    flex: 0 0 auto;
+    white-space: nowrap;
     justify-content: center;
-    padding: 10px 12px;
+    padding: 10px 14px;
     min-height: 44px;
     font-size: 13px;
   }
@@ -1498,12 +1543,19 @@
 .dm-meta-code-pill {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
-  color: var(--muted, #64748b);
+  font-weight: 600;
+  color: #475569;
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
-  padding: 2px 6px;
-  border-radius: 4px;
-  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 6px;
+  display: inline-block;
+  max-width: 125px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  letter-spacing: -0.01em;
 }
 
 .dm-meta-desc {
@@ -1702,3 +1754,302 @@
   color: var(--brand, #2563eb);
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
+
+/* Roster View Mode Tabs & Filter Controls */
+.dm-roster-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.dm-roster-toolbar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.dm-roster-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dm-roster-search-form {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 280px;
+  max-width: 440px;
+}
+
+.dm-roster-filter-selects {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dm-select-filter {
+  height: 38px;
+  padding: 0 32px 0 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
+  background-color: #ffffff;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.dm-select-filter:hover {
+  border-color: #94a3b8;
+}
+
+.dm-select-filter:focus {
+  border-color: var(--brand, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.dm-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: #f1f5f9;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s ease;
+}
+
+.dm-search-clear:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Enhanced Mobile Roster Cards */
+.dm-mobile-card-roster {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dm-mobile-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dm-mobile-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dm-mobile-card-name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-0, #0f172a);
+  line-height: 1.3;
+}
+
+.dm-mobile-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted, #64748b);
+}
+
+.dm-mobile-detail-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: #334155;
+  background: #f8fafc;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #f1f5f9;
+}
+
+.dm-mobile-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dm-mobile-detail-lbl {
+  color: var(--muted, #64748b);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.dm-mobile-detail-val {
+  font-weight: 600;
+  color: var(--text-0, #0f172a);
+  text-align: right;
+}
+
+.dm-mobile-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.dm-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 14px;
+  border-top: 1px solid var(--line, #e2e8f0);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 1024px) {
+  .dm-pagination-bar {
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .dm-pagination-bar > div {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+  .dm-year-stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 8px !important;
+  }
+
+  .dm-year-stat-card {
+    padding: 10px 12px !important;
+    gap: 8px !important;
+  }
+
+  .dm-year-stat-icon {
+    width: 34px !important;
+    height: 34px !important;
+    font-size: 14px !important;
+  }
+
+  .dm-year-stat-val {
+    font-size: 16px !important;
+  }
+
+  .dm-year-stat-lbl {
+    font-size: 10.5px !important;
+  }
+
+  .dm-roster-toolbar-top {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .dm-view-mode-tabs {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dm-view-mode-btn {
+    flex: 1;
+    justify-content: center;
+    padding: 8px 8px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .dm-roster-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .dm-roster-search-form {
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .dm-roster-filter-selects {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+  }
+
+  .dm-select-filter {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    font-size: 12.5px;
+    padding: 0 24px 0 10px;
+  }
+
+  .dm-year-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .dm-year-selector-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 600px) {
+  .dm-year-stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 6px !important;
+  }
+
+  .dm-year-stat-card {
+    padding: 8px 10px !important;
+    gap: 6px !important;
+  }
+
+  .dm-year-stat-val {
+    font-size: 15px !important;
+  }
+
+  .dm-year-stat-lbl {
+    font-size: 9.5px !important;
+  }
+
+  .dm-roster-filter-selects {
+    flex-direction: column;
+  }
+
+  .dm-select-filter {
+    min-width: 100%;
+  }
+}
+

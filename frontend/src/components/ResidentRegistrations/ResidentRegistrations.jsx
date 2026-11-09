@@ -12,7 +12,9 @@ import {
   faUserPlus,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../services/api";
+import { queryKeys } from "../../hooks/useEvacuationQueries";
 import CreateResidentAccountModal from "./CreateResidentAccountModal";
 import "./ResidentRegistrations.css";
 
@@ -87,11 +89,14 @@ function matchesAutosuggestRecord(resident, suggestion) {
   );
 }
 
-export default function ResidentRegistrations() {
+export default function ResidentRegistrations({ focusRegistrationId = null }) {
+  const queryClient = useQueryClient();
   const [activeStatus, setActiveStatus] = useState("pending");
   const [search, setSearch] = useState("");
   const [requests, setRequests] = useState([]);
+  const [allRequests, setAllRequests] = useState([]);
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
+  const handledFocusIdRef = useRef(null);
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -142,6 +147,7 @@ export default function ResidentRegistrations() {
       ]);
       if (requestNumber !== listRequestRef.current) return;
       setRequests(filtered.requests || []);
+      setAllRequests(all.requests || []);
       const nextCounts = { pending: 0, approved: 0, rejected: 0 };
       (all.requests || []).forEach((item) => {
         if (Object.hasOwn(nextCounts, item.status)) nextCounts[item.status] += 1;
@@ -163,9 +169,30 @@ export default function ResidentRegistrations() {
   }, [refreshKey, refreshList, search]);
 
   useEffect(() => {
+    if (focusRegistrationId == null) {
+      handledFocusIdRef.current = null;
+      return;
+    }
+    if (handledFocusIdRef.current === String(focusRegistrationId)) return;
+    const match = allRequests.find(
+      (item) => String(item.id) === String(focusRegistrationId)
+    );
+    if (!match) return;
+    handledFocusIdRef.current = String(focusRegistrationId);
+    if (match.status && match.status !== activeStatus) {
+      setActiveStatus(match.status);
+    }
+    openReview(match);
+  }, [focusRegistrationId, allRequests, activeStatus]);
+
+  useEffect(() => {
     if (!selectedRequest) return undefined;
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.showModal();
+
+    api.clearNotificationsByResource("resident_registration", selectedRequest.id)
+      .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
+      .catch(() => {});
 
     let active = true;
     api.getResidentRegistrationMatches(selectedRequest.id)

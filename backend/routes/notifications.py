@@ -39,17 +39,18 @@ def _notification_to_dict(notification, coordinates):
 @role_required('admin', 'lgu_personnel')
 def list_notifications():
     user_id = _current_user_id()
+    # Clean up any previously read notifications so they do not take up space
+    StaffNotification.query.filter_by(user_id=user_id, is_read=True).delete(synchronize_session=False)
+    db.session.commit()
+
     notifications = (
         StaffNotification.query
-        .filter_by(user_id=user_id)
+        .filter_by(user_id=user_id, is_read=False)
         .order_by(StaffNotification.created_at.desc(), StaffNotification.id.desc())
         .limit(50)
         .all()
     )
-    unread_count = StaffNotification.query.filter_by(
-        user_id=user_id,
-        is_read=False,
-    ).count()
+    unread_count = len(notifications)
 
     rescue_ids = {
         item.resource_id for item in notifications
@@ -84,13 +85,68 @@ def list_notifications():
 @notifications_bp.route('/api/notifications/<int:notification_id>/read', methods=['POST'])
 @role_required('admin', 'lgu_personnel')
 def mark_notification_read(notification_id):
+    user_id = _current_user_id()
     notification = StaffNotification.query.filter_by(
         id=notification_id,
-        user_id=_current_user_id(),
-    ).first_or_404()
-    notification.is_read = True
+        user_id=user_id,
+    ).first()
+    if notification:
+        resource_type = notification.resource_type
+        resource_id = notification.resource_id
+        if resource_type and resource_id is not None:
+            StaffNotification.query.filter_by(
+                user_id=user_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+            ).delete(synchronize_session=False)
+        else:
+            db.session.delete(notification)
+        db.session.commit()
+    return jsonify({'id': notification_id, 'is_read': True, 'removed': True})
+
+
+@notifications_bp.route('/api/notifications/clear-resource', methods=['POST'])
+@role_required('admin', 'lgu_personnel')
+def clear_notifications_by_resource():
+    user_id = _current_user_id()
+    data = request.get_json(silent=True) or {}
+    resource_type = data.get('resource_type')
+    resource_id = data.get('resource_id')
+    if not resource_type or resource_id is None:
+        return jsonify({'removed': 0})
+    try:
+        resource_id_int = int(resource_id)
+    except (TypeError, ValueError):
+        return jsonify({'removed': 0})
+
+    types = [resource_type]
+    if resource_type in ('resident_registration', 'resident_account'):
+        types = ['resident_registration', 'resident_account']
+
+    removed = (
+        StaffNotification.query
+        .filter(
+            StaffNotification.user_id == user_id,
+            StaffNotification.resource_type.in_(types),
+            StaffNotification.resource_id == resource_id_int,
+        )
+        .delete(synchronize_session=False)
+    )
     db.session.commit()
-    return jsonify({'id': notification.id, 'is_read': True})
+    return jsonify({'removed': removed})
+
+
+@notifications_bp.route('/api/notifications', methods=['DELETE'])
+@role_required('admin', 'lgu_personnel')
+def clear_all_notifications():
+    user_id = _current_user_id()
+    removed = (
+        StaffNotification.query
+        .filter_by(user_id=user_id)
+        .delete(synchronize_session=False)
+    )
+    db.session.commit()
+    return jsonify({'removed': removed})
 
 
 @notifications_bp.route('/api/push/vapid-public-key', methods=['GET'])

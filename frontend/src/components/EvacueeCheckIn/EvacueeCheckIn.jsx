@@ -21,7 +21,13 @@ import {
   faCircleExclamation,
   faHouseUser,
   faMapPin,
+  faFileExcel,
+  faCalendarDays,
+  faCalendarCheck,
+  faGear,
+  faDownload,
 } from "@fortawesome/free-solid-svg-icons";
+import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
 import "./EvacueeCheckIn.css";
 
@@ -40,6 +46,17 @@ export default function EvacueeCheckIn() {
   // Member Checklist Modal State
   const [modalFamily, setModalFamily] = useState(null);
   const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
+
+  // User auth & Evacuation Schedule / Report States
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const [exportingReport, setExportingReport] = useState(false);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleCenterId, setScheduleCenterId] = useState("all");
+  const [scheduleOpenDate, setScheduleOpenDate] = useState("");
+  const [scheduleStatus, setScheduleStatus] = useState("open");
+  const [scheduleEventName, setScheduleEventName] = useState("");
+  const [savingSchedule, setSavingSchedule] = useState(false);
 
   // Fetch check-in data
   const {
@@ -65,6 +82,73 @@ export default function EvacueeCheckIn() {
     total_partial: 0,
     total_pending: 0,
     occupancy_rate: 0,
+  };
+
+  const schedule = data?.evacuation_schedule || {
+    center_id: "all",
+    center_name: "All Evacuation Centers",
+    evacuation_open_date: null,
+    evacuation_status: "standby",
+    evacuation_event_name: "",
+  };
+
+  // Open Evacuation Schedule Modal
+  const handleOpenScheduleModal = () => {
+    setScheduleCenterId(selectedCenterId !== "all" ? selectedCenterId : "all");
+    setScheduleOpenDate(schedule?.evacuation_open_date || new Date().toISOString().split("T")[0]);
+    setScheduleStatus(schedule?.evacuation_status || "open");
+    setScheduleEventName(schedule?.evacuation_event_name || "");
+    setShowScheduleModal(true);
+  };
+
+  // Save Evacuation Schedule
+  const handleSaveSchedule = async (e) => {
+    e?.preventDefault();
+    try {
+      setSavingSchedule(true);
+      const res = await api.updateEvacuationSchedule({
+        center_id: scheduleCenterId,
+        evacuation_open_date: scheduleOpenDate || null,
+        evacuation_status: scheduleStatus,
+        evacuation_event_name: scheduleEventName.trim(),
+      });
+      queryClient.invalidateQueries({ queryKey: ["evacuee-check-in-list"] });
+      showToast(res?.message || "Evacuation schedule successfully saved.");
+      setShowScheduleModal(false);
+    } catch (err) {
+      showToast(err.message || "Failed to update evacuation schedule.");
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
+  // Export Evacuee Arrival Report (.xlsx)
+  const handleExportReport = async () => {
+    try {
+      setExportingReport(true);
+      const blob = await api.exportCheckInReport({
+        center_id: selectedCenterId,
+        status: filterStatus,
+        q: searchQuery,
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const centerObj = centers.find((c) => String(c.id) === String(selectedCenterId));
+      const centerSlug = centerObj ? centerObj.name.replace(/\s+/g, "_") : "All_Centers";
+      const dateSlug = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      a.download = `EvacWay-Arrival-Report-${centerSlug}-${dateSlug}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      showToast("Evacuee arrival report downloaded successfully.");
+    } catch (err) {
+      console.error("Failed to export check-in report:", err);
+      showToast(err.message || "Failed to download arrival report.");
+    } finally {
+      setExportingReport(false);
+    }
   };
 
   // Reset page when filters change
@@ -271,27 +355,90 @@ export default function EvacueeCheckIn() {
           <p>Verify and update resident arrival at assigned evacuation centers in real time.</p>
         </div>
 
-        {/* Top-Right By-Center Filter Dropdown */}
-        <div className="checkin-header-center-wrap">
-          <FontAwesomeIcon icon={faBuildingColumns} className="checkin-header-center-icon" />
-          <span className="checkin-header-center-label">Center:</span>
-          <select
-            id="checkin-center-filter-select"
-            className="checkin-header-center-select"
-            value={selectedCenterId}
-            onChange={(e) => setSelectedCenterId(e.target.value)}
-            aria-label="Filter evacuees by evacuation center"
+        <div className="checkin-header-actions">
+          {/* Top-Right By-Center Filter Dropdown */}
+          <div className="checkin-header-center-wrap">
+            <FontAwesomeIcon icon={faBuildingColumns} className="checkin-header-center-icon" />
+            <span className="checkin-header-center-label">Center:</span>
+            <select
+              id="checkin-center-filter-select"
+              className="checkin-header-center-select"
+              value={selectedCenterId}
+              onChange={(e) => setSelectedCenterId(e.target.value)}
+              aria-label="Filter evacuees by evacuation center"
+            >
+              <option value="all">All Evacuation Centers ({centers.length})</option>
+              {centers.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.checked_in}/{c.assigned} arrived)
+                </option>
+              ))}
+            </select>
+            <FontAwesomeIcon icon={faChevronDown} className="checkin-header-center-arrow" />
+          </div>
+
+          {/* Downloadable Report Button */}
+          <button
+            type="button"
+            className="checkin-export-btn"
+            onClick={handleExportReport}
+            disabled={exportingReport}
+            title="Download Excel arrival roster and shelter summary report"
           >
-            <option value="all">All Evacuation Centers ({centers.length})</option>
-            {centers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.checked_in}/{c.assigned} arrived)
-              </option>
-            ))}
-          </select>
-          <FontAwesomeIcon icon={faChevronDown} className="checkin-header-center-arrow" />
+            <FontAwesomeIcon icon={exportingReport ? faSpinner : faFileExcel} spin={exportingReport} />
+            <span>{exportingReport ? "Generating Report..." : "Export Arrival Report"}</span>
+          </button>
         </div>
       </header>
+
+      {/* Evacuation Operation Schedule Banner */}
+      <div className="checkin-schedule-banner">
+        <div className="checkin-schedule-info">
+          <div className="checkin-schedule-icon-wrap">
+            <FontAwesomeIcon icon={faCalendarCheck} className="checkin-schedule-icon" />
+          </div>
+          <div className="checkin-schedule-text">
+            <div className="checkin-schedule-heading">
+              <span className="checkin-schedule-label">Evacuation Operation:</span>
+              <strong>{schedule?.evacuation_event_name || "General Municipality Evacuation"}</strong>
+              <span className={`checkin-status-badge is-${schedule?.evacuation_status || "standby"}`}>
+                <span className="checkin-status-dot" />
+                {schedule?.evacuation_status === "open"
+                  ? "Open for Evacuation"
+                  : schedule?.evacuation_status === "closed"
+                  ? "Evacuation Closed"
+                  : "Standby / Scheduled"}
+              </span>
+            </div>
+            <div className="checkin-schedule-sub">
+              <span>
+                <strong>Scheduled Opening:</strong>{" "}
+                {schedule?.evacuation_open_date
+                  ? new Date(schedule.evacuation_open_date + "T00:00:00").toLocaleDateString(undefined, {
+                      year: "numeric",
+                      month: "long",
+                      day: "numeric",
+                    })
+                  : "No opening date set yet"}
+              </span>
+              <span className="checkin-schedule-divider">•</span>
+              <span>Scope: {selectedCenterId !== "all" ? centers.find(c => String(c.id) === String(selectedCenterId))?.name || "Selected Center" : "All Shelters"}</span>
+            </div>
+          </div>
+        </div>
+
+        {isAdmin && (
+          <button
+            type="button"
+            className="checkin-set-date-btn"
+            onClick={handleOpenScheduleModal}
+            title="Set opening date and operational status for evacuation"
+          >
+            <FontAwesomeIcon icon={faCalendarDays} />
+            <span>Set Evacuation Date</span>
+          </button>
+        )}
+      </div>
 
       {/* Sleek KPI Metric Strip */}
       <section className="checkin-stats-grid" aria-label="Check-In Statistics">
@@ -1071,6 +1218,168 @@ export default function EvacueeCheckIn() {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Set Evacuation Date & Status Modal */}
+      {showScheduleModal && (
+        <div className="checkin-modal-backdrop" onClick={() => !savingSchedule && setShowScheduleModal(false)}>
+          <div className="checkin-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "480px" }}>
+            <div className="checkin-modal-header">
+              <div className="checkin-modal-title-wrap">
+                <FontAwesomeIcon icon={faCalendarDays} style={{ color: "var(--brand, #2563eb)", fontSize: "18px" }} />
+                <h3>Set Evacuation Opening Date & Status</h3>
+              </div>
+              <button
+                type="button"
+                className="checkin-modal-close"
+                onClick={() => setShowScheduleModal(false)}
+                disabled={savingSchedule}
+                aria-label="Close"
+              >
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSchedule} className="checkin-modal-body" style={{ padding: "18px 22px" }}>
+              <p style={{ fontSize: "13px", color: "var(--muted, #64748b)", margin: "0 0 16px" }}>
+                Configure when evacuation centers officially open to receive evacuees. This schedule reflects across check-in rosters, reports, and resident advisories.
+              </p>
+
+              {/* Target Center */}
+              <div className="checkin-form-group">
+                <label className="checkin-form-label">Target Shelter / Facility</label>
+                <select
+                  className="checkin-form-input"
+                  value={scheduleCenterId}
+                  onChange={(e) => setScheduleCenterId(e.target.value)}
+                  disabled={savingSchedule}
+                >
+                  <option value="all">Apply to All Evacuation Centers ({centers.length})</option>
+                  {centers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Event Name */}
+              <div className="checkin-form-group">
+                <label className="checkin-form-label">Event or Disaster Advisory Name</label>
+                <input
+                  type="text"
+                  className="checkin-form-input"
+                  placeholder="e.g. Typhoon Pepito Pre-emptive Evacuation"
+                  value={scheduleEventName}
+                  onChange={(e) => setScheduleEventName(e.target.value)}
+                  disabled={savingSchedule}
+                />
+              </div>
+
+              {/* Opening Date */}
+              <div className="checkin-form-group">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                  <label className="checkin-form-label" style={{ margin: 0 }}>Evacuation Opening Date</label>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      type="button"
+                      className="checkin-shortcut-btn"
+                      onClick={() => setScheduleOpenDate(new Date().toISOString().split("T")[0])}
+                    >
+                      Today
+                    </button>
+                    <button
+                      type="button"
+                      className="checkin-shortcut-btn"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() + 1);
+                        setScheduleOpenDate(d.toISOString().split("T")[0]);
+                      }}
+                    >
+                      Tomorrow
+                    </button>
+                  </div>
+                </div>
+                <input
+                  type="date"
+                  className="checkin-form-input"
+                  value={scheduleOpenDate}
+                  onChange={(e) => setScheduleOpenDate(e.target.value)}
+                  disabled={savingSchedule}
+                  required
+                />
+              </div>
+
+              {/* Operational Status */}
+              <div className="checkin-form-group">
+                <label className="checkin-form-label">Operational Status</label>
+                <div className="checkin-status-options">
+                  <label className={`checkin-status-option ${scheduleStatus === "open" ? "is-selected" : ""}`}>
+                    <input
+                      type="radio"
+                      name="scheduleStatus"
+                      value="open"
+                      checked={scheduleStatus === "open"}
+                      onChange={(e) => setScheduleStatus(e.target.value)}
+                    />
+                    <div className="checkin-status-opt-text">
+                      <strong style={{ color: "#166534" }}>🟢 Open for Evacuation</strong>
+                      <span>Center is active and ready to check in arriving residents.</span>
+                    </div>
+                  </label>
+
+                  <label className={`checkin-status-option ${scheduleStatus === "standby" ? "is-selected" : ""}`}>
+                    <input
+                      type="radio"
+                      name="scheduleStatus"
+                      value="standby"
+                      checked={scheduleStatus === "standby"}
+                      onChange={(e) => setScheduleStatus(e.target.value)}
+                    />
+                    <div className="checkin-status-opt-text">
+                      <strong style={{ color: "#854d0e" }}>🟡 Standby / Scheduled</strong>
+                      <span>Facility is designated and on alert for the scheduled date.</span>
+                    </div>
+                  </label>
+
+                  <label className={`checkin-status-option ${scheduleStatus === "closed" ? "is-selected" : ""}`}>
+                    <input
+                      type="radio"
+                      name="scheduleStatus"
+                      value="closed"
+                      checked={scheduleStatus === "closed"}
+                      onChange={(e) => setScheduleStatus(e.target.value)}
+                    />
+                    <div className="checkin-status-opt-text">
+                      <strong style={{ color: "#475569" }}>⚪ Closed / Stand Down</strong>
+                      <span>Evacuation concluded or shelter not currently mobilized.</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="checkin-modal-footer" style={{ marginTop: "16px" }}>
+                <button
+                  type="button"
+                  className="checkin-modal-btn is-secondary"
+                  onClick={() => setShowScheduleModal(false)}
+                  disabled={savingSchedule}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="checkin-modal-btn is-primary"
+                  disabled={savingSchedule || !scheduleOpenDate}
+                >
+                  {savingSchedule && <FontAwesomeIcon icon={faSpinner} spin style={{ marginRight: "6px" }} />}
+                  {savingSchedule ? "Saving Schedule..." : "Save Evacuation Schedule"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

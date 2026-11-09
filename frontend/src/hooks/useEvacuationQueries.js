@@ -461,8 +461,9 @@ export function useNotifications(options = {}) {
   return useQuery({
     queryKey: queryKeys.notifications,
     queryFn: api.getNotifications,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
     ...options,
   });
 }

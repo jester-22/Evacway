@@ -6,6 +6,7 @@ import {
   faArrowRight,
   faCircleCheck,
   faUserCheck,
+  faUserPlus,
   faPersonWalking,
   faDoorOpen,
   faClock,
@@ -397,7 +398,23 @@ function Dashboard() {
   const [barangayMetric, setBarangayMetric] = useState("households");
   const [barangaySearch, setBarangaySearch] = useState("");
   const [centerFilter, setCenterFilter] = useState("all"); // "all" | "arrived" | "high" | "available"
-  const [activeFeedTab, setActiveFeedTab] = useState("rescue"); // "rescue" | "hazards"
+  const [activeFeedTab, setActiveFeedTab] = useState("rescue"); // "rescue" | "hazards" | "registrations"
+  const [pendingRegistrationsList, setPendingRegistrationsList] = useState([]);
+
+  const fetchPendingRegistrations = useCallback(async () => {
+    try {
+      const res = await api.getResidentRegistrations({ status: "pending" });
+      setPendingRegistrationsList(Array.isArray(res?.requests) ? res.requests : []);
+    } catch {
+      // Ignore errors
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPendingRegistrations();
+    const timer = window.setInterval(fetchPendingRegistrations, 15000);
+    return () => window.clearInterval(timer);
+  }, [fetchPendingRegistrations]);
 
   const [pushStatus, setPushStatus] = useState("checking");
   const [pushStripDismissed, setPushStripDismissed] = useState(() => {
@@ -476,6 +493,7 @@ function Dashboard() {
         refetchBarangays(),
         refetchHazardReports(),
         refetchRescueRequests(),
+        fetchPendingRegistrations(),
       ]);
     } finally {
       setIsRefreshing(false);
@@ -508,7 +526,13 @@ function Dashboard() {
     } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
       tab = "registrations";
     }
-    navigate(`${path}?tab=${tab}&notificationId=${notification.id}`);
+    const params = new URLSearchParams({
+      tab,
+      notificationId: String(notification.id),
+      resourceType: String(notification.resource_type || ""),
+      resourceId: String(notification.resource_id ?? ""),
+    });
+    navigate(`${path}?${params.toString()}`);
   }
 
   const todayFormatted = useMemo(() => {
@@ -664,6 +688,18 @@ function Dashboard() {
       });
     }
 
+    if (pendingRegistrationsList.length > 0) {
+      items.push({
+        id: "pending-registrations",
+        severity: "info",
+        icon: faUserPlus,
+        title: `${pendingRegistrationsList.length} Resident Sign-Up${pendingRegistrationsList.length > 1 ? "s" : ""} Awaiting Verification`,
+        subtitle: "New resident account registration requests pending review",
+        tab: "registrations",
+        action: "Review",
+      });
+    }
+
     if (unassignedFamilies > 0) {
       items.push({
         id: "unassigned-households",
@@ -695,7 +731,7 @@ function Dashboard() {
     });
 
     return items;
-  }, [stats, pendingArrivalFamilies, pendingResidents, openRescueCount, pendingHazardCount, unassignedFamilies]);
+  }, [stats, pendingArrivalFamilies, pendingResidents, openRescueCount, pendingHazardCount, pendingRegistrationsList.length, unassignedFamilies]);
 
   // All Barangays Demographic Data (Ranked & Filterable)
   const allBarangays = useMemo(() => {
@@ -792,7 +828,7 @@ function Dashboard() {
 
           {/* 1. EXECUTIVE COMMAND HEADER */}
           <header className="dashboard-card p-5 sm:p-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
                 <FontAwesomeIcon icon={faClock} className="text-slate-400 text-[11px]" />
                 <span>{todayFormatted}</span>
@@ -807,11 +843,11 @@ function Dashboard() {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 sm:gap-2.5 shrink-0">
               <button
                 type="button"
                 onClick={() => handleSectionChange("checkin")}
-                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-700 shadow-xs transition"
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-700 shadow-xs transition shrink-0"
               >
                 <FontAwesomeIcon icon={faUserCheck} />
                 <span>Evacuee Check-In Desk</span>
@@ -820,7 +856,7 @@ function Dashboard() {
               <button
                 type="button"
                 onClick={() => handleSectionChange("map")}
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-blue-700 shadow-xs transition"
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-blue-700 shadow-xs transition shrink-0"
               >
                 <FontAwesomeIcon icon={faMapLocationDot} />
                 <span>Map Operations</span>
@@ -831,7 +867,7 @@ function Dashboard() {
                 onClick={handleRefreshAll}
                 disabled={isRefreshing}
                 title="Sync all metrics now"
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition shadow-2xs"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition shadow-2xs min-w-[96px] shrink-0"
               >
                 <FontAwesomeIcon
                   icon={faArrowsRotate}
@@ -1378,6 +1414,17 @@ function Dashboard() {
                         >
                           Hazards ({hazardList.length})
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveFeedTab("registrations")}
+                          className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                            activeFeedTab === "registrations"
+                              ? "bg-white text-blue-700 shadow-2xs font-extrabold"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          Sign-Ups ({pendingRegistrationsList.length})
+                        </button>
                       </div>
                     </div>
 
@@ -1425,45 +1472,84 @@ function Dashboard() {
                             No emergency rescue requests on record.
                           </p>
                         )
-                      ) : hazardList.length > 0 ? (
-                        hazardList.slice(0, 5).map((hazard) => (
+                      ) : activeFeedTab === "hazards" ? (
+                        hazardList.length > 0 ? (
+                          hazardList.slice(0, 5).map((hazard) => (
+                            <div
+                              key={hazard.id}
+                              onClick={() => handleSectionChange("reports")}
+                              className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-100 bg-white hover:border-amber-200 hover:bg-slate-50/70 transition cursor-pointer"
+                            >
+                              <div className="min-w-0 space-y-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-slate-900 truncate uppercase">
+                                    {hazard.report_type || "Hazard Obstacle"}
+                                  </span>
+                                  <span className="text-slate-300">•</span>
+                                  <span className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
+                                    <FontAwesomeIcon icon={faClock} className="text-[9px]" />
+                                    {formatTimeAgo(hazard.submitted_at)}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-600 truncate max-w-md">
+                                  {hazard.description || "Field obstacle reported by community."}
+                                </p>
+                              </div>
+
+                              <span
+                                className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                                  hazard.status === "validated"
+                                    ? "bg-blue-50 text-blue-800 border-blue-200"
+                                    : hazard.status === "resolved"
+                                    ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                    : "bg-amber-50 text-amber-800 border-amber-200"
+                                }`}
+                              >
+                                {hazard.status || "Pending"}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-xs text-slate-500 font-medium">
+                            No hazard reports on record.
+                          </p>
+                        )
+                      ) : pendingRegistrationsList.length > 0 ? (
+                        pendingRegistrationsList.slice(0, 5).map((reg) => (
                           <div
-                            key={hazard.id}
-                            onClick={() => handleSectionChange("reports")}
-                            className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-100 bg-white hover:border-amber-200 hover:bg-slate-50/70 transition cursor-pointer"
+                            key={reg.id}
+                            onClick={() =>
+                              handleSectionChange("registrations", {
+                                resourceType: "resident_registration",
+                                resourceId: String(reg.id),
+                              })
+                            }
+                            className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-100 bg-white hover:border-blue-200 hover:bg-slate-50/70 transition cursor-pointer"
                           >
                             <div className="min-w-0 space-y-0.5">
                               <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold text-slate-900 truncate uppercase">
-                                  {hazard.report_type || "Hazard Obstacle"}
+                                <span className="text-xs font-bold text-slate-900 truncate">
+                                  {reg.full_name || `${reg.first_name || ""} ${reg.last_name || ""}`.trim()}
                                 </span>
                                 <span className="text-slate-300">•</span>
                                 <span className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
                                   <FontAwesomeIcon icon={faClock} className="text-[9px]" />
-                                  {formatTimeAgo(hazard.submitted_at)}
+                                  {formatTimeAgo(reg.created_at)}
                                 </span>
                               </div>
                               <p className="text-[11px] text-slate-600 truncate max-w-md">
-                                {hazard.description || "Field obstacle reported by community."}
+                                Brgy. {reg.barangay || "N/A"} · {reg.email || "Awaiting verification"}
                               </p>
                             </div>
 
-                            <span
-                              className={`shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                                hazard.status === "validated"
-                                  ? "bg-blue-50 text-blue-800 border-blue-200"
-                                  : hazard.status === "resolved"
-                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-                                  : "bg-amber-50 text-amber-800 border-amber-200"
-                              }`}
-                            >
-                              {hazard.status || "Pending"}
+                            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border bg-blue-50 text-blue-800 border-blue-200">
+                              Pending
                             </span>
                           </div>
                         ))
                       ) : (
                         <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-xs text-slate-500 font-medium">
-                          No hazard reports on record.
+                          No pending resident sign-ups awaiting verification.
                         </p>
                       )}
                     </div>

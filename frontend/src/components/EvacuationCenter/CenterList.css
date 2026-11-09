@@ -605,6 +605,12 @@
 
   .ec-table-wrapper {
     border-radius: var(--radius-card);
+    overflow-x: visible;
+  }
+
+  .ec-center-table {
+    display: block;
+    width: 100%;
   }
 
   .ec-center-table thead {
@@ -615,6 +621,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
+    padding: var(--space-3);
   }
 
   .ec-center-table tbody tr {
@@ -624,6 +631,7 @@
     border-radius: var(--radius-card);
     padding: var(--space-4);
     box-shadow: var(--shadow-sm);
+    position: relative;
   }
 
   .ec-center-table tbody tr:hover {
@@ -633,7 +641,7 @@
   .ec-center-table td {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
+    align-items: center;
     padding: var(--space-2) 0;
     border-bottom: 1px solid var(--neutral-soft);
     font-size: var(--text-sm);
@@ -655,7 +663,8 @@
     flex-shrink: 0;
   }
 
-  .ec-center-table td:last-child {
+  .ec-center-table td:last-child,
+  .ec-center-table td.ec-cell-status {
     border-bottom: none;
   }
 
@@ -663,7 +672,10 @@
   .ec-cell-center {
     flex-direction: column;
     align-items: flex-start;
+    text-align: left;
     gap: var(--space-1);
+    padding-top: 0;
+    padding-right: 40px;
   }
 
   .ec-cell-center::before {
@@ -672,6 +684,8 @@
 
   .ec-center-name {
     width: 100%;
+    text-align: left;
+    font-size: var(--text-base);
   }
 
   .ec-center-needs-mapping {
@@ -684,7 +698,7 @@
   }
 
   .ec-barangay-badges {
-    width: 100%;
+    flex: 1;
     justify-content: flex-end;
   }
 
@@ -714,27 +728,35 @@
     justify-content: space-between;
   }
 
-  .ec-occupancy-assigned,
+  .ec-occupancy-assigned {
+    text-align: left;
+  }
+
   .ec-occupancy-checkedin {
-    flex: 1 1 auto;
+    text-align: right;
   }
 
   /* Status cell mobile */
   .ec-cell-status {
     flex-wrap: wrap;
+    padding-bottom: 0;
   }
 
   /* Actions cell mobile - button at top right of card */
   .ec-cell-actions {
     position: absolute;
-    top: var(--space-3);
-    right: var(--space-3);
-    padding: 0;
+    top: var(--space-2);
+    right: var(--space-2);
+    padding: 0 !important;
+    border-bottom: none !important;
+  }
+
+  .ec-cell-actions::before {
+    display: none;
   }
 
   .ec-center-row {
     position: relative;
-    padding-top: var(--space-8); /* make room for actions button */
   }
 
   .ec-cell-actions .ds-btn--icon {

@@ -3940,7 +3940,7 @@ const ResidentHome = () => {
   }
 
   // --------------------------------------------------
-  // Search (evacuation centers + barangays)
+  // Search (evacuation centers)
   // --------------------------------------------------
 
   useEffect(() => {
@@ -3952,14 +3952,14 @@ const ResidentHome = () => {
       return;
     }
 
-    const timeout = setTimeout(async () => {
+    const timeout = setTimeout(() => {
       setSearching(true);
 
       try {
         const results = [];
 
         /*
-         * Search evacuation centers already loaded on the map
+         * Search evacuation centers by name and served barangays
          */
         if (evacCenters?.features) {
           evacCenters.features.forEach((center) => {
@@ -3978,7 +3978,7 @@ const ResidentHome = () => {
                 type: "evacuation_center",
                 name,
                 subtitle: barangay
-                  ? `Evacuation Center - ${barangay}`
+                  ? `Evacuation Center • ${barangay}`
                   : "Evacuation Center",
                 feature: center,
               });
@@ -3986,63 +3986,14 @@ const ResidentHome = () => {
           });
         }
 
-        /*
-         * Search barangays using Mapbox
-         */
-        const encodedQuery = encodeURIComponent(query);
-
-        const centerLngLat = [SOGOD_CENTER[1], SOGOD_CENTER[0]];
-
-        const bbox =
-          `${SOGOD_BOUNDS[0][1]},${SOGOD_BOUNDS[0][0]},` +
-          `${SOGOD_BOUNDS[1][1]},${SOGOD_BOUNDS[1][0]}`;
-
-        const url =
-          `https://api.mapbox.com/search/geocode/v6/forward` +
-          `?q=${encodedQuery}` +
-          `&proximity=${centerLngLat[0]},${centerLngLat[1]}` +
-          `&bbox=${bbox}` +
-          `&limit=5` +
-          `&access_token=${mapboxgl.accessToken}`;
-
-        const response = await fetch(url);
-
-        if (response.ok) {
-          const data = await response.json();
-
-          const barangayResults = (data.features || [])
-            .filter((feature) => {
-              const name = feature.properties?.name || feature.text || "";
-
-              return (
-                /barangay/i.test(name) ||
-                /barangay/i.test(feature.properties?.name_preferred || "")
-              );
-            })
-            .map((feature) => ({
-              type: "barangay",
-              name:
-                feature.properties?.name_preferred ||
-                feature.properties?.name ||
-                feature.text ||
-                "Barangay",
-              subtitle: "Barangay",
-              center: feature.geometry?.coordinates,
-              bbox: feature.bbox,
-            }));
-
-          results.push(...barangayResults);
-        }
-
         setSearchResults(results.slice(0, 8));
       } catch (error) {
         console.error("Search error:", error);
-
         setSearchResults([]);
       } finally {
         setSearching(false);
       }
-    }, 350);
+    }, 150);
 
     return () => clearTimeout(timeout);
   }, [searchText, evacCenters]);
@@ -4089,6 +4040,7 @@ const ResidentHome = () => {
         }
       }
 
+      setSelectedCenter(feature);
       setSearchText(result.name);
       setShowSearchResults(false);
 
@@ -4682,8 +4634,8 @@ const ResidentHome = () => {
         )
       )}
 
-      {/* Top area: search (hidden during route preview & navigation so it does not block the card/bar) */}
-      {!navigationActive && !route && (
+      {/* Top area: search (hidden during route preview, navigation & building modal so it does not block the card/bar/modal) */}
+      {!navigationActive && !route && !buildingModalOpen && (
         <div className={`top-left-panel ${isMobile ? "compact" : ""}`}>
         <div className="resident-search-box">
           <FontAwesomeIcon
@@ -4721,9 +4673,9 @@ const ResidentHome = () => {
                 }
               }, 150);
             }}
-            placeholder="Search a place or barangay"
+            placeholder="Search evacuation center..."
             className="resident-search-input"
-            aria-label="Search a place or barangay"
+            aria-label="Search evacuation center"
           />
 
           {searching && (
@@ -4777,7 +4729,7 @@ const ResidentHome = () => {
           searchText.trim().length >= 2 &&
           searchResults.length === 0 && (
             <div className="resident-search-no-results">
-              No evacuation center or barangay found.
+              No evacuation center found.
             </div>
           )}
       </div>

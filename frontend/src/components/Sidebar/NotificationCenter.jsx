@@ -66,6 +66,42 @@ export default function NotificationCenter({ onSelect }) {
       return false;
     }
   });
+  const seenIdsRef = useRef(null);
+
+  useEffect(() => {
+    if (!notificationsQuery.isSuccess) return;
+    const currentIds = new Set(notifications.map((item) => item.id));
+    if (seenIdsRef.current === null) {
+      seenIdsRef.current = currentIds;
+      return;
+    }
+    const newlyArrived = notifications.filter(
+      (item) => !seenIdsRef.current.has(item.id)
+    );
+    seenIdsRef.current = currentIds;
+
+    if (
+      newlyArrived.length > 0 &&
+      "Notification" in window &&
+      Notification.permission === "granted"
+    ) {
+      newlyArrived.forEach((item) => {
+        try {
+          const browserNotif = new Notification(item.title || "EvacWay Notification", {
+            body: item.message || "",
+            tag: `evacway-notif-${item.id}`,
+          });
+          browserNotif.onclick = () => {
+            window.focus();
+            handleSelect(item);
+            browserNotif.close();
+          };
+        } catch {
+          // Ignore browser notification errors
+        }
+      });
+    }
+  }, [notifications, notificationsQuery.isSuccess]);
 
   useEffect(() => {
     function refreshWhenVisible() {
@@ -104,7 +140,7 @@ export default function NotificationCenter({ onSelect }) {
             setSubscription(existing);
             setPushState("active");
           }
-          api.savePushSubscription(existing.toJSON()).catch(() => {});
+          api.savePushSubscription(existing.toJSON()).catch(() => { });
           return;
         }
 
@@ -226,7 +262,7 @@ export default function NotificationCenter({ onSelect }) {
     setPushDismissed(true);
     try {
       sessionStorage.setItem(PUSH_DISMISSED_KEY, "true");
-    } catch {}
+    } catch { }
   }
 
   // Close notification panel on click outside or Escape
@@ -289,22 +325,62 @@ export default function NotificationCenter({ onSelect }) {
     };
   }, [open]);
 
+  function removeNotificationFromCache(notification) {
+    queryClient.setQueryData(queryKeys.notifications, (current) => {
+      if (!current) return current;
+      const nextList = (current.notifications || []).filter(
+        (item) =>
+          item.id !== notification.id &&
+          !(
+            notification.resource_type &&
+            notification.resource_id != null &&
+            item.resource_type === notification.resource_type &&
+            item.resource_id === notification.resource_id
+          )
+      );
+      return {
+        ...current,
+        notifications: nextList,
+        unread_count: nextList.length,
+      };
+    });
+  }
+
   async function handleSelect(notification) {
+    removeNotificationFromCache(notification);
+    setOpen(false);
+    if (typeof onSelect === "function") {
+      onSelect(notification);
+    }
     try {
       await api.markNotificationRead(notification.id);
-      queryClient.setQueryData(queryKeys.notifications, (current) => current ? {
-        ...current,
-        notifications: current.notifications?.map((item) => (
-          item.id === notification.id ? { ...item, is_read: true } : item
-        )),
-        unread_count: Math.max(0, (current.unread_count || 0) - (notification.is_read ? 0 : 1)),
-      } : current);
       await queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
     } catch {
-      // Navigation should still work if marking read fails temporarily.
+      // Navigation should still work if removing fails temporarily.
     }
-    setOpen(false);
-    onSelect(notification);
+  }
+
+  async function handleDismissOne(event, notification) {
+    event.stopPropagation();
+    removeNotificationFromCache(notification);
+    try {
+      await api.markNotificationRead(notification.id);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
+    } catch {
+      // Ignore temporary errors
+    }
+  }
+
+  async function handleClearAll() {
+    queryClient.setQueryData(queryKeys.notifications, (current) =>
+      current ? { ...current, notifications: [], unread_count: 0 } : current
+    );
+    try {
+      await api.clearAllNotifications();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
+    } catch {
+      // Ignore temporary errors
+    }
   }
 
   function renderNotificationIcon(notification) {
@@ -351,11 +427,23 @@ export default function NotificationCenter({ onSelect }) {
               <h2>Notifications</h2>
               <span className="notification-unread-pill">{unreadCount} unread</span>
             </div>
-            {isPushActive && (
-              <span className="notification-push-badge is-active" title="Push notifications active on this browser">
-                <FontAwesomeIcon icon={faCircleCheck} /> Push Active
-              </span>
-            )}
+            <div className="notification-head-right">
+              {notifications.length > 0 && (
+                <button
+                  type="button"
+                  className="notification-clear-all-btn"
+                  onClick={handleClearAll}
+                  title="Remove all notifications"
+                >
+                  Clear all
+                </button>
+              )}
+              {isPushActive && (
+                <span className="notification-push-badge is-active" title="Push notifications active on this browser">
+                  <FontAwesomeIcon icon={faCircleCheck} /> Push Active
+                </span>
+              )}
+            </div>
           </header>
 
           {/* Push Activation Prompt Banner (Hides once activated) */}
@@ -412,13 +500,19 @@ export default function NotificationCenter({ onSelect }) {
             ) : notifications.map((notification) => {
               const isResident = notification.resource_type === "resident_registration" || notification.resource_type === "resident_account";
               return (
-                <button
-                  type="button"
+                <div
                   key={notification.id}
-                  className={`notification-item ${notification.is_read ? "is-read" : "is-unread"} ${
-                    notification.is_emergency ? "is-emergency" : isResident ? "is-resident" : ""
-                  }`}
+                  className={`notification-item ${notification.is_read ? "is-read" : "is-unread"} ${notification.is_emergency ? "is-emergency" : isResident ? "is-resident" : ""
+                    }`}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => handleSelect(notification)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleSelect(notification);
+                    }
+                  }}
                 >
                   <span className="notification-item-icon">
                     {renderNotificationIcon(notification)}
@@ -428,8 +522,16 @@ export default function NotificationCenter({ onSelect }) {
                     <span>{notification.message}</span>
                     <small>{notification.created_at ? new Date(notification.created_at).toLocaleString() : ""}</small>
                   </span>
-                  {!notification.is_read && <span className="notification-unread-dot" aria-label="Unread" />}
-                </button>
+                  <button
+                    type="button"
+                    className="notification-item-dismiss"
+                    onClick={(e) => handleDismissOne(e, notification)}
+                    aria-label="Remove notification"
+                    title="Remove notification"
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
               );
             })}
           </div>

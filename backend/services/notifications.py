@@ -69,6 +69,8 @@ def send_staff_push_notifications(notifications):
         url = (
             f'{frontend_url}{dashboard}?tab={tab}'
             f'&notificationId={notification.id}'
+            f'&resourceType={notification.resource_type or ""}'
+            f'&resourceId={notification.resource_id if notification.resource_id is not None else ""}'
         )
         payload = json.dumps({
             'title': notification.title,

@@ -7,14 +7,29 @@ Usage:
     python create_admin.py
 """
 
+import os
+import sys
 from app import app
 from models import db, User
 from werkzeug.security import generate_password_hash
 
 with app.app_context():
-    email = input("Admin email: ").strip()
-    name = input("Admin name: ").strip()
-    password = input("Admin password: ").strip()
+    email = (os.environ.get("INITIAL_ADMIN_EMAIL") or "").strip()
+    name = (os.environ.get("INITIAL_ADMIN_NAME") or "EvacWay Admin").strip()
+    password = (os.environ.get("INITIAL_ADMIN_PASSWORD") or "").strip()
+
+    if not (email and password):
+        try:
+            if sys.stdin.isatty():
+                email = input("Admin email: ").strip()
+                name = input("Admin name: ").strip() or "EvacWay Admin"
+                password = input("Admin password: ").strip()
+            else:
+                print("Error: Set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD environment variables for non-interactive setup.")
+                sys.exit(1)
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            sys.exit(1)
 
     if User.query.filter_by(email=email).first():
         print("A user with that email already exists.")

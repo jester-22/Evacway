@@ -101,17 +101,37 @@ def get_center_buildings(center_id):
     buildings = EvacuationCenterBuilding.query.filter_by(evacuation_center_id=center_id).order_by(EvacuationCenterBuilding.id.asc()).all()
     features = []
 
+    center_poly = None
+    if center.geom is not None:
+        try:
+            center_poly = to_shape(center.geom)
+            if not center_poly.is_valid:
+                center_poly = center_poly.buffer(0)
+        except Exception:
+            center_poly = None
+
     # Parse and resolve any polygon overlaps non-destructively so no two buildings overlap
     raw_polys = {}
+    unmapped_any = False
     for b in buildings:
         try:
             if b.geom is not None:
                 poly = to_shape(b.geom)
                 if not poly.is_valid:
                     poly = poly.buffer(0)
+                if center_poly is None or not center_poly.buffer(1e-5).contains(poly):
+                    b.geom = None
+                    unmapped_any = True
+                    continue
                 raw_polys[b.id] = poly
         except Exception:
             continue
+
+    if unmapped_any:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     resolved_polys = {}
     for b in buildings:
@@ -285,6 +305,7 @@ def create_building(center_id):
 
     # Geometry is optional - building can be created without location and mapped later
     building_geom = None
+    poly_shape = None
     if geojson_geom and isinstance(geojson_geom, dict):
         try:
             poly_shape = shape(geojson_geom)
@@ -308,6 +329,16 @@ def create_building(center_id):
                 building_geom = from_shape(poly_shape, srid=4326)
         except Exception as e:
             return jsonify({"error": f"Invalid polygon coordinates: {str(e)}"}), 400
+
+    if building_geom is not None and poly_shape is not None and center.geom is not None:
+        try:
+            c_poly = to_shape(center.geom)
+            if not c_poly.is_valid:
+                c_poly = c_poly.buffer(0)
+            if not c_poly.buffer(1e-5).contains(poly_shape):
+                return jsonify({"error": "Building outline must stay inside the evacuation center boundary."}), 400
+        except Exception:
+            pass
 
     new_building = EvacuationCenterBuilding(
         evacuation_center_id=center_id,
@@ -353,13 +384,14 @@ def update_building(building_id):
         building.name = data['name'].strip() if data['name'] else None
 
     # Redraw polygon geometry if provided
+    updated_poly_shape = None
     if 'geometry' in data and data['geometry']:
         try:
             poly_shape = shape(data['geometry'])
             if not poly_shape.is_valid:
                 poly_shape = poly_shape.buffer(0)
             if poly_shape.geom_type == 'Polygon' and not poly_shape.is_empty:
-                building.geom = from_shape(poly_shape, srid=4326)
+                updated_poly_shape = poly_shape
         except Exception as e:
             return jsonify({"error": f"Invalid geometry: {str(e)}"}), 400
     elif 'coordinates' in data and data['coordinates']:
@@ -370,9 +402,22 @@ def update_building(building_id):
             if not poly_shape.is_valid:
                 poly_shape = poly_shape.buffer(0)
             if poly_shape.geom_type == 'Polygon' and not poly_shape.is_empty:
-                building.geom = from_shape(poly_shape, srid=4326)
+                updated_poly_shape = poly_shape
         except Exception as e:
             return jsonify({"error": f"Invalid polygon coordinates: {str(e)}"}), 400
+
+    if updated_poly_shape is not None:
+        center = building.evacuation_center or db.session.get(EvacuationCenter, building.evacuation_center_id)
+        if center and center.geom is not None:
+            try:
+                c_poly = to_shape(center.geom)
+                if not c_poly.is_valid:
+                    c_poly = c_poly.buffer(0)
+                if not c_poly.buffer(1e-5).contains(updated_poly_shape):
+                    return jsonify({"error": "Building outline must stay inside the evacuation center boundary."}), 400
+            except Exception:
+                pass
+        building.geom = from_shape(updated_poly_shape, srid=4326)
 
     # Sync room links if room_ids provided
     if 'room_ids' in data:

@@ -105,9 +105,9 @@ export default function CenterList({
       if (q && !name.includes(q) && !brgyNames.includes(q)) return false
       if (barangayFilter) {
         const ids = (Array.isArray(props.barangays) ? props.barangays : []).map(
-          (b) => (typeof b === 'string' ? b : b.id)
+          (b) => String(typeof b === 'string' ? b : b.id)
         )
-        if (!ids.includes(barangayFilter)) return false
+        if (!ids.includes(String(barangayFilter))) return false
       }
       if (quickFilter === 'needs-mapping') {
         if (!centerNeedsMapping(props)) return false
@@ -131,6 +131,7 @@ export default function CenterList({
   const handleClearFilters = useCallback(() => {
     setSearchQuery('')
     setBarangayFilter('')
+    setBarangayLocal('')
     setQuickFilter('all')
   }, [])
 
@@ -209,7 +210,6 @@ export default function CenterList({
           </p>
         </div>
         <div className="ec-list-controls">
-          
           {isAdmin && onAddCenter && (
             <button type="button" className="ds-btn ds-btn--primary" onClick={onAddCenter}>
               <FontAwesomeIcon icon={faPlus} /> Add Center
@@ -252,29 +252,16 @@ export default function CenterList({
 
       <div className="ec-table-card">
         <div className="ec-table-toolbar" role="toolbar" aria-label="Center list toolbar">
-          <div className="ec-toolbar-search" style={{ position: 'relative', flex: '1 1 260px', minWidth: '220px' }}>
+          <div className="ec-toolbar-search">
             <SearchInput
               value={searchQuery}
               onChange={setSearchQuery}
               placeholder="Search center or barangay…"
               ariaLabel="Search centers"
             />
-            {searchQuery && (
-              <button
-                type="button"
-                className="ds-btn ds-btn--icon ds-btn--ghost"
-                style={{ padding: 0, width: 'var(--control-height-sm)', height: 'var(--control-height-sm)', minWidth: 'var(--control-height-sm)' }}
-                onClick={() => {
-                  setSearchQuery('')
-                }}
-                aria-label="Clear search"
-              >
-                <FontAwesomeIcon icon={faXmark} size="xs" />
-              </button>
-            )}
           </div>
 
-          <div className="ec-toolbar-select" style={{ minWidth: '200px', position: 'relative' }}>
+          <div className="ec-toolbar-select">
             <button
               type="button"
               className="ds-select ec-barangay-select"
@@ -302,7 +289,8 @@ export default function CenterList({
                     aria-selected={!barangayLocal}
                     onClick={() => {
                       setBarangayLocal('')
-                      onBarangayChange('')
+                      setBarangayFilter('')
+                      onBarangayChange?.('')
                       setDropdownOpen(false)
                     }}
                   >
@@ -324,7 +312,8 @@ export default function CenterList({
                           aria-selected={barangayLocal === String(id)}
                           onClick={() => {
                             setBarangayLocal(name)
-                            onBarangayChange(String(id))
+                            setBarangayFilter(id)
+                            onBarangayChange?.(String(id))
                             setDropdownOpen(false)
                           }}
                         >

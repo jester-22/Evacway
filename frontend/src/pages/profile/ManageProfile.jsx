@@ -151,7 +151,13 @@ export default function ManageProfile() {
     } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
       tab = "registrations";
     }
-    navigate(`${path}?tab=${tab}&notificationId=${notification.id}`);
+    const params = new URLSearchParams({
+      tab,
+      notificationId: String(notification.id),
+      resourceType: String(notification.resource_type || ""),
+      resourceId: String(notification.resource_id ?? ""),
+    });
+    navigate(`${path}?${params.toString()}`);
   }
 
   // Personal Information Actions

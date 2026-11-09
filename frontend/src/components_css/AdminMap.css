@@ -4,6 +4,14 @@
    Follows Design System tokens: 14px text, 12px radius, 8px grid, >=44px buttons
    ========================================================= */
 
+/* Ensure dashboard-content has zero bottom padding/gap when hosting the map */
+.dashboard-content:has(.admin-map-page) {
+  padding-bottom: 0 !important;
+  overflow: hidden !important;
+  display: flex;
+  flex-direction: column;
+}
+
 .admin-map-page {
   position: relative;
   width: 100%;
@@ -19,9 +27,65 @@
   background-color: var(--bg, #f6f8fb);
 }
 
+.admin-map-page.is-full-view {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  z-index: 2000;
+}
+
 @media (max-width: 1024px) {
-  .admin-map-page {
+  .admin-map-page:not(.is-full-view) {
     height: calc(100dvh - 56px);
+  }
+}
+
+/* Full View Toggle Button (rendered alongside Layers button in top-right flex bar) */
+.admin-map-fullview-btn {
+  position: static;
+  height: 44px;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  font-family: var(--font-body, 'Public Sans', system-ui, sans-serif);
+  font-size: 13.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(14, 31, 58, 0.08);
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease, transform 120ms ease;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.admin-map-fullview-btn:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.admin-map-fullview-btn.is-active {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+
+.admin-map-fullview-btn.is-active:hover {
+  background: #1e293b;
+}
+
+@media (max-width: 768px) {
+  .admin-map-fullview-btn {
+    height: 38px;
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 12px;
+    gap: 6px;
   }
 }
 
@@ -1480,32 +1544,19 @@
   z-index: 1000;
   display: flex;
   align-items: center;
-  gap: 12px;
-  background: #0f172a;
+  gap: 14px;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(8px);
   color: #ffffff;
-  padding: 10px 16px;
-  border-radius: 12px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.35);
   font-size: 13.5px;
-  max-width: min(850px, calc(100% - 32px));
+  max-width: calc(100vw - 32px);
+  width: max-content;
   box-sizing: border-box;
   animation: buildingEditBarSlideDown 150ms ease-out;
-}
-
-@media (min-width: 769px) {
-  /* Default when panel is collapsed: centered leaving room for top-right layers */
-  .admin-map-building-edit-bar {
-    left: calc(50% - 40px);
-    transform: translateX(-50%);
-    max-width: min(820px, calc(100% - 180px));
-  }
-
-  /* When side panel is open, center over map area between panel (344px) and Layers button (140px) */
-  .admin-map-page:not(.is-panel-collapsed) .admin-map-building-edit-bar {
-    left: calc(344px + (100% - 344px - 140px) / 2);
-    transform: translateX(-50%);
-    max-width: min(720px, calc(100% - 344px - 150px));
-  }
 }
 
 @media (max-width: 768px) {
@@ -1517,6 +1568,7 @@
     transform: none;
     width: auto;
     max-width: calc(100% - 24px);
+    border-radius: 14px;
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
@@ -1525,6 +1577,7 @@
 
   .admin-map-building-edit-actions {
     justify-content: flex-end;
+    flex-wrap: wrap;
   }
 }
 
@@ -1544,19 +1597,22 @@
   align-items: center;
   gap: 8px;
   font-weight: 600;
+  padding-left: 4px;
+  white-space: nowrap;
   flex-shrink: 0;
 }
 
 .admin-map-building-edit-title svg {
-  font-size: 16px;
+  font-size: 15px;
+  color: #60a5fa;
 }
 
 .admin-map-building-edit-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-left: auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .admin-map-building-edit-btn {
@@ -1567,16 +1623,22 @@
   padding: 6px 12px;
   font-size: 12.5px;
   font-weight: 600;
-  border-radius: 8px;
+  border-radius: 999px;
   border: 1px solid transparent;
   cursor: pointer;
   transition: all 120ms ease;
   white-space: nowrap;
-  min-height: 36px;
+  min-height: 34px;
+  flex: 0 0 auto;
 }
 
-.admin-map-building-edit-btn:hover {
+.admin-map-building-edit-btn:hover:not(:disabled) {
   transform: translateY(-1px);
+}
+
+.admin-map-building-edit-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .admin-map-building-edit-btn:focus-visible {

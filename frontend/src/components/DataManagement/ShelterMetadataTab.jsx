@@ -16,6 +16,11 @@ import {
   faToggleOff,
   faTag,
   faInfoCircle,
+  faFileExcel,
+  faUpload,
+  faDownload,
+  faFileExport,
+  faCircleCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../../services/api";
 
@@ -94,6 +99,83 @@ export default function ShelterMetadataTab({ onNotify }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+
+  // Excel Bulk Operations State
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const [exportingCenters, setExportingCenters] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importResult, setImportResult] = useState(null);
+
+  // Download Center Template (.xlsx)
+  async function handleDownloadCenterTemplate() {
+    try {
+      setDownloadingTemplate(true);
+      const blob = await api.downloadCenterTemplate();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", "evacway-centers-template.xlsx");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      if (onNotify) onNotify("Downloaded Evacuation Centers Excel template.", "success");
+    } catch (err) {
+      console.error("Failed to download template:", err);
+      if (onNotify) onNotify(err.message || "Failed to download template.", "error");
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  }
+
+  // Export All Centers (.xlsx)
+  async function handleExportCenters() {
+    try {
+      setExportingCenters(true);
+      const blob = await api.exportCenters();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", "EvacWay-Evacuation-Centers.xlsx");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      if (onNotify) onNotify("Exported all evacuation centers to Excel.", "success");
+    } catch (err) {
+      console.error("Failed to export centers:", err);
+      if (onNotify) onNotify(err.message || "Failed to export centers.", "error");
+    } finally {
+      setExportingCenters(false);
+    }
+  }
+
+  // Upload Centers (.xlsx)
+  async function handleUploadCenters() {
+    if (!importFile) return;
+    try {
+      setImporting(true);
+      setImportError("");
+      setImportResult(null);
+      const res = await api.uploadCenters(importFile);
+      setImportResult(res);
+      if (onNotify) {
+        onNotify(
+          `Imported successfully: ${res.created_count || 0} created, ${res.updated_count || 0} updated.`,
+          "success"
+        );
+      }
+      fetchAllTables();
+    } catch (err) {
+      console.error("Failed to import centers:", err);
+      setImportError(err.message || "Failed to import evacuation centers.");
+    } finally {
+      setImporting(false);
+    }
+  }
 
   useEffect(() => {
     fetchAllTables();
@@ -297,6 +379,87 @@ export default function ShelterMetadataTab({ onNotify }) {
 
   return (
     <div className="dm-card dm-shelter-metadata">
+      {/* Evacuation Centers Excel Hub */}
+      <div
+        className="dm-center-excel-banner"
+        style={{
+          background: "linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%)",
+          border: "1px solid #bbf7d0",
+          borderRadius: "10px",
+          padding: "16px 18px",
+          marginBottom: "20px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "14px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <div
+            style={{
+              width: "42px",
+              height: "42px",
+              borderRadius: "10px",
+              background: "#dcfce7",
+              color: "#166534",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "18px",
+              flexShrink: 0,
+            }}
+          >
+            <FontAwesomeIcon icon={faFileExcel} />
+          </div>
+          <div>
+            <strong style={{ fontSize: "14px", color: "#14532d", display: "block" }}>
+              Evacuation Centers Excel Hub
+            </strong>
+            <span style={{ fontSize: "12.5px", color: "#166534" }}>
+              Bulk import or export shelters pre-linked with Center Types, Building Materials, and Amenities.
+            </span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="dm-btn dm-btn-secondary"
+            onClick={handleDownloadCenterTemplate}
+            disabled={downloadingTemplate}
+            style={{ fontSize: "12.5px", padding: "7px 13px" }}
+          >
+            <FontAwesomeIcon icon={downloadingTemplate ? faCircleNotch : faDownload} spin={downloadingTemplate} />
+            Download Center Template
+          </button>
+          <button
+            type="button"
+            className="dm-btn dm-btn-secondary"
+            onClick={handleExportCenters}
+            disabled={exportingCenters}
+            style={{ fontSize: "12.5px", padding: "7px 13px" }}
+          >
+            <FontAwesomeIcon icon={exportingCenters ? faCircleNotch : faFileExport} spin={exportingCenters} />
+            Export Centers (.xlsx)
+          </button>
+          <button
+            type="button"
+            className="dm-btn dm-btn-primary"
+            onClick={() => {
+              setImportModalOpen(true);
+              setImportFile(null);
+              setImportResult(null);
+              setImportError("");
+            }}
+            style={{ fontSize: "12.5px", padding: "7px 13px" }}
+          >
+            <FontAwesomeIcon icon={faUpload} />
+            Import Centers (.xlsx)
+          </button>
+        </div>
+      </div>
+
       {/* Header Info */}
       <div className="dm-card-header" style={{ alignItems: "flex-start" }}>
         <div>
@@ -766,6 +929,146 @@ export default function ShelterMetadataTab({ onNotify }) {
                 ) : (
                   "Confirm Remove"
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Evacuation Centers Modal */}
+      {importModalOpen && (
+        <div className="dm-modal-overlay" onClick={() => !importing && setImportModalOpen(false)}>
+          <div className="dm-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "560px" }}>
+            <div className="dm-modal-header">
+              <h3 className="dm-modal-title">
+                <FontAwesomeIcon icon={faUpload} style={{ marginRight: "8px", color: "var(--brand, #2563eb)" }} />
+                Import Evacuation Centers from Excel
+              </h3>
+              <button
+                type="button"
+                className="dm-modal-close"
+                onClick={() => !importing && setImportModalOpen(false)}
+                disabled={importing}
+              >
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
+            </div>
+
+            <div className="dm-modal-body">
+              <p style={{ fontSize: "13px", color: "#475569", marginBottom: "14px", lineHeight: 1.5 }}>
+                Upload an Excel spreadsheet (<strong>.xlsx</strong>) with your municipality's evacuation centers.
+                Center Types, Building Materials, Amenities, and Barangays will be matched automatically against your database.
+              </p>
+
+              {importError && (
+                <div className="dm-alert dm-alert-danger" style={{ marginBottom: "14px" }}>
+                  <FontAwesomeIcon icon={faTriangleExclamation} />
+                  <span>{importError}</span>
+                </div>
+              )}
+
+              {importResult && (
+                <div
+                  className="dm-alert dm-alert-success"
+                  style={{
+                    marginBottom: "14px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px",
+                    background: "#f0fdf4",
+                    borderColor: "#bbf7d0",
+                    color: "#166534",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700 }}>
+                    <FontAwesomeIcon icon={faCircleCheck} />
+                    <span>Import Completed Successfully!</span>
+                  </div>
+                  <div style={{ fontSize: "12.5px" }}>
+                    • <strong>{importResult.created_count}</strong> new center(s) created<br />
+                    • <strong>{importResult.updated_count}</strong> existing center(s) updated
+                  </div>
+                  {importResult.warnings && importResult.warnings.length > 0 && (
+                    <div style={{ marginTop: "6px", fontSize: "11.5px", color: "#854d0e", background: "#fef9c3", padding: "6px 8px", borderRadius: "6px" }}>
+                      <strong>Notices:</strong>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: "16px" }}>
+                        {importResult.warnings.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* File upload drag/select area */}
+              <div
+                style={{
+                  border: "2px dashed #cbd5e1",
+                  borderRadius: "10px",
+                  padding: "24px 16px",
+                  textAlign: "center",
+                  background: "#f8fafc",
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
+                }}
+                onClick={() => document.getElementById("ec-excel-file-input")?.click()}
+              >
+                <input
+                  id="ec-excel-file-input"
+                  type="file"
+                  accept=".xlsx, .xls"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setImportFile(f);
+                      setImportError("");
+                      setImportResult(null);
+                    }
+                  }}
+                />
+                <FontAwesomeIcon icon={faFileExcel} style={{ fontSize: "32px", color: "#16a34a", marginBottom: "8px" }} />
+                <div style={{ fontWeight: 600, fontSize: "14px", color: "#0f172a" }}>
+                  {importFile ? importFile.name : "Click to select Excel file (.xlsx)"}
+                </div>
+                <div style={{ fontSize: "12px", color: "#64748b", marginTop: "4px" }}>
+                  {importFile
+                    ? `${(importFile.size / 1024).toFixed(1)} KB`
+                    : "Supports .xlsx with Center Name, Capacity, Center Type, Building Material, Amenities"}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "12px" }}>
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-secondary"
+                  onClick={handleDownloadCenterTemplate}
+                  disabled={downloadingTemplate || importing}
+                  style={{ fontSize: "12px", padding: "5px 10px" }}
+                >
+                  <FontAwesomeIcon icon={faDownload} /> Need the template?
+                </button>
+              </div>
+            </div>
+
+            <div className="dm-modal-footer">
+              <button
+                type="button"
+                className="dm-btn dm-btn-secondary"
+                onClick={() => setImportModalOpen(false)}
+                disabled={importing}
+              >
+                {importResult ? "Close" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                className="dm-btn dm-btn-primary"
+                onClick={handleUploadCenters}
+                disabled={!importFile || importing}
+              >
+                {importing && <FontAwesomeIcon icon={faCircleNotch} spin />}
+                {importing ? "Importing..." : "Upload & Process"}
               </button>
             </div>
           </div>

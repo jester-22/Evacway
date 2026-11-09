@@ -19,6 +19,7 @@ from models import (
     Resident,
     ResidentRegistrationRequest,
     ResidentAccount,
+    StaffNotification,
     SystemLog,
     User,
     philippines_now,
@@ -343,12 +344,18 @@ def submit_resident_registration():
             event_type='resident_registration',
             resource_type='resident_registration',
             resource_id=registration.id,
-            title='Pending Resident Account Registration',
-            message=f'{resident_name} from Brgy. {fields["barangay"]} registered an account and is awaiting verification.',
+            title='New Resident Sign-Up',
+            message=f'{resident_name} from Brgy. {fields["barangay"]} signed up and is awaiting verification.',
             is_emergency=False,
         )
         db.session.commit()
-        send_staff_push_notifications(notifications)
+        try:
+            send_staff_push_notifications(notifications)
+        except Exception:
+            current_app.logger.exception(
+                'Push notification delivery failed for resident registration %s',
+                registration.id,
+            )
     except IntegrityError:
         db.session.rollback()
         return jsonify({'error': 'A registration with these details already exists.'}), 409
@@ -448,6 +455,10 @@ def approve_resident_registration(request_id):
         is_active=True,
     )
     db.session.add(account)
+    StaffNotification.query.filter_by(
+        resource_type='resident_registration',
+        resource_id=registration.id,
+    ).delete(synchronize_session=False)
     db.session.add(SystemLog(
         user_id=reviewer_id,
         action=f'Approved resident registration #{registration.id}',
@@ -492,6 +503,10 @@ def reject_resident_registration(request_id):
     registration.reviewed_by = reviewer_id
     registration.reviewed_at = philippines_now()
     registration.rejection_reason = reason
+    StaffNotification.query.filter_by(
+        resource_type='resident_registration',
+        resource_id=registration.id,
+    ).delete(synchronize_session=False)
     db.session.add(SystemLog(
         user_id=reviewer_id,
         action=f'Rejected resident registration #{registration.id}',

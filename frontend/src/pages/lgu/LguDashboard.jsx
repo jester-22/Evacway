@@ -18,12 +18,17 @@ import ResidentRegistrations from "../../components/ResidentRegistrations/Reside
 import EvacueeCheckIn from "../../components/EvacueeCheckIn/EvacueeCheckIn";
 
 function LguDashboard() {
-  const requestedTab = new URLSearchParams(location.search).get("tab");
-  const notificationId = new URLSearchParams(location.search).get("notificationId");
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const requestedTab = searchParams.get("tab");
+  const notificationId = searchParams.get("notificationId");
+  const resourceTypeParam = searchParams.get("resourceType");
+  const resourceIdParam = searchParams.get("resourceId");
   const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "checkin", "registrations", "settings"].includes(requestedTab) ? requestedTab : "centers");
   const [flashNotice, setFlashNotice] = useState(location.state?.flashMessage || "");
   const [focusedReportId, setFocusedReportId] = useState(null);
   const [focusedRescueId, setFocusedRescueId] = useState(null);
+  const [focusedRegistrationId, setFocusedRegistrationId] = useState(null);
   const { user, logout } = useAuth();
   const queryClient = useQueryClient();
   const notificationsQuery = useNotifications({ enabled: Boolean(notificationId) });
@@ -79,56 +84,70 @@ function LguDashboard() {
   }, [requestedTab, navigate]);
 
   useEffect(() => {
-    if (!notificationId) {
+    const focusKey = `${notificationId || ""}:${resourceTypeParam || ""}:${resourceIdParam || ""}`;
+    if (!notificationId && !resourceTypeParam && !resourceIdParam) {
       handledNotificationId.current = null;
       return;
     }
-    if (handledNotificationId.current === notificationId) return;
+    if (handledNotificationId.current === focusKey) return;
 
-    const notification = notificationsQuery.data?.notifications?.find(
-      (item) => String(item.id) === notificationId
-    );
-    if (!notification) return;
+    const notification = notificationId
+      ? notificationsQuery.data?.notifications?.find(
+          (item) => String(item.id) === notificationId
+        )
+      : null;
+
+    const resolvedResourceType = notification?.resource_type || resourceTypeParam;
+    const resolvedResourceId =
+      notification?.resource_id ?? (resourceIdParam ? Number(resourceIdParam) : null);
+
+    if (!resolvedResourceType) return;
 
     let cancelled = false;
     Promise.resolve().then(() => {
-      if (cancelled || handledNotificationId.current === notificationId) return;
+      if (cancelled || handledNotificationId.current === focusKey) return;
 
-      handledNotificationId.current = notificationId;
-      if (!notification.is_read) {
+      handledNotificationId.current = focusKey;
+      if (notification && !notification.is_read) {
         api.markNotificationRead(notification.id)
           .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
           .catch(() => {});
       }
-      if (notification.resource_type === "hazard_report") {
-        setFocusedReportId(notification.resource_id);
+      if (resolvedResourceType === "hazard_report") {
+        setFocusedReportId(resolvedResourceId);
         setFocusedRescueId(null);
+        setFocusedRegistrationId(null);
         setTab("reports");
-      } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
+      } else if (resolvedResourceType === "resident_registration" || resolvedResourceType === "resident_account") {
+        setFocusedRegistrationId(resolvedResourceId);
         setFocusedReportId(null);
         setFocusedRescueId(null);
         setTab("registrations");
       } else {
-        setFocusedRescueId(notification.resource_id);
+        setFocusedRescueId(resolvedResourceId);
         setFocusedReportId(null);
+        setFocusedRegistrationId(null);
         setTab("rescue");
       }
     });
     return () => { cancelled = true; };
-  }, [location.search, notificationId, notificationsQuery.data, queryClient]);
+  }, [location.search, notificationId, resourceTypeParam, resourceIdParam, notificationsQuery.data, queryClient]);
 
   function handleNotificationSelect(notification) {
     if (notification.resource_type === "hazard_report") {
       setFocusedReportId(notification.resource_id);
       setFocusedRescueId(null);
+      setFocusedRegistrationId(null);
       setTab("reports");
     } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
+      setFocusedRegistrationId(notification.resource_id);
       setFocusedReportId(null);
       setFocusedRescueId(null);
       setTab("registrations");
     } else {
       setFocusedRescueId(notification.resource_id);
       setFocusedReportId(null);
+      setFocusedRegistrationId(null);
       setTab("rescue");
     }
   }
@@ -235,7 +254,7 @@ function LguDashboard() {
           <EvacueeCheckIn />
         )}
 
-        {tab === "registrations" && <ResidentRegistrations />}
+        {tab === "registrations" && <ResidentRegistrations focusRegistrationId={focusedRegistrationId} />}
 
         {tab === "settings" && (
           <SystemAndLogs logs={logs} user={user} loading={logsQuery.isLoading} error={logsQuery.error?.message || ""} />

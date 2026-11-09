@@ -197,15 +197,15 @@ function DataManagement() {
       const members = Array.isArray(family.members) && family.members.length > 0
         ? family.members
         : [
-            {
-              id: `head-${family.id}`,
-              family_id: family.id,
-              full_name: family.head_name || "Head of Family",
-              relationship_to_head: "Household Head",
-              is_head_of_family: true,
-              contact_number: family.head_contact || family.contact_number,
-            },
-          ];
+          {
+            id: `head-${family.id}`,
+            family_id: family.id,
+            full_name: family.head_name || "Head of Family",
+            relationship_to_head: "Household Head",
+            is_head_of_family: true,
+            contact_number: family.head_contact || family.contact_number,
+          },
+        ];
       members.forEach((m) => {
         const computedAge = m.age != null ? m.age : calculateAge(m.date_of_birth);
         list.push({
@@ -566,6 +566,83 @@ function DataManagement() {
     }
   }
 
+  const [exportingCenters, setExportingCenters] = useState(false);
+
+  async function handleExportCenters() {
+    try {
+      setExportingCenters(true);
+      setErrorMsg("");
+      const blob = await api.exportCenters();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const today = new Date().toISOString().slice(0, 10);
+      link.setAttribute("download", `EvacWay_Evacuation_Centers_${today}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setSuccessMsg("Evacuation centers inventory exported successfully.");
+    } catch (err) {
+      console.error("Export centers failed:", err);
+      setErrorMsg(err.message || "Failed to export evacuation centers.");
+    } finally {
+      setExportingCenters(false);
+    }
+  }
+
+  // =========================================================================
+  // SUB-TAB: IMPORT EVACUATION CENTERS STATE & HANDLERS
+  // =========================================================================
+  const [downloadingCenterTemplate, setDownloadingCenterTemplate] = useState(false);
+  const [centerImportFile, setCenterImportFile] = useState(null);
+  const [centerUploading, setCenterUploading] = useState(false);
+  const [centerImportResult, setCenterImportResult] = useState(null);
+  const [centerImportError, setCenterImportError] = useState("");
+  const [centerDragActive, setCenterDragActive] = useState(false);
+  const [showCenterFormatModal, setShowCenterFormatModal] = useState(false);
+  const centerFileInputRef = useRef(null);
+
+  async function handleDownloadCenterTemplate() {
+    try {
+      setDownloadingCenterTemplate(true);
+      const blob = await api.downloadCenterTemplate();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", "EvacWay_Centers_Import_Template.xlsx");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setSuccessMsg("Evacuation centers template downloaded successfully.");
+    } catch (err) {
+      console.error("Download center template failed:", err);
+      setErrorMsg(err.message || "Failed to download center template.");
+    } finally {
+      setDownloadingCenterTemplate(false);
+    }
+  }
+
+  async function handleUploadCenterFile() {
+    if (!centerImportFile) return;
+    try {
+      setCenterUploading(true);
+      setCenterImportError("");
+      setCenterImportResult(null);
+      const res = await api.uploadCenters(centerImportFile);
+      setCenterImportResult(res);
+      setSuccessMsg(
+        `Centers processed successfully: ${res.created_count || 0} created, ${res.updated_count || 0} updated.`
+      );
+    } catch (err) {
+      console.error("Upload center file failed:", err);
+      setCenterImportError(err.message || "Failed to import evacuation centers.");
+    } finally {
+      setCenterUploading(false);
+    }
+  }
+
   // =========================================================================
   // SUB-TAB 2: BARANGAYS STATE
   // =========================================================================
@@ -864,141 +941,138 @@ function DataManagement() {
         </div>
 
         {/* Search, Filter & View Mode Controls */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "12px",
-            flexWrap: "wrap",
-            paddingTop: "4px",
-          }}
-        >
-          <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", flex: 1 }}>
-            {/* Search Form with Input & Button */}
-            <form
-              onSubmit={handleSearchSubmit}
-              style={{ display: "flex", gap: "8px", alignItems: "center", flex: 1, minWidth: "280px", maxWidth: "420px" }}
-            >
-              <div className="dm-search-wrap" style={{ flex: 1, position: "relative" }}>
-                <FontAwesomeIcon icon={faMagnifyingGlass} className="dm-search-icon" />
-                <input
-                  type="text"
-                  className="dm-search-input"
-                  value={searchInputText}
-                  onChange={(e) => handleSearchInputChange(e.target.value)}
-                  placeholder="Search by resident name, family code, address..."
-                />
-                {searchInputText && (
+        <div className="dm-roster-toolbar">
+          {/* Top Row: View Mode Tabs & Count Summary */}
+          <div className="dm-roster-toolbar-top">
+            <div className="dm-view-mode-tabs">
+              <button
+                type="button"
+                className={`dm-view-mode-btn ${yearViewMode === "residents" ? "is-active" : ""}`}
+                onClick={() => {
+                  setYearPage(1);
+                  setYearViewMode("residents");
+                }}
+              >
+                <FontAwesomeIcon icon={faUsers} />
+                <span>Residents ({filteredResidents.length.toLocaleString()})</span>
+              </button>
+              <button
+                type="button"
+                className={`dm-view-mode-btn ${yearViewMode === "households" ? "is-active" : ""}`}
+                onClick={() => {
+                  setYearPage(1);
+                  setYearViewMode("households");
+                }}
+              >
+                <FontAwesomeIcon icon={faHouseUser} />
+                <span>Households ({filteredFamilies.length.toLocaleString()})</span>
+              </button>
+              <button
+                type="button"
+                className={`dm-view-mode-btn ${yearViewMode === "overview" ? "is-active" : ""}`}
+                onClick={() => setYearViewMode("overview")}
+              >
+                <FontAwesomeIcon icon={faCalendarDays} />
+                <span>Years Overview ({years.length})</span>
+              </button>
+            </div>
+
+            <div style={{ fontSize: "12.5px", color: "var(--muted, #64748b)", fontWeight: 500 }}>
+              {yearViewMode === "residents"
+                ? `Showing ${paginatedResidents.length} of ${filteredResidents.length.toLocaleString()} residents`
+                : yearViewMode === "households"
+                  ? `Showing ${paginatedFamilies.length} of ${filteredFamilies.length.toLocaleString()} households`
+                  : `${years.length} Census Years`}
+            </div>
+          </div>
+
+          {/* Filter Bar: Live Search & Dropdowns */}
+          {yearViewMode !== "overview" && (
+            <div className="dm-roster-filter-bar">
+              <form onSubmit={handleSearchSubmit} className="dm-roster-search-form">
+                <div className="dm-search-wrap" style={{ flex: 1, position: "relative" }}>
+                  <FontAwesomeIcon icon={faMagnifyingGlass} className="dm-search-icon" />
+                  <input
+                    type="text"
+                    className="dm-search-input"
+                    value={searchInputText}
+                    onChange={(e) => handleSearchInputChange(e.target.value)}
+                    placeholder={
+                      yearViewMode === "households"
+                        ? "Search household head, family code, address..."
+                        : "Search resident name, family code, address..."
+                    }
+                  />
+                  {searchInputText && (
+                    <button
+                      type="button"
+                      className="dm-search-clear"
+                      onClick={handleSearchClear}
+                      title="Clear search"
+                    >
+                      <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                  )}
+                </div>
+              </form>
+
+              <div className="dm-roster-filter-selects">
+                {/* Barangay Filter Dropdown */}
+                <select
+                  value={yearBarangayFilter}
+                  onChange={(e) => {
+                    setYearPage(1);
+                    setYearBarangayFilter(e.target.value);
+                  }}
+                  className="dm-select-filter"
+                  aria-label="Filter by barangay"
+                >
+                  <option value="">All Barangays ({barangays.length})</option>
+                  {barangays.map((b) => (
+                    <option key={b.id} value={b.name}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Vulnerability / Special Needs Filter */}
+                <select
+                  value={yearVulnerabilityFilter}
+                  onChange={(e) => {
+                    setYearPage(1);
+                    setYearVulnerabilityFilter(e.target.value);
+                  }}
+                  className="dm-select-filter"
+                  aria-label="Filter by vulnerability"
+                >
+                  <option value="all">All Demographics</option>
+                  <option value="any_vulnerable">Any Special Needs / Vulnerable</option>
+                  <option value="pwd">PWD / Persons with Disability</option>
+                  <option value="pregnant">Pregnant / Lactating</option>
+                  <option value="senior">Senior Citizens (Age 60+)</option>
+                  <option value="assistance">Requires Assistance</option>
+                </select>
+
+                {(yearSearch || yearBarangayFilter || yearVulnerabilityFilter !== "all") && (
                   <button
                     type="button"
-                    className="dm-search-clear"
-                    onClick={handleSearchClear}
-                    title="Clear search"
+                    className="dm-btn dm-btn-secondary"
+                    style={{ height: "38px", padding: "0 12px", fontSize: "12.5px", gap: "6px" }}
+                    onClick={() => {
+                      handleSearchClear();
+                      setYearBarangayFilter("");
+                      setYearVulnerabilityFilter("all");
+                      setYearPage(1);
+                    }}
+                    title="Reset all filters"
                   >
                     <FontAwesomeIcon icon={faXmark} />
+                    Reset
                   </button>
                 )}
               </div>
-              <button
-                type="submit"
-                className="dm-btn dm-btn-primary"
-                style={{ padding: "8px 14px", fontSize: "13px", height: "38px", whiteSpace: "nowrap" }}
-                title="Search residents"
-              >
-                <FontAwesomeIcon icon={faMagnifyingGlass} />
-                Search
-              </button>
-            </form>
-
-            {/* Barangay Filter Dropdown */}
-            <select
-              value={yearBarangayFilter}
-              onChange={(e) => {
-                setYearPage(1);
-                setYearBarangayFilter(e.target.value);
-              }}
-              className="dm-form-group select"
-              style={{
-                padding: "8px 12px",
-                borderRadius: "8px",
-                border: "1px solid #cbd5e1",
-                fontSize: "13px",
-                color: "#334155",
-                background: "#ffffff",
-                minWidth: "160px",
-              }}
-              aria-label="Filter by barangay"
-            >
-              <option value="">All Barangays ({barangays.length})</option>
-              {barangays.map((b) => (
-                <option key={b.id} value={b.name}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-
-            {/* Vulnerability / Special Needs Filter */}
-            <select
-              value={yearVulnerabilityFilter}
-              onChange={(e) => {
-                setYearPage(1);
-                setYearVulnerabilityFilter(e.target.value);
-              }}
-              className="dm-form-group select"
-              style={{
-                padding: "8px 12px",
-                borderRadius: "8px",
-                border: "1px solid #cbd5e1",
-                fontSize: "13px",
-                color: "#334155",
-                background: "#ffffff",
-                minWidth: "180px",
-              }}
-              aria-label="Filter by vulnerability"
-            >
-              <option value="all">All Demographics</option>
-              <option value="any_vulnerable">Any Special Needs / Vulnerable</option>
-              <option value="pwd">PWD / Persons with Disability</option>
-              <option value="pregnant">Pregnant / Lactating Mothers</option>
-              <option value="senior">Senior Citizens (Age 60+)</option>
-              <option value="assistance">Requires Medical / Mobility Assistance</option>
-            </select>
-          </div>
-
-          {/* View Mode Toggle Tabs */}
-          <div className="dm-view-mode-tabs">
-            <button
-              type="button"
-              className={`dm-view-mode-btn ${yearViewMode === "residents" ? "is-active" : ""}`}
-              onClick={() => {
-                setYearPage(1);
-                setYearViewMode("residents");
-              }}
-            >
-              <FontAwesomeIcon icon={faUsers} />
-              <span>Residents ({filteredResidents.length})</span>
-            </button>
-            <button
-              type="button"
-              className={`dm-view-mode-btn ${yearViewMode === "households" ? "is-active" : ""}`}
-              onClick={() => {
-                setYearPage(1);
-                setYearViewMode("households");
-              }}
-            >
-              <FontAwesomeIcon icon={faHouseUser} />
-              <span>Households ({filteredFamilies.length})</span>
-            </button>
-            <button
-              type="button"
-              className={`dm-view-mode-btn ${yearViewMode === "overview" ? "is-active" : ""}`}
-              onClick={() => setYearViewMode("overview")}
-            >
-              <FontAwesomeIcon icon={faCalendarDays} />
-              <span>Years Overview ({years.length})</span>
-            </button>
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Error Message */}
@@ -1041,17 +1115,17 @@ function DataManagement() {
             </div>
           ) : (
             <>
-              <div className="dm-table-wrapper">
+              <div className="dm-table-wrapper dm-desktop-table">
                 <table className="dm-table">
                   <thead>
                     <tr>
-                      <th style={{ width: "110px" }}>Family Code</th>
-                      <th style={{ minWidth: "170px" }}>Resident Name</th>
-                      <th style={{ minWidth: "150px" }}>Barangay & Address</th>
-                      <th style={{ width: "130px" }}>Relationship</th>
-                      <th style={{ width: "110px" }}>Age & Gender</th>
-                      <th style={{ minWidth: "180px" }}>Special Needs & Health</th>
-                      <th style={{ minWidth: "160px" }}>Shelter Status</th>
+                      <th style={{ width: "12%" }}>Family Code</th>
+                      <th style={{ width: "19%" }}>Resident Name</th>
+                      <th style={{ width: "17%" }}>Barangay & Address</th>
+                      <th style={{ width: "11%" }}>Relationship</th>
+                      <th style={{ width: "11%" }}>Age & Gender</th>
+                      <th style={{ width: "16%" }}>Special Needs</th>
+                      <th style={{ width: "14%" }}>Shelter Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1061,27 +1135,31 @@ function DataManagement() {
                       return (
                         <tr key={r.id || `res-${idx}`}>
                           <td>
-                            <span className="dm-meta-code-pill" style={{ fontWeight: 700 }}>
+                            <span
+                              className="dm-meta-code-pill"
+                              title={r.family_code}
+                              style={{ fontWeight: 700 }}
+                            >
                               {r.family_code}
                             </span>
                           </td>
                           <td>
-                            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                                <strong style={{ fontSize: "13.5px", color: "var(--text-0, #0f172a)" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                                <strong style={{ fontSize: "13.5px", color: "var(--text-0, #0f172a)", whiteSpace: "normal", lineHeight: 1.35 }}>
                                   {r.full_name || [r.first_name, r.middle_name, r.last_name, r.suffix].filter(Boolean).join(" ") || "Unnamed"}
                                 </strong>
                                 {isHead && (
                                   <span
                                     className="dm-badge dm-badge-blue"
-                                    style={{ fontSize: "10.5px", padding: "1px 6px", fontWeight: 700 }}
+                                    style={{ fontSize: "10px", padding: "1px 6px", fontWeight: 700, flexShrink: 0 }}
                                   >
                                     HEAD
                                   </span>
                                 )}
                               </div>
                               {r.contact_number && (
-                                <span style={{ fontSize: "11.5px", color: "var(--muted, #64748b)" }}>
+                                <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>
                                   {r.contact_number}
                                 </span>
                               )}
@@ -1093,7 +1171,7 @@ function DataManagement() {
                                 {r.barangay_name || "—"}
                               </span>
                               {r.address && (
-                                <span style={{ fontSize: "11.5px", color: "var(--muted, #64748b)" }}>
+                                <span style={{ fontSize: "12px", color: "var(--muted, #64748b)", whiteSpace: "normal" }}>
                                   {r.address}
                                 </span>
                               )}
@@ -1105,15 +1183,15 @@ function DataManagement() {
                             </span>
                           </td>
                           <td>
-                            <div style={{ display: "flex", flexDirection: "column", gap: "1px", fontSize: "12.5px" }}>
-                              <span style={{ fontWeight: 600, color: "var(--text-0, #0f172a)" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                              <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-0, #0f172a)", whiteSpace: "nowrap" }}>
                                 {r.computed_age != null
                                   ? `${r.computed_age} yrs old`
                                   : r.age != null
-                                  ? `${r.age} yrs old`
-                                  : r.date_of_birth
-                                  ? `DOB: ${r.date_of_birth}`
-                                  : "—"}
+                                    ? `${r.age} yrs old`
+                                    : r.date_of_birth
+                                      ? `DOB: ${r.date_of_birth}`
+                                      : "—"}
                               </span>
                               <span style={{ fontSize: "12px", color: r.gender ? "var(--text-1, #334155)" : "var(--muted, #94a3b8)" }}>
                                 {r.gender || "Not specified"}
@@ -1201,18 +1279,161 @@ function DataManagement() {
                 </table>
               </div>
 
+              {/* Mobile Cards for Residents (< 768px) */}
+              <div className="dm-mobile-cards">
+                {paginatedResidents.map((r, idx) => {
+                  const isHead = Boolean(r.is_head_of_family);
+                  const isSenior = r.computed_age != null && r.computed_age >= 60;
+                  const name =
+                    r.full_name ||
+                    [r.first_name, r.middle_name, r.last_name, r.suffix].filter(Boolean).join(" ") ||
+                    "Unnamed";
+                  const ageGender = [
+                    r.computed_age != null
+                      ? `${r.computed_age} yrs old`
+                      : r.age != null
+                        ? `${r.age} yrs old`
+                        : r.date_of_birth
+                          ? `DOB: ${r.date_of_birth}`
+                          : null,
+                    r.gender || null,
+                  ]
+                    .filter(Boolean)
+                    .join(" • ");
+
+                  return (
+                    <div key={r.id || `res-m-${idx}`} className="dm-mobile-card-roster">
+                      <div className="dm-mobile-card-header">
+                        <div className="dm-mobile-card-title">
+                          <span className="dm-mobile-card-name">{name}</span>
+                          {isHead && (
+                            <span
+                              className="dm-badge dm-badge-blue"
+                              style={{ fontSize: "10px", padding: "1px 6px", fontWeight: 700 }}
+                            >
+                              HEAD
+                            </span>
+                          )}
+                        </div>
+                        {r.assignment_status === "Assigned" ? (
+                          <span className="dm-badge dm-badge-green" style={{ fontSize: "11px", flexShrink: 0 }}>
+                            <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
+                            Assigned
+                          </span>
+                        ) : (
+                          <span
+                            className="dm-badge"
+                            style={{ color: "var(--muted, #64748b)", background: "#f1f5f9", fontSize: "11px", flexShrink: 0 }}
+                          >
+                            Unassigned
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="dm-mobile-card-meta">
+                        <span className="dm-meta-code-pill" title={r.family_code}>
+                          {r.family_code}
+                        </span>
+                        <span>•</span>
+                        <span>{r.relationship_to_head || (isHead ? "Household Head" : "Member")}</span>
+                      </div>
+
+                      <div className="dm-mobile-detail-rows">
+                        <div className="dm-mobile-detail-row">
+                          <span className="dm-mobile-detail-lbl">Barangay & Address</span>
+                          <span className="dm-mobile-detail-val">
+                            {r.barangay_name || "—"}
+                            {r.address ? ` • ${r.address}` : ""}
+                          </span>
+                        </div>
+                        <div className="dm-mobile-detail-row">
+                          <span className="dm-mobile-detail-lbl">Age & Gender</span>
+                          <span className="dm-mobile-detail-val">{ageGender || "—"}</span>
+                        </div>
+                        {r.contact_number && (
+                          <div className="dm-mobile-detail-row">
+                            <span className="dm-mobile-detail-lbl">Contact</span>
+                            <span className="dm-mobile-detail-val">
+                              <a
+                                href={`tel:${r.contact_number}`}
+                                style={{ color: "var(--brand, #2563eb)", textDecoration: "none" }}
+                              >
+                                {r.contact_number}
+                              </a>
+                            </span>
+                          </div>
+                        )}
+                        {r.assignment_status === "Assigned" && (
+                          <div className="dm-mobile-detail-row">
+                            <span className="dm-mobile-detail-lbl">Assigned Shelter</span>
+                            <span className="dm-mobile-detail-val" style={{ color: "#166534" }}>
+                              {r.evacuation_center || "Center"}{r.rooms ? ` (${r.rooms})` : ""}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {(r.is_pwd || isSenior || r.is_pregnant || r.is_lactating || r.needs_assistance || r.medical_notes) && (
+                        <div className="dm-mobile-badges">
+                          {r.is_pwd && (
+                            <span className="dm-badge dm-badge-blue" style={{ fontSize: "11px" }}>
+                              <FontAwesomeIcon icon={faWheelchair} style={{ marginRight: "4px" }} />
+                              PWD{r.disability_type ? `: ${r.disability_type}` : ""}
+                            </span>
+                          )}
+                          {isSenior && (
+                            <span
+                              className="dm-badge"
+                              style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fde68a", fontSize: "11px" }}
+                            >
+                              <FontAwesomeIcon icon={faPersonWalkingWithCane} style={{ marginRight: "4px" }} />
+                              Senior (60+)
+                            </span>
+                          )}
+                          {r.is_pregnant && (
+                            <span
+                              className="dm-badge"
+                              style={{ background: "#fdf2f8", color: "#9d174d", borderColor: "#fbcfe8", fontSize: "11px" }}
+                            >
+                              <FontAwesomeIcon icon={faBaby} style={{ marginRight: "4px" }} />
+                              Pregnant
+                            </span>
+                          )}
+                          {r.is_lactating && (
+                            <span
+                              className="dm-badge"
+                              style={{ background: "#fdf4ff", color: "#86198f", borderColor: "#f0abfc", fontSize: "11px" }}
+                            >
+                              Lactating
+                            </span>
+                          )}
+                          {r.needs_assistance && (
+                            <span
+                              className="dm-badge"
+                              style={{ background: "#fff1f2", color: "#be123c", borderColor: "#fecdd3", fontSize: "11px" }}
+                            >
+                              Needs Assistance
+                            </span>
+                          )}
+                          {r.medical_notes && (
+                            <span
+                              className="dm-badge"
+                              title={r.medical_notes}
+                              style={{ background: "#f8fafc", color: "#475569", borderColor: "#cbd5e1", fontSize: "11px" }}
+                            >
+                              <FontAwesomeIcon icon={faNotesMedical} style={{ marginRight: "4px" }} />
+                              {r.medical_notes}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
               {/* Pagination */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  paddingTop: "14px",
-                  borderTop: "1px solid var(--line, #e2e8f0)",
-                  flexWrap: "wrap",
-                  gap: "10px",
-                }}
-              >
+              <div className="dm-pagination-bar">
                 <div style={{ fontSize: "13px", color: "var(--muted, #64748b)" }}>
                   Showing{" "}
                   <strong>
@@ -1279,17 +1500,17 @@ function DataManagement() {
             </div>
           ) : (
             <>
-              <div className="dm-table-wrapper">
+              <div className="dm-table-wrapper dm-desktop-table">
                 <table className="dm-table">
                   <thead>
                     <tr>
-                      <th style={{ width: "40px" }}></th>
-                      <th style={{ width: "120px" }}>Family Code</th>
-                      <th>Head of Household</th>
-                      <th>Barangay & Address</th>
-                      <th style={{ width: "100px" }}>Members</th>
-                      <th>Special Needs</th>
-                      <th>Shelter Status</th>
+                      <th style={{ width: "32px", textAlign: "center" }}></th>
+                      <th style={{ width: "14%" }}>Family Code</th>
+                      <th style={{ width: "22%" }}>Head of Household</th>
+                      <th style={{ width: "19%" }}>Barangay & Address</th>
+                      <th style={{ width: "10%" }}>Members</th>
+                      <th style={{ width: "17%" }}>Special Needs</th>
+                      <th style={{ width: "18%" }}>Shelter Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1318,7 +1539,11 @@ function DataManagement() {
                               />
                             </td>
                             <td>
-                              <span className="dm-meta-code-pill" style={{ fontWeight: 700 }}>
+                              <span
+                                className="dm-meta-code-pill"
+                                title={f.family_code}
+                                style={{ fontWeight: 700 }}
+                              >
                                 {f.family_code}
                               </span>
                             </td>
@@ -1382,14 +1607,14 @@ function DataManagement() {
                                     Registered Members of Family {f.family_code} ({members.length}):
                                   </div>
                                   <div style={{ background: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
-                                    <table className="dm-table" style={{ fontSize: "12.5px" }}>
+                                    <table className="dm-table dm-nested-table" style={{ fontSize: "12.5px" }}>
                                       <thead>
                                         <tr style={{ background: "#f1f5f9" }}>
-                                          <th>Member Name</th>
-                                          <th>Relationship</th>
-                                          <th>Age / Gender</th>
-                                          <th>Vulnerabilities & Needs</th>
-                                          <th>Medical / Remarks</th>
+                                          <th style={{ width: "28%" }}>Member Name</th>
+                                          <th style={{ width: "18%" }}>Relationship</th>
+                                          <th style={{ width: "18%" }}>Age / Gender</th>
+                                          <th style={{ width: "20%" }}>Vulnerabilities & Needs</th>
+                                          <th style={{ width: "16%" }}>Medical / Remarks</th>
                                         </tr>
                                       </thead>
                                       <tbody>
@@ -1450,18 +1675,204 @@ function DataManagement() {
                 </table>
               </div>
 
+              {/* Mobile Cards for Households (< 768px) */}
+              <div className="dm-mobile-cards">
+                {paginatedFamilies.map((f) => {
+                  const isExpanded = expandedHouseholdIds.has(f.id);
+                  const members = f.members || [];
+                  const vulnerableCount = members.filter(
+                    (m) =>
+                      m.is_pwd ||
+                      m.is_pregnant ||
+                      m.is_lactating ||
+                      m.needs_assistance ||
+                      (m.age != null && m.age >= 60)
+                  ).length;
+
+                  return (
+                    <div key={`fam-m-${f.id}`} className="dm-mobile-card-roster">
+                      <div className="dm-mobile-card-header">
+                        <div>
+                          <div className="dm-mobile-card-name">{f.head_name || "Head of Household"}</div>
+                          <div style={{ fontSize: "11.5px", color: "var(--muted, #64748b)", marginTop: "2px" }}>
+                            Household Head
+                          </div>
+                        </div>
+                        {f.assignment_status === "Assigned" ? (
+                          <span className="dm-badge dm-badge-green" style={{ fontSize: "11px", flexShrink: 0 }}>
+                            <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
+                            Assigned
+                          </span>
+                        ) : (
+                          <span
+                            className="dm-badge"
+                            style={{ color: "var(--muted, #64748b)", background: "#f1f5f9", fontSize: "11px", flexShrink: 0 }}
+                          >
+                            Unassigned
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="dm-mobile-card-meta">
+                        <span className="dm-meta-code-pill" title={f.family_code}>
+                          {f.family_code}
+                        </span>
+                        <span className="dm-badge dm-badge-blue" style={{ fontSize: "11px" }}>
+                          <FontAwesomeIcon icon={faUsers} style={{ marginRight: "4px" }} />
+                          {f.member_count ?? members.length ?? 0} members
+                        </span>
+                      </div>
+
+                      <div className="dm-mobile-detail-rows">
+                        <div className="dm-mobile-detail-row">
+                          <span className="dm-mobile-detail-lbl">Barangay</span>
+                          <span className="dm-mobile-detail-val">{f.barangay || "—"}</span>
+                        </div>
+                        {f.address && (
+                          <div className="dm-mobile-detail-row">
+                            <span className="dm-mobile-detail-lbl">Address</span>
+                            <span className="dm-mobile-detail-val">{f.address}</span>
+                          </div>
+                        )}
+                        {f.head_contact && (
+                          <div className="dm-mobile-detail-row">
+                            <span className="dm-mobile-detail-lbl">Contact</span>
+                            <span className="dm-mobile-detail-val">
+                              <a
+                                href={`tel:${f.head_contact}`}
+                                style={{ color: "var(--brand, #2563eb)", textDecoration: "none" }}
+                              >
+                                {f.head_contact}
+                              </a>
+                            </span>
+                          </div>
+                        )}
+                        <div className="dm-mobile-detail-row">
+                          <span className="dm-mobile-detail-lbl">Assigned Shelter</span>
+                          <span
+                            className="dm-mobile-detail-val"
+                            style={{ color: f.assignment_status === "Assigned" ? "#166534" : "var(--muted, #64748b)" }}
+                          >
+                            {f.assignment_status === "Assigned" ? (f.evacuation_center || "Assigned") : "Unassigned"}
+                          </span>
+                        </div>
+                        {vulnerableCount > 0 && (
+                          <div className="dm-mobile-detail-row">
+                            <span className="dm-mobile-detail-lbl">Special Needs</span>
+                            <span className="dm-mobile-detail-val" style={{ color: "#92400e" }}>
+                              <FontAwesomeIcon icon={faWheelchair} style={{ marginRight: "4px" }} />
+                              {vulnerableCount} vulnerable member{vulnerableCount === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Expandable Family Members Section */}
+                      {members.length > 0 && (
+                        <div style={{ marginTop: "4px" }}>
+                          <button
+                            type="button"
+                            className="dm-btn dm-btn-secondary"
+                            onClick={() => toggleHouseholdExpand(f.id)}
+                            style={{
+                              width: "100%",
+                              justifyContent: "space-between",
+                              fontSize: "12px",
+                              padding: "8px 12px",
+                              background: isExpanded ? "#f1f5f9" : "#ffffff",
+                            }}
+                          >
+                            <span>
+                              <FontAwesomeIcon icon={faUsers} style={{ marginRight: "6px" }} />
+                              {isExpanded ? "Hide Members" : `View ${members.length} Family Members`}
+                            </span>
+                            <FontAwesomeIcon icon={isExpanded ? faChevronDown : faChevronRight} style={{ fontSize: "11px" }} />
+                          </button>
+
+                          {isExpanded && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
+                              {members.map((m, mIdx) => {
+                                const mName =
+                                  m.full_name ||
+                                  [m.first_name, m.middle_name, m.last_name, m.suffix].filter(Boolean).join(" ") ||
+                                  "Member";
+                                return (
+                                  <div
+                                    key={m.id || mIdx}
+                                    style={{
+                                      padding: "8px 10px",
+                                      background: "#f8fafc",
+                                      borderRadius: "6px",
+                                      border: "1px solid #e2e8f0",
+                                      fontSize: "12px",
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        marginBottom: "4px",
+                                      }}
+                                    >
+                                      <strong>{mName}</strong>
+                                      {m.is_head_of_family && (
+                                        <span className="dm-badge dm-badge-blue" style={{ fontSize: "9.5px", padding: "1px 5px" }}>
+                                          HEAD
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div style={{ color: "var(--muted, #64748b)", fontSize: "11.5px", marginBottom: "4px" }}>
+                                      {m.relationship_to_head || "Member"} • {m.age != null ? `${m.age} yrs` : m.date_of_birth || "—"}{" "}
+                                      {m.gender ? `• ${m.gender}` : ""}
+                                    </div>
+                                    {(m.is_pwd || m.is_pregnant || m.needs_assistance || m.medical_notes) && (
+                                      <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "4px" }}>
+                                        {m.is_pwd && (
+                                          <span className="dm-badge dm-badge-blue" style={{ fontSize: "10px" }}>
+                                            PWD{m.disability_type ? `: ${m.disability_type}` : ""}
+                                          </span>
+                                        )}
+                                        {m.is_pregnant && (
+                                          <span
+                                            className="dm-badge"
+                                            style={{ background: "#fdf2f8", color: "#9d174d", fontSize: "10px" }}
+                                          >
+                                            Pregnant
+                                          </span>
+                                        )}
+                                        {m.needs_assistance && (
+                                          <span
+                                            className="dm-badge"
+                                            style={{ background: "#fff1f2", color: "#be123c", fontSize: "10px" }}
+                                          >
+                                            Assistance
+                                          </span>
+                                        )}
+                                        {m.medical_notes && (
+                                          <span
+                                            className="dm-badge"
+                                            style={{ background: "#f8fafc", color: "#475569", fontSize: "10px" }}
+                                          >
+                                            {m.medical_notes}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
               {/* Pagination */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  paddingTop: "14px",
-                  borderTop: "1px solid var(--line, #e2e8f0)",
-                  flexWrap: "wrap",
-                  gap: "10px",
-                }}
-              >
+              <div className="dm-pagination-bar">
                 <div style={{ fontSize: "13px", color: "var(--muted, #64748b)" }}>
                   Showing{" "}
                   <strong>
@@ -1502,87 +1913,171 @@ function DataManagement() {
           )
         ) : (
           /* VIEW 3: YEARS OVERVIEW */
-          <div className="dm-table-wrapper">
-            <table className="dm-table">
-              <thead>
-                <tr>
-                  <th style={{ width: "180px" }}>Census Year</th>
-                  <th style={{ width: "160px" }}>System Status</th>
-                  <th style={{ width: "180px" }}>Registered Households</th>
-                  <th style={{ width: "180px" }}>Registered Residents</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {years.map((y) => {
-                  const isSelected = Number(selectedRosterYear) === Number(y.year);
-                  return (
-                    <tr
-                      key={y.id || y.year}
-                      style={{ background: isSelected ? "#f0f7ff" : "transparent" }}
-                    >
-                      <td>
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <FontAwesomeIcon icon={faCalendarDays} style={{ color: isSelected ? "var(--brand, #2563eb)" : "#94a3b8" }} />
-                          <strong style={{ fontSize: "15px" }}>{y.year}</strong>
-                        </div>
-                      </td>
-                      <td>
-                        {y.is_active ? (
-                          <span className="dm-badge dm-badge-green">
-                            <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
-                            Active Census Year
-                          </span>
-                        ) : (
-                          <span className="dm-badge" style={{ color: "var(--muted, #64748b)", background: "#f1f5f9" }}>
-                            Archived Roster
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        <strong style={{ fontSize: "14px" }}>
-                          {(y.households ?? y.household_count ?? 0).toLocaleString()}
-                        </strong>{" "}
-                        <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>families</span>
-                      </td>
-                      <td>
-                        <strong style={{ fontSize: "14px", color: "var(--brand, #2563eb)" }}>
-                          {(y.residents ?? y.resident_count ?? 0).toLocaleString()}
-                        </strong>{" "}
-                        <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>residents</span>
-                      </td>
-                      <td>
-                        <div style={{ display: "flex", gap: "8px" }}>
-                          <button
-                            type="button"
-                            className="dm-btn dm-btn-primary"
-                            onClick={() => {
-                              handleSelectYear(y.year);
-                              setYearViewMode("residents");
-                            }}
-                            style={{ fontSize: "12px", padding: "6px 12px" }}
-                          >
-                            <FontAwesomeIcon icon={faUsers} />
-                            Inspect {y.year} Residents
-                          </button>
-                          <button
-                            type="button"
-                            className="dm-btn dm-btn-secondary"
-                            onClick={() => handleExportMasterlist(y.year)}
-                            disabled={exportingMasterlist}
-                            style={{ fontSize: "12px", padding: "6px 12px" }}
-                          >
-                            <FontAwesomeIcon icon={faFileExport} />
-                            Export Excel
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="dm-table-wrapper dm-desktop-table">
+              <table className="dm-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: "16%" }}>Census Year</th>
+                    <th style={{ width: "16%" }}>System Status</th>
+                    <th style={{ width: "24%" }}>Registered Households</th>
+                    <th style={{ width: "24%" }}>Registered Residents</th>
+                    <th style={{ width: "20%" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {years.map((y) => {
+                    const isSelected = Number(selectedRosterYear) === Number(y.year);
+                    return (
+                      <tr
+                        key={y.id || y.year}
+                        style={{ background: isSelected ? "#f0f7ff" : "transparent" }}
+                      >
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <FontAwesomeIcon icon={faCalendarDays} style={{ color: isSelected ? "var(--brand, #2563eb)" : "#94a3b8" }} />
+                            <strong style={{ fontSize: "15px" }}>{y.year}</strong>
+                          </div>
+                        </td>
+                        <td>
+                          {y.is_active ? (
+                            <span className="dm-badge dm-badge-green">
+                              <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
+                              Active Census Year
+                            </span>
+                          ) : (
+                            <span className="dm-badge" style={{ color: "var(--muted, #64748b)", background: "#f1f5f9" }}>
+                              Archived Roster
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <strong style={{ fontSize: "14px" }}>
+                            {(y.households ?? y.household_count ?? 0).toLocaleString()}
+                          </strong>{" "}
+                          <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>families</span>
+                        </td>
+                        <td>
+                          <strong style={{ fontSize: "14px", color: "var(--brand, #2563eb)" }}>
+                            {(y.residents ?? y.resident_count ?? 0).toLocaleString()}
+                          </strong>{" "}
+                          <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>residents</span>
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button
+                              type="button"
+                              className="dm-btn dm-btn-primary"
+                              onClick={() => {
+                                handleSelectYear(y.year);
+                                setYearViewMode("residents");
+                              }}
+                              style={{ fontSize: "12px", padding: "6px 12px" }}
+                            >
+                              <FontAwesomeIcon icon={faUsers} />
+                              Inspect {y.year} Residents
+                            </button>
+                            <button
+                              type="button"
+                              className="dm-btn dm-btn-secondary"
+                              onClick={() => handleExportMasterlist(y.year)}
+                              disabled={exportingMasterlist}
+                              style={{ fontSize: "12px", padding: "6px 12px" }}
+                            >
+                              <FontAwesomeIcon icon={faFileExport} />
+                              Export Excel
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Cards for Years Overview (< 768px) */}
+            <div className="dm-mobile-cards">
+              {years.map((y) => {
+                const isSelected = Number(selectedRosterYear) === Number(y.year);
+                return (
+                  <div
+                    key={y.id || y.year}
+                    className="dm-mobile-card-roster"
+                    style={{
+                      borderColor: isSelected ? "var(--brand, #2563eb)" : "var(--line, #e2e8f0)",
+                      background: isSelected ? "#f0f7ff" : "#ffffff",
+                    }}
+                  >
+                    <div className="dm-mobile-card-header">
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <FontAwesomeIcon
+                          icon={faCalendarDays}
+                          style={{ color: isSelected ? "var(--brand, #2563eb)" : "#94a3b8" }}
+                        />
+                        <span className="dm-mobile-card-name" style={{ fontSize: "16px" }}>
+                          Census Year {y.year}
+                        </span>
+                      </div>
+                      {y.is_active ? (
+                        <span className="dm-badge dm-badge-green" style={{ fontSize: "11px" }}>
+                          <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
+                          Active
+                        </span>
+                      ) : (
+                        <span
+                          className="dm-badge"
+                          style={{ color: "var(--muted, #64748b)", background: "#f1f5f9", fontSize: "11px" }}
+                        >
+                          Archived
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="dm-mobile-detail-rows">
+                      <div className="dm-mobile-detail-row">
+                        <span className="dm-mobile-detail-lbl">Households</span>
+                        <span className="dm-mobile-detail-val">
+                          {(y.households ?? y.household_count ?? 0).toLocaleString()} families
+                        </span>
+                      </div>
+                      <div className="dm-mobile-detail-row">
+                        <span className="dm-mobile-detail-lbl">Residents</span>
+                        <span className="dm-mobile-detail-val" style={{ color: "var(--brand, #2563eb)" }}>
+                          {(y.residents ?? y.resident_count ?? 0).toLocaleString()} residents
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                      <button
+                        type="button"
+                        className="dm-btn dm-btn-primary"
+                        onClick={() => {
+                          handleSelectYear(y.year);
+                          setYearViewMode("residents");
+                        }}
+                        style={{ flex: 1, justifyContent: "center", fontSize: "12px", padding: "8px 10px" }}
+                      >
+                        <FontAwesomeIcon icon={faUsers} />
+                        Inspect Residents
+                      </button>
+                      <button
+                        type="button"
+                        className="dm-btn dm-btn-secondary"
+                        onClick={() => handleExportMasterlist(y.year)}
+                        disabled={exportingMasterlist}
+                        style={{ fontSize: "12px", padding: "8px 12px" }}
+                      >
+                        <FontAwesomeIcon icon={faFileExport} />
+                        Export
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
     );
@@ -1615,6 +2110,17 @@ function DataManagement() {
             >
               <FontAwesomeIcon icon={faFileExcel} />
               Import Residents
+            </button>
+            <button
+              type="button"
+              className={`dm-subtab-btn ${activeSubtab === "import_centers" ? "is-active" : ""}`}
+              onClick={() => {
+                setActiveSubtab("import_centers");
+                setErrorMsg("");
+              }}
+            >
+              <FontAwesomeIcon icon={faBuilding} />
+              Import Centers
             </button>
             <button
               type="button"
@@ -1739,6 +2245,18 @@ function DataManagement() {
                   <FontAwesomeIcon icon={exportingMasterlist ? faCircleNotch : faFileExport} spin={exportingMasterlist} />
                   {exportingMasterlist ? "Exporting..." : "Export Area Masterlist"}
                 </button>
+
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-secondary"
+                  onClick={handleExportCenters}
+                  disabled={exportingCenters}
+                  title="Export all evacuation centers with their Center Types, Materials, and Amenities to Excel"
+                  style={{ fontSize: "13px", padding: "8px 14px", background: "#f0fdf4", borderColor: "#bbf7d0", color: "#166534" }}
+                >
+                  <FontAwesomeIcon icon={exportingCenters ? faCircleNotch : faBuilding} spin={exportingCenters} />
+                  {exportingCenters ? "Exporting..." : "Export Centers (.xlsx)"}
+                </button>
               </div>
             </div>
 
@@ -1839,19 +2357,17 @@ function DataManagement() {
                       </span>
                     </div>
                     <div
-                      className={`dm-summary-card ${
-                        hasErrors
+                      className={`dm-summary-card ${hasErrors
                           ? "is-status-error"
                           : canImport
-                          ? "is-status"
-                          : "is-status-muted"
-                      }`}
+                            ? "is-status"
+                            : "is-status-muted"
+                        }`}
                     >
                       <span className="dm-summary-label">File Check</span>
                       <span
-                        className={`dm-summary-status-text ${
-                          hasErrors ? "fail" : canImport ? "ok" : "muted"
-                        }`}
+                        className={`dm-summary-status-text ${hasErrors ? "fail" : canImport ? "ok" : "muted"
+                          }`}
                       >
                         <FontAwesomeIcon
                           icon={
@@ -1863,8 +2379,8 @@ function DataManagement() {
                         {hasErrors
                           ? "Needs Fixing"
                           : canImport
-                          ? "Ready to Import"
-                          : "Nothing New to Import"}
+                            ? "Ready to Import"
+                            : "Nothing New to Import"}
                       </span>
                     </div>
                   </div>
@@ -1983,21 +2499,21 @@ function DataManagement() {
                           reviewTab === "updated"
                             ? updatedHouseholds
                             : reviewTab === "new"
-                            ? newHouseholds
-                            : skippedHouseholds;
+                              ? newHouseholds
+                              : skippedHouseholds;
 
                         const trimmedSearch = reviewSearch.trim().toLowerCase();
                         const filteredRows = trimmedSearch
                           ? currentList.filter((f) => {
-                              const head = String(f.head_name || "").toLowerCase();
-                              const brgy = String(f.barangay || "").toLowerCase();
-                              const code = String(f.family_code || "").toLowerCase();
-                              return (
-                                head.includes(trimmedSearch) ||
-                                brgy.includes(trimmedSearch) ||
-                                code.includes(trimmedSearch)
-                              );
-                            })
+                            const head = String(f.head_name || "").toLowerCase();
+                            const brgy = String(f.barangay || "").toLowerCase();
+                            const code = String(f.family_code || "").toLowerCase();
+                            return (
+                              head.includes(trimmedSearch) ||
+                              brgy.includes(trimmedSearch) ||
+                              code.includes(trimmedSearch)
+                            );
+                          })
                           : currentList;
 
                         const PAGE_SIZE = 25;
@@ -2119,8 +2635,8 @@ function DataManagement() {
                                                       f.status === "skipped" || reviewTab === "skipped"
                                                         ? (f.existing_members?.length || f.member_count || 1)
                                                         : (f.status === "updated" || reviewTab === "updated")
-                                                        ? (f.existing_members?.length || 0)
-                                                        : 0;
+                                                          ? (f.existing_members?.length || 0)
+                                                          : 0;
                                                     if (count > 0) {
                                                       return (
                                                         <span className="dm-member-pill is-existing">
@@ -2251,6 +2767,186 @@ function DataManagement() {
         )}
 
         {/* =========================================================================
+            SUB-TAB: IMPORT EVACUATION CENTERS
+            ========================================================================= */}
+        {activeSubtab === "import_centers" && (
+          <div className="dm-card">
+            <div className="dm-import-intro">
+              <div className="dm-import-heading">
+                <h3>
+                  <FontAwesomeIcon icon={faBuilding} style={{ color: "var(--brand, #2563eb)", marginRight: "8px" }} />
+                  Excel Evacuation Centers Import
+                </h3>
+                <p>
+                  Bulk upload evacuation shelters (.xlsx) with Center Types, Building Materials, Amenities, and covered Barangays.
+                  Existing centers with matching names will be updated; new centers will be created as Active.
+                </p>
+              </div>
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-secondary"
+                  onClick={() => setShowCenterFormatModal(true)}
+                  title="View required columns and format guide"
+                  style={{ fontSize: "13px", padding: "8px 14px" }}
+                >
+                  <FontAwesomeIcon icon={faEye} />
+                  Format Guide & Columns
+                </button>
+
+                <button
+                  type="button"
+                  className="dm-template-btn"
+                  onClick={handleDownloadCenterTemplate}
+                  disabled={downloadingCenterTemplate}
+                  title="Download blank Excel template with database reference values"
+                >
+                  <FontAwesomeIcon icon={downloadingCenterTemplate ? faCircleNotch : faDownload} spin={downloadingCenterTemplate} />
+                  {downloadingCenterTemplate ? "Downloading..." : "Download Center Template"}
+                </button>
+
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-secondary"
+                  onClick={handleExportCenters}
+                  disabled={exportingCenters}
+                  title="Export all evacuation centers to Excel"
+                  style={{ fontSize: "13px", padding: "8px 14px", background: "#f0fdf4", borderColor: "#bbf7d0", color: "#166534" }}
+                >
+                  <FontAwesomeIcon icon={exportingCenters ? faCircleNotch : faFileExport} spin={exportingCenters} />
+                  {exportingCenters ? "Exporting..." : "Export Centers (.xlsx)"}
+                </button>
+              </div>
+            </div>
+
+            {centerImportError && (
+              <div className="dm-alert dm-alert-error" style={{ margin: "16px 0 0" }}>
+                <div className="dm-alert-content">
+                  <FontAwesomeIcon icon={faTriangleExclamation} />
+                  <span>{centerImportError}</span>
+                </div>
+                <button
+                  type="button"
+                  className="dm-alert-close"
+                  onClick={() => setCenterImportError("")}
+                  aria-label="Dismiss alert"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+            )}
+
+            {centerImportResult && (
+              <div
+                className="dm-alert dm-alert-success"
+                style={{
+                  margin: "16px 0 0",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "6px",
+                  background: "#f0fdf4",
+                  borderColor: "#bbf7d0",
+                  color: "#166534",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 700 }}>
+                  <FontAwesomeIcon icon={faCircleCheck} />
+                  <span>Centers Processed Successfully!</span>
+                </div>
+                <div style={{ fontSize: "13px" }}>
+                  • <strong>{centerImportResult.created_count}</strong> new evacuation center(s) created<br />
+                  • <strong>{centerImportResult.updated_count}</strong> existing center(s) updated with new data
+                </div>
+                {centerImportResult.warnings && centerImportResult.warnings.length > 0 && (
+                  <div style={{ marginTop: "6px", fontSize: "12px", color: "#854d0e", background: "#fef9c3", padding: "6px 10px", borderRadius: "6px" }}>
+                    <strong>Notices:</strong>
+                    <ul style={{ margin: "4px 0 0", paddingLeft: "16px" }}>
+                      {centerImportResult.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Drag & Drop File Upload Area */}
+            {!centerImportFile ? (
+              <div
+                className={`dm-dropzone ${centerDragActive ? "is-dragging" : ""}`}
+                onDragOver={(e) => { e.preventDefault(); setCenterDragActive(true); }}
+                onDragLeave={() => setCenterDragActive(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setCenterDragActive(false);
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) {
+                    setCenterImportFile(f);
+                    setCenterImportError("");
+                    setCenterImportResult(null);
+                  }
+                }}
+                onClick={() => centerFileInputRef.current?.click()}
+                style={{ marginTop: "20px" }}
+              >
+                <input
+                  ref={centerFileInputRef}
+                  type="file"
+                  accept=".xlsx, .xls"
+                  className="dm-file-input"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setCenterImportFile(f);
+                      setCenterImportError("");
+                      setCenterImportResult(null);
+                    }
+                  }}
+                />
+                <FontAwesomeIcon icon={faUpload} className="dm-dropzone-icon" />
+                <h4 className="dm-dropzone-title">Click to upload or drag & drop Evacuation Centers Excel</h4>
+                <p className="dm-dropzone-sub">Supports .xlsx or .xls files</p>
+              </div>
+            ) : (
+              <div className="dm-file-info" style={{ marginTop: "20px" }}>
+                <div className="dm-file-meta">
+                  <FontAwesomeIcon icon={faFileExcel} className="dm-file-icon" style={{ color: "#16a34a" }} />
+                  <div>
+                    <div className="dm-file-name">{centerImportFile.name}</div>
+                    <div className="dm-file-size">{(centerImportFile.size / 1024).toFixed(1)} KB</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-primary dm-btn-sm"
+                    onClick={handleUploadCenterFile}
+                    disabled={centerUploading}
+                  >
+                    <FontAwesomeIcon icon={centerUploading ? faCircleNotch : faUpload} spin={centerUploading} />
+                    {centerUploading ? "Uploading..." : "Process Import"}
+                  </button>
+                  <button
+                    type="button"
+                    className="dm-file-remove"
+                    onClick={() => {
+                      setCenterImportFile(null);
+                      setCenterImportResult(null);
+                      setCenterImportError("");
+                    }}
+                    disabled={centerUploading}
+                    title="Remove file"
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =========================================================================
             SUB-TAB 2: BARANGAYS
             ========================================================================= */}
         {activeSubtab === "barangays" && (
@@ -2269,7 +2965,7 @@ function DataManagement() {
               </div>
 
               <div className="dm-toolbar-actions">
-                
+
                 <button
                   type="button"
                   className="dm-btn dm-btn-primary"
@@ -2306,11 +3002,11 @@ function DataManagement() {
                   <table className="dm-table">
                     <thead>
                       <tr>
-                        <th>Barangay Name</th>
-                        <th>Population</th>
-                        <th>Registered Residents</th>
-                        <th>Linked Centers</th>
-                        <th className="dm-th-right">Actions</th>
+                        <th style={{ width: "30%" }}>Barangay Name</th>
+                        <th style={{ width: "18%" }}>Population</th>
+                        <th style={{ width: "20%" }}>Registered Residents</th>
+                        <th style={{ width: "18%" }}>Linked Centers</th>
+                        <th style={{ width: "14%" }} className="dm-th-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2623,6 +3319,122 @@ function DataManagement() {
                   >
                     <FontAwesomeIcon icon={faDownload} />
                     Download This Template
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            MODAL: CENTER EXCEL FORMAT PREVIEW & GUIDELINES
+            ========================================================================= */}
+        {showCenterFormatModal && (
+          <div className="dm-modal-overlay" onClick={() => setShowCenterFormatModal(false)}>
+            <div
+              className="dm-modal-card"
+              onClick={(e) => e.stopPropagation()}
+              style={{ maxWidth: "1050px", width: "95vw", maxHeight: "90vh", display: "flex", flexDirection: "column" }}
+            >
+              <div className="dm-modal-header" style={{ padding: "16px 24px", borderBottom: "1px solid #e2e8f0" }}>
+                <div>
+                  <h4 className="dm-modal-title" style={{ fontSize: "17px", fontWeight: "700", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <FontAwesomeIcon icon={faFileExcel} style={{ color: "#16a34a" }} />
+                    Evacuation Centers Excel Format & Column Specifications
+                  </h4>
+                  <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#64748b" }}>
+                    Structure: <strong>1 row per evacuation center</strong>. Center Types, Building Materials, and Amenities will be automatically mapped to your database.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="dm-modal-close"
+                  onClick={() => setShowCenterFormatModal(false)}
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+
+              <div className="dm-modal-body" style={{ overflowY: "auto", padding: "20px 24px" }}>
+                <div style={{ overflowX: "auto", border: "1px solid #cbd5e1", borderRadius: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px", textAlign: "left", whiteSpace: "nowrap" }}>
+                    <thead>
+                      <tr style={{ background: "#f1f5f9", borderBottom: "2px solid #cbd5e1" }}>
+                        <th style={{ padding: "10px 12px", color: "#b91c1c", fontWeight: "700" }}>Center Name *</th>
+                        <th style={{ padding: "10px 12px", color: "#0284c7", fontWeight: "700" }}>Barangays Served *</th>
+                        <th style={{ padding: "10px 12px", color: "#b91c1c", fontWeight: "700" }}>Capacity *</th>
+                        <th style={{ padding: "10px 12px", color: "#b91c1c", fontWeight: "700" }}>Center Type *</th>
+                        <th style={{ padding: "10px 12px", color: "#475569" }}>Building Material</th>
+                        <th style={{ padding: "10px 12px", color: "#7c3aed" }}>Amenities</th>
+                        <th style={{ padding: "10px 12px", color: "#475569" }}>Contact Number</th>
+                        <th style={{ padding: "10px 12px", color: "#475569" }}>Owner Name</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>Sogod Central School</td>
+                        <td style={{ padding: "8px 12px" }}>San Jose, Poblacion</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>450</td>
+                        <td style={{ padding: "8px 12px" }}>Campus</td>
+                        <td style={{ padding: "8px 12px" }}>Reinforced Concrete</td>
+                        <td style={{ padding: "8px 12px" }}>Wheelchair Ramp, PWD Restroom, Kitchen</td>
+                        <td style={{ padding: "8px 12px" }}>09171234567</td>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>—</td>
+                      </tr>
+                      <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>Municipal Gymnasium</td>
+                        <td style={{ padding: "8px 12px" }}>Poblacion</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>350</td>
+                        <td style={{ padding: "8px 12px" }}>Single Venue</td>
+                        <td style={{ padding: "8px 12px" }}>Steel Frame</td>
+                        <td style={{ padding: "8px 12px" }}>Wheelchair Ramp, Emergency Generator</td>
+                        <td style={{ padding: "8px 12px" }}>09181234567</td>
+                        <td style={{ padding: "8px 12px", color: "#94a3b8" }}>—</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>St. Joseph Parish Hall</td>
+                        <td style={{ padding: "8px 12px" }}>San Jose</td>
+                        <td style={{ padding: "8px 12px", fontWeight: "600" }}>120</td>
+                        <td style={{ padding: "8px 12px" }}>Private Property</td>
+                        <td style={{ padding: "8px 12px" }}>Reinforced Concrete</td>
+                        <td style={{ padding: "8px 12px" }}>Kitchen, Potable Water</td>
+                        <td style={{ padding: "8px 12px" }}>09191234567</td>
+                        <td style={{ padding: "8px 12px" }}>Diocese of Maasin</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ marginTop: "16px", padding: "14px 18px", background: "#f0fdf4", borderRadius: "8px", border: "1px solid #bbf7d0", fontSize: "13px", color: "#166534", lineHeight: "1.6" }}>
+                  <strong>🏢 Center Import Highlights:</strong>
+                  <ul style={{ margin: "6px 0 0", paddingLeft: "20px" }}>
+                    <li><strong>Automatic Upsert:</strong> If a center with the same name exists, its capacity, type, material, amenities, and barangays will be updated. Otherwise, a new shelter is created.</li>
+                    <li><strong>Pre-Loaded Reference Sheet:</strong> When you download the Excel template, Sheet 2 contains all active Center Types, Building Materials, Amenities, and registered Barangays currently in your database.</li>
+                    <li><strong>Map Ready:</strong> Newly imported centers are created as <em>Active</em> and are immediately ready for boundary placement or room tagging on the map.</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="dm-modal-footer" style={{ padding: "14px 24px", borderTop: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: "12px", color: "#64748b" }}>Supports standard Microsoft Excel (.xlsx) files.</span>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-secondary"
+                    onClick={() => setShowCenterFormatModal(false)}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    className="dm-btn dm-btn-primary"
+                    onClick={() => {
+                      setShowCenterFormatModal(false);
+                      handleDownloadCenterTemplate();
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faDownload} />
+                    Download Centers Template
                   </button>
                 </div>
               </div>

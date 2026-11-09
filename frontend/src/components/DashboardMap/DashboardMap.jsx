@@ -464,6 +464,85 @@ export function isPointInOrNearPolygon(point, polygonPoints, toleranceMeters = 1
   return false;
 }
 
+/**
+ * Checks whether a point is strictly inside or on the boundary of a polygon.
+ */
+export function isPointInPolygon(point, polygonPoints) {
+  return isPointInOrNearPolygon(point, polygonPoints, 0.1);
+}
+
+/**
+ * Checks whether two line segments (p1-p2) and (p3-p4) properly intersect.
+ */
+function doLineSegmentsIntersect(p1, p2, p3, p4) {
+  const x1 = Number(p1?.lng ?? p1?.longitude);
+  const y1 = Number(p1?.lat ?? p1?.latitude);
+  const x2 = Number(p2?.lng ?? p2?.longitude);
+  const y2 = Number(p2?.lat ?? p2?.latitude);
+  const x3 = Number(p3?.lng ?? p3?.longitude);
+  const y3 = Number(p3?.lat ?? p3?.latitude);
+  const x4 = Number(p4?.lng ?? p4?.longitude);
+  const y4 = Number(p4?.lat ?? p4?.latitude);
+
+  const ccw = (ax, ay, bx, by, cx, cy) =>
+    (cy - ay) * (bx - ax) - (by - ay) * (cx - ax);
+
+  const d1 = ccw(x3, y3, x4, y4, x1, y1);
+  const d2 = ccw(x3, y3, x4, y4, x2, y2);
+  const d3 = ccw(x1, y1, x2, y2, x3, y3);
+  const d4 = ccw(x1, y1, x2, y2, x4, y4);
+
+  if (((d1 > 1e-12 && d2 < -1e-12) || (d1 < -1e-12 && d2 > 1e-12)) &&
+      ((d3 > 1e-12 && d4 < -1e-12) || (d3 < -1e-12 && d4 > 1e-12))) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Validates that all vertices and edges of a building polygon stay strictly inside the center boundary polygon.
+ */
+export function isBuildingInsideCenter(buildingPoints, centerPoints, isClosed = true) {
+  if (!centerPoints || centerPoints.length < 3) return true;
+  if (!buildingPoints || buildingPoints.length === 0) return true;
+
+  // 1. Every building vertex must be inside the center polygon
+  for (let i = 0; i < buildingPoints.length; i++) {
+    if (!isPointInPolygon(buildingPoints[i], centerPoints)) {
+      return false;
+    }
+  }
+
+  if (buildingPoints.length < 2) return true;
+
+  // 2. Every building edge must stay inside the center polygon (no crossing center boundary edges or concave cutouts)
+  const edgeCount = isClosed && buildingPoints.length >= 3 ? buildingPoints.length : buildingPoints.length - 1;
+  for (let i = 0; i < edgeCount; i++) {
+    const a = buildingPoints[i];
+    const b = buildingPoints[(i + 1) % buildingPoints.length];
+    const ax = Number(a?.lng ?? a?.longitude);
+    const ay = Number(a?.lat ?? a?.latitude);
+    const bx = Number(b?.lng ?? b?.longitude);
+    const by = Number(b?.lat ?? b?.latitude);
+
+    // Check against every center boundary segment
+    for (let j = 0, k = centerPoints.length - 1; j < centerPoints.length; k = j++) {
+      if (doLineSegmentsIntersect(a, b, centerPoints[k], centerPoints[j])) {
+        return false;
+      }
+    }
+
+    // Check interior points along the edge (catches edges spanning concave notches)
+    for (const t of [0.25, 0.5, 0.75]) {
+      if (!isPointInPolygon({ lng: ax + (bx - ax) * t, lat: ay + (by - ay) * t }, centerPoints)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 function DashboardMap({
   centers,
   hazardZones,
@@ -499,6 +578,7 @@ function DashboardMap({
   hiddenBuildingId = null,
   onBasemapBuildingClick,
   onDoubleTapFinish,
+  topRightSlot = null,
   // Entrance edit mode props
   onEntranceDrag = null,
   // Building edit mode props
@@ -508,6 +588,8 @@ function DashboardMap({
   // Center edit polygon props
   editablePolygon = null,
   onEditablePolygonChange = null,
+  // Center boundary polygon (restricts building drawing/editing and room placement)
+  centerBoundaryPolygon = null,
 }) {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -583,6 +665,8 @@ function DashboardMap({
   const { rooms: loadedRooms } = useRoomsForCenters(centers);
   const { data: sogodBoundary = null } = useSogodBoundary();
   const sogodBoundaryRef = useRef(sogodBoundary);
+  const centerBoundaryRef = useRef(centerBoundaryPolygon);
+  centerBoundaryRef.current = centerBoundaryPolygon;
   sogodBoundaryRef.current = sogodBoundary;
   const { data: roads = null } = useRoadSegments();
 
@@ -1243,15 +1327,16 @@ function DashboardMap({
     if (buildingsGeoJSON) {
       try {
         initBuildingLayers(map, onBuildingClick);
-        // Filter out the building being edited so it doesn't show in the static layer
-        const filteredGeoJSON = editingBuildingId
-          ? {
-              ...buildingsGeoJSON,
-              features: (buildingsGeoJSON.features || []).filter(
-                (f) => Number(f.properties?.id ?? f.id) !== Number(editingBuildingId)
-              ),
-            }
-          : buildingsGeoJSON;
+        const hideBldId = hiddenBuildingId || editingBuildingId;
+        const filteredGeoJSON = {
+          ...buildingsGeoJSON,
+          features: (buildingsGeoJSON.features || []).filter((f) => {
+            if (!f.geometry || !f.geometry.coordinates) return false;
+            if (hideBldId && String(f.properties?.id ?? f.id) === String(hideBldId)) return false;
+            if (hiddenCenterId && String(f.properties?.evacuation_center_id) === String(hiddenCenterId)) return false;
+            return true;
+          }),
+        };
         setBuildingsGeoJSON(map, filteredGeoJSON);
         setSelectedBuilding(map, selectedBuildingId);
       } catch (e) {
@@ -2670,7 +2755,20 @@ function DashboardMap({
           }
         });
 
-        setBuildingsGeoJSON(map, buildingsGeoJSON);
+        const hideBldId = hiddenBuildingId || editingBuildingId;
+        const filteredGeoJSON = buildingsGeoJSON
+          ? {
+              ...buildingsGeoJSON,
+              features: (buildingsGeoJSON.features || []).filter((f) => {
+                if (!f.geometry || !f.geometry.coordinates) return false;
+                if (hideBldId && String(f.properties?.id ?? f.id) === String(hideBldId)) return false;
+                if (hiddenCenterId && String(f.properties?.evacuation_center_id) === String(hiddenCenterId)) return false;
+                return true;
+              }),
+            }
+          : buildingsGeoJSON;
+
+        setBuildingsGeoJSON(map, filteredGeoJSON);
         setSelectedBuilding(map, selectedBuildingId);
         ensureCenterOutlineLayers(map);
       } catch (e) {
@@ -2684,7 +2782,7 @@ function DashboardMap({
       map.once("style.load", applyBuildings);
       map.once("idle", applyBuildings);
     }
-  }, [mapLoaded, buildingsGeoJSON, styleVersion, onBuildingClick, selectedBuildingId]);
+  }, [mapLoaded, buildingsGeoJSON, styleVersion, onBuildingClick, selectedBuildingId, hiddenBuildingId, editingBuildingId, hiddenCenterId]);
 
 
 
@@ -2982,11 +3080,26 @@ function DashboardMap({
           }
           const newPoints = [...editablePolygon];
           newPoints[index] = point;
+          if (
+            centerBoundaryRef.current?.length >= 3 &&
+            !isBuildingInsideCenter(newPoints, centerBoundaryRef.current, true)
+          ) {
+            onOutsideOutlineClickRef.current?.();
+            handles.updatePositions(editablePolygon);
+            return;
+          }
           onEditablePolygonChange(newPoints, isFinal);
         },
         onVertexDelete: (index) => {
           if (editablePolygon.length > 3) {
             const newPoints = editablePolygon.filter((_, i) => i !== index);
+            if (
+              centerBoundaryRef.current?.length >= 3 &&
+              !isBuildingInsideCenter(newPoints, centerBoundaryRef.current, true)
+            ) {
+              onOutsideOutlineClickRef.current?.();
+              return;
+            }
             onEditablePolygonChange(newPoints, true);
           }
         },
@@ -2998,6 +3111,14 @@ function DashboardMap({
           }
           const newPoints = [...editablePolygon];
           newPoints.splice(index + 1, 0, point);
+          if (
+            centerBoundaryRef.current?.length >= 3 &&
+            !isBuildingInsideCenter(newPoints, centerBoundaryRef.current, true)
+          ) {
+            onOutsideOutlineClickRef.current?.();
+            handles.updatePositions(editablePolygon);
+            return;
+          }
           onEditablePolygonChange(newPoints, isFinal);
         },
         showMidpoints: true,
@@ -3028,8 +3149,9 @@ function DashboardMap({
     const centerFill = map.getLayer("evac-centers-fill");
     const centerLine = map.getLayer("evac-centers-line");
     if (hiddenCenterId) {
-      if (centerFill) map.setFilter("evac-centers-fill", ["!=", ["get", "id"], String(hiddenCenterId)]);
-      if (centerLine) map.setFilter("evac-centers-line", ["!=", ["get", "id"], String(hiddenCenterId)]);
+      const cFilter = ["!=", ["to-string", ["coalesce", ["get", "id"], ["get", "center_id"]]], String(hiddenCenterId)];
+      if (centerFill) map.setFilter("evac-centers-fill", cFilter);
+      if (centerLine) map.setFilter("evac-centers-line", cFilter);
     } else {
       if (centerFill) map.setFilter("evac-centers-fill", null);
       if (centerLine) map.setFilter("evac-centers-line", null);
@@ -3041,10 +3163,17 @@ function DashboardMap({
     const bldHalo = map.getLayer("evacway-buildings-outline-halo");
     const bldSymbol = map.getLayer("evacway-buildings-symbol");
     if (hiddenBuildingId) {
-      if (bldFill) map.setFilter("evacway-buildings-fill", ["!=", ["get", "id"], String(hiddenBuildingId)]);
-      if (bldOutline) map.setFilter("evacway-buildings-outline", ["!=", ["get", "id"], String(hiddenBuildingId)]);
-      if (bldHalo) map.setFilter("evacway-buildings-outline-halo", ["!=", ["get", "id"], String(hiddenBuildingId)]);
-      if (bldSymbol) map.setFilter("evacway-buildings-symbol", ["!=", ["get", "id"], String(hiddenBuildingId)]);
+      const bFilter = ["!=", ["to-string", ["get", "id"]], String(hiddenBuildingId)];
+      if (bldFill) map.setFilter("evacway-buildings-fill", bFilter);
+      if (bldOutline) map.setFilter("evacway-buildings-outline", bFilter);
+      if (bldHalo) map.setFilter("evacway-buildings-outline-halo", bFilter);
+      if (bldSymbol) map.setFilter("evacway-buildings-symbol", bFilter);
+    } else if (hiddenCenterId) {
+      const bFilter = ["!=", ["to-string", ["get", "evacuation_center_id"]], String(hiddenCenterId)];
+      if (bldFill) map.setFilter("evacway-buildings-fill", bFilter);
+      if (bldOutline) map.setFilter("evacway-buildings-outline", bFilter);
+      if (bldHalo) map.setFilter("evacway-buildings-outline-halo", bFilter);
+      if (bldSymbol) map.setFilter("evacway-buildings-symbol", bFilter);
     } else {
       if (bldFill) map.setFilter("evacway-buildings-fill", null);
       if (bldOutline) map.setFilter("evacway-buildings-outline", null);
@@ -3300,7 +3429,10 @@ function DashboardMap({
           }
         }
       } else if (drawMode === "footprint") {
-        map.getCanvas().style.cursor = "crosshair";
+        const outsideCenter =
+          centerBoundaryRef.current?.length >= 3 &&
+          !isPointInPolygon({ lng: event.lngLat.lng, lat: event.lngLat.lat }, centerBoundaryRef.current);
+        map.getCanvas().style.cursor = outsideCenter ? "not-allowed" : "crosshair";
       } else {
         map.getCanvas().style.cursor = "";
       }
@@ -3346,6 +3478,20 @@ function DashboardMap({
         return;
       }
 
+      // Enforce center polygon boundary when drawing/editing buildings inside a center
+      if (
+        drawMode === "footprint" &&
+        centerBoundaryRef.current &&
+        centerBoundaryRef.current.length >= 3
+      ) {
+        const candidatePt = { lng: event.lngLat.lng, lat: event.lngLat.lat };
+        const nextBuildingPts = [...(pendingFootprint || []), candidatePt];
+        if (!isBuildingInsideCenter(nextBuildingPts, centerBoundaryRef.current, false)) {
+          if (onOutsideOutlineClickRef.current) onOutsideOutlineClickRef.current();
+          return;
+        }
+      }
+
       if (drawMode === "footprint" && onBasemapBuildingClick) {
         try {
           const features = map.queryRenderedFeatures(event.point);
@@ -3364,6 +3510,13 @@ function DashboardMap({
               pts.length >= 3 &&
               pts.every((p) => isPointInSogod(p.lng, p.lat, sogodBoundaryRef.current))
             ) {
+              if (
+                centerBoundaryRef.current?.length >= 3 &&
+                !isBuildingInsideCenter(pts, centerBoundaryRef.current, true)
+              ) {
+                if (onOutsideOutlineClickRef.current) onOutsideOutlineClickRef.current();
+                return;
+              }
               onBasemapBuildingClick(pts);
               return;
             }
@@ -4010,108 +4163,111 @@ function DashboardMap({
       {/* TOP RIGHT: Single Layers button + Popover with 3 switches & legend (Hidden while drawing) */}
       {!isDrawing && (
         <div className="map-top-right-layers">
-          <button
-            type="button"
-            className={`map-layers-trigger-btn ${activeLayerCount > 0 ? "has-active" : ""}`}
-            onClick={() => setLayersMenuOpen((open) => !open)}
-            aria-expanded={layersMenuOpen}
-            aria-label="Toggle map hazard layers and legend"
-            title="Hazard Layers"
-          >
-            <FontAwesomeIcon icon={faLayerGroup} />
-            <span>Layers</span>
-            {activeLayerCount > 0 && (
-              <span className="map-layers-badge">{activeLayerCount}</span>
-            )}
-          </button>
+          {topRightSlot}
+          <div className="map-layers-trigger-wrap">
+            <button
+              type="button"
+              className={`map-layers-trigger-btn ${activeLayerCount > 0 ? "has-active" : ""}`}
+              onClick={() => setLayersMenuOpen((open) => !open)}
+              aria-expanded={layersMenuOpen}
+              aria-label="Toggle map hazard layers and legend"
+              title="Hazard Layers"
+            >
+              <FontAwesomeIcon icon={faLayerGroup} />
+              <span>Layers</span>
+              {activeLayerCount > 0 && (
+                <span className="map-layers-badge">{activeLayerCount}</span>
+              )}
+            </button>
 
-          {layersMenuOpen && (
-            <div className="map-layers-popover" role="dialog" aria-label="Hazard Layers and Legend">
-              <div className="map-layers-popover-header">
-                <h4>Hazard Layers</h4>
-                <button
-                  type="button"
-                  className="map-layers-close-btn"
-                  onClick={() => setLayersMenuOpen(false)}
-                  aria-label="Close layers menu"
-                >
-                  <FontAwesomeIcon icon={faXmark} />
-                </button>
-              </div>
+            {layersMenuOpen && (
+              <div className="map-layers-popover" role="dialog" aria-label="Hazard Layers and Legend">
+                <div className="map-layers-popover-header">
+                  <h4>Hazard Layers</h4>
+                  <button
+                    type="button"
+                    className="map-layers-close-btn"
+                    onClick={() => setLayersMenuOpen(false)}
+                    aria-label="Close layers menu"
+                  >
+                    <FontAwesomeIcon icon={faXmark} />
+                  </button>
+                </div>
 
-              <div className="map-layers-list">
-                {/* Flood Switch */}
-                <label className="map-layer-row">
-                  <div className="map-layer-info">
-                    <span className="map-layer-indicator flood-indicator" />
-                    <div className="map-layer-texts">
-                      <strong>Flood Hazard</strong>
-                      <small>MGB high/medium/low flood risk</small>
+                <div className="map-layers-list">
+                  {/* Flood Switch */}
+                  <label className="map-layer-row">
+                    <div className="map-layer-info">
+                      <span className="map-layer-indicator flood-indicator" />
+                      <div className="map-layer-texts">
+                        <strong>Flood Hazard</strong>
+                        <small>MGB high/medium/low flood risk</small>
+                      </div>
                     </div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    className="map-switch"
-                    checked={visibleLayers.flood}
-                    onChange={toggleFlood}
-                  />
-                </label>
+                    <input
+                      type="checkbox"
+                      className="map-switch"
+                      checked={visibleLayers.flood}
+                      onChange={toggleFlood}
+                    />
+                  </label>
 
-                {/* Landslide Switch */}
-                <label className="map-layer-row">
-                  <div className="map-layer-info">
-                    <span className="map-layer-indicator landslide-indicator" />
-                    <div className="map-layer-texts">
-                      <strong>Landslide Hazard</strong>
-                      <small>Rain-induced susceptibility zones</small>
+                  {/* Landslide Switch */}
+                  <label className="map-layer-row">
+                    <div className="map-layer-info">
+                      <span className="map-layer-indicator landslide-indicator" />
+                      <div className="map-layer-texts">
+                        <strong>Landslide Hazard</strong>
+                        <small>Rain-induced susceptibility zones</small>
+                      </div>
                     </div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    className="map-switch"
-                    checked={visibleLayers.landslide}
-                    onChange={toggleLandslide}
-                  />
-                </label>
+                    <input
+                      type="checkbox"
+                      className="map-switch"
+                      checked={visibleLayers.landslide}
+                      onChange={toggleLandslide}
+                    />
+                  </label>
 
-                {/* Hazard Reports Switch */}
-                <label className="map-layer-row">
-                  <div className="map-layer-info">
-                    <span className="map-layer-indicator reports-indicator" />
-                    <div className="map-layer-texts">
-                      <strong>Hazard Reports</strong>
-                      <small>Validated community alerts ({hazardReports.length})</small>
+                  {/* Hazard Reports Switch */}
+                  <label className="map-layer-row">
+                    <div className="map-layer-info">
+                      <span className="map-layer-indicator reports-indicator" />
+                      <div className="map-layer-texts">
+                        <strong>Hazard Reports</strong>
+                        <small>Validated community alerts ({hazardReports.length})</small>
+                      </div>
                     </div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    className="map-switch"
-                    checked={showReports}
-                    onChange={() => setShowReports((v) => !v)}
-                  />
-                </label>
-              </div>
+                    <input
+                      type="checkbox"
+                      className="map-switch"
+                      checked={showReports}
+                      onChange={() => setShowReports((v) => !v)}
+                    />
+                  </label>
+                </div>
 
-              {/* Legend section */}
-              <div className="map-layers-legend">
-                <span className="map-legend-title">Legend</span>
-                <div className="map-legend-items">
-                  <div className="map-legend-item">
-                    <span className="legend-swatch swatch-flood" />
-                    <span>Flood zone</span>
-                  </div>
-                  <div className="map-legend-item">
-                    <span className="legend-swatch swatch-landslide" />
-                    <span>Landslide zone</span>
-                  </div>
-                  <div className="map-legend-item">
-                    <span className="legend-swatch swatch-report" />
-                    <span>Active report</span>
+                {/* Legend section */}
+                <div className="map-layers-legend">
+                  <span className="map-legend-title">Legend</span>
+                  <div className="map-legend-items">
+                    <div className="map-legend-item">
+                      <span className="legend-swatch swatch-flood" />
+                      <span>Flood zone</span>
+                    </div>
+                    <div className="map-legend-item">
+                      <span className="legend-swatch swatch-landslide" />
+                      <span>Landslide zone</span>
+                    </div>
+                    <div className="map-legend-item">
+                      <span className="legend-swatch swatch-report" />
+                      <span>Active report</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 

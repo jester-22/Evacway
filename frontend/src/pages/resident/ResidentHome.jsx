@@ -630,6 +630,32 @@ function saveResident(value) {
 }
 
 // --------------------------------------------------
+// Format first name and last name (omit middle name, title-case)
+// --------------------------------------------------
+
+function formatFirstAndLastName(rawName) {
+  if (!rawName || typeof rawName !== "string") return "";
+  const parts = rawName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "";
+
+  const toTitleCase = (str) =>
+    str
+      .toLowerCase()
+      .split("-")
+      .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
+      .join("-");
+
+  if (parts.length === 1) {
+    return toTitleCase(parts[0]);
+  }
+
+  // Only the first name and the last name, removing any middle name(s)
+  const first = toTitleCase(parts[0]);
+  const last = toTitleCase(parts[parts.length - 1]);
+  return `${first} ${last}`;
+}
+
+// --------------------------------------------------
 // Validate Mapbox coordinates
 // --------------------------------------------------
 
@@ -1291,6 +1317,34 @@ const ResidentHome = () => {
   const [reportConfirmation, setReportConfirmation] = useState("");
   const [requestingAssistance, setRequestingAssistance] = useState(false);
   const [assistanceSent, setAssistanceSent] = useState(false);
+  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  const profileDropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!profileDropdownOpen) return;
+
+    function handleKeyDown(e) {
+      if (e.key === "Escape") {
+        setProfileDropdownOpen(false);
+      }
+    }
+
+    function handleClickOutside(e) {
+      if (profileDropdownRef.current && !profileDropdownRef.current.contains(e.target)) {
+        setProfileDropdownOpen(false);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
+  }, [profileDropdownOpen]);
 
   const [locationPermission, setLocationPermission] = useState("unknown");
 
@@ -4933,7 +4987,34 @@ const ResidentHome = () => {
   // Render
   // --------------------------------------------------
 
-  const firstName = myCenter?.household_head_name?.split(" ")[0] || myCenter?.resident_name?.split(" ")[0] || user?.name?.split(" ")[0] || "";
+  const possibleNames = [
+    user?.first_name ? `${user.first_name} ${user.last_name || ""}`.trim() : "",
+    user?.full_name,
+    myCenter?.household_head_name,
+    myCenter?.resident_name,
+    user?.name,
+  ].filter(Boolean);
+
+  const fullNameWithSpace = possibleNames.find(
+    (n) => typeof n === "string" && n.trim().includes(" ")
+  );
+
+  const rawFullName =
+    fullNameWithSpace ||
+    possibleNames[0] ||
+    user?.email?.split("@")[0] ||
+    "Resident";
+
+  const fullName = formatFirstAndLastName(rawFullName) || "Resident";
+
+  const firstName =
+    fullName.split(" ")[0] ||
+    myCenter?.household_head_name?.split(" ")[0] ||
+    myCenter?.resident_name?.split(" ")[0] ||
+    user?.name?.split(" ")[0] ||
+    "";
+
+  const userInitial = (firstName || fullName || "").charAt(0).toUpperCase();
   const currentWalkingManeuver =
     route?.walking_steps?.[activeWalkingStep]?.maneuver || null;
 
@@ -5120,6 +5201,100 @@ const ResidentHome = () => {
           EvacWay
         </Link>
 
+        {/* Search evacuation center bar: centered in header between logo and user actions */}
+        <div className="top-bar-search">
+          <div className="resident-search-box">
+            <FontAwesomeIcon
+              icon={faMagnifyingGlass}
+              className="resident-search-icon"
+              aria-hidden="true"
+            />
+
+            <input
+              type="search"
+              enterKeyHint="search"
+              value={searchText}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSearchText(val);
+                if (val.length > 0) {
+                  setShowSearchResults(true);
+                } else {
+                  setShowSearchResults(false);
+                }
+              }}
+              onFocus={() => {
+                if (searchResults.length > 0 || searchText.trim().length >= 2) {
+                  setShowSearchResults(true);
+                }
+              }}
+              onBlur={() => {
+                setTimeout(() => {
+                  if (!selectingSuggestionRef.current) {
+                    setShowSearchResults(false);
+                  }
+                }, 150);
+              }}
+              placeholder="Search evacuation center..."
+              className="resident-search-input"
+              aria-label="Search evacuation center"
+            />
+
+            {searching && (
+              <span className="resident-search-loading">Searching...</span>
+            )}
+
+            {searchText && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => {
+                  setSearchText("");
+                  setSearchResults([]);
+                  setShowSearchResults(false);
+                }}
+                aria-label="Clear search"
+              >
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
+            )}
+          </div>
+
+          {showSearchResults && searchResults.length > 0 && (
+            <div className="resident-search-results">
+              {searchResults.map((result, index) => (
+                <button
+                  key={`${result.type}-${result.name}-${index}`}
+                  className="resident-search-result"
+                  onMouseDown={() => {
+                    selectingSuggestionRef.current = true;
+                  }}
+                  onClick={() => zoomToSearchResult(result)}
+                >
+                  <FontAwesomeIcon
+                    icon={result.type === "barangay" ? faLocationDot : faBuildingColumns}
+                    className="resident-search-result-icon"
+                  />
+
+                  <span className="resident-search-result-text">
+                    <strong>{result.name}</strong>
+                    <span>{result.subtitle}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {showSearchResults &&
+            !searching &&
+            searchText.trim().length >= 2 &&
+            searchResults.length === 0 && (
+              <div className="resident-search-no-results">
+                No evacuation center found.
+              </div>
+            )}
+        </div>
+
         <div className="top-bar-actions">
 
           {!user ? (
@@ -5134,21 +5309,52 @@ const ResidentHome = () => {
               <span>Log In</span>
             </button>
           ) : (
-            <div className="top-bar-user-wrap">
-              <span className="user-greeting-pill" title={`Signed in as ${user.name || user.email || "Resident"}`}>
-                <FontAwesomeIcon icon={faCircleCheck} className="user-greeting-icon" />
-                <span className="user-greeting-name">{firstName || "Resident"}</span>
-              </span>
+            <div className="top-bar-user-wrap" ref={profileDropdownRef}>
               <button
                 type="button"
-                className="header-logout-btn"
-                onClick={handleLogout}
-                aria-label="Sign out"
-                title="Log Out"
+                className="header-profile-btn"
+                onClick={() => setProfileDropdownOpen((prev) => !prev)}
+                aria-label="Account menu"
+                aria-expanded={profileDropdownOpen}
+                title={`Signed in as ${fullName}`}
               >
-                <FontAwesomeIcon icon={faRightFromBracket} />
-                <span>Log Out</span>
+                <span className="header-profile-avatar" aria-hidden="true">
+                  <FontAwesomeIcon icon={faUser} />
+                </span>
+                <span className="header-profile-name">{fullName}</span>
+                <FontAwesomeIcon
+                  icon={faChevronDown}
+                  className={`header-profile-chevron ${profileDropdownOpen ? "open" : ""}`}
+                  aria-hidden="true"
+                />
               </button>
+
+              {profileDropdownOpen && (
+                <div className="header-profile-dropdown" role="menu" aria-label="Account options">
+                  <div className="profile-dropdown-user-info">
+                    <div className="profile-dropdown-avatar" aria-hidden="true">
+                      <FontAwesomeIcon icon={faUser} />
+                    </div>
+                    <div className="profile-dropdown-text">
+                      <strong className="profile-dropdown-name">{fullName}</strong>
+                      {user?.email && <span className="profile-dropdown-email">{user.email}</span>}
+                    </div>
+                  </div>
+                  <div className="profile-dropdown-divider" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="profile-dropdown-logout-btn"
+                    role="menuitem"
+                    onClick={() => {
+                      setProfileDropdownOpen(false);
+                      handleLogout();
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faRightFromBracket} />
+                    <span>Log Out</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -5399,106 +5605,7 @@ const ResidentHome = () => {
         )
       )}
 
-      {/* Top area: search (hidden during route preview, navigation & building modal so it does not block the card/bar/modal) */}
-      {!navigationActive && !route && !buildingModalOpen && (
-        <div className={`top-left-panel ${isMobile ? "compact" : ""}`}>
-          <div className="resident-search-box">
-            <FontAwesomeIcon
-              icon={faMagnifyingGlass}
-              className="resident-search-icon"
-              aria-hidden="true"
-            />
 
-            <input
-              type="search"
-              enterKeyHint="search"
-              value={searchText}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSearchText(val);
-                if (val.length > 0) {
-                  setHideRoomBarForSearch(true);
-                  setShowSearchResults(true);
-                } else {
-                  setHideRoomBarForSearch(false);
-                  setShowSearchResults(false);
-                }
-              }}
-              onFocus={() => {
-                setHideRoomBarForSearch(true);
-                if (searchResults.length > 0 || searchText.trim().length >= 2) {
-                  setShowSearchResults(true);
-                }
-              }}
-              onBlur={() => {
-                setTimeout(() => {
-                  if (!selectingSuggestionRef.current) {
-                    setHideRoomBarForSearch(false);
-                    setShowSearchResults(false);
-                  }
-                }, 150);
-              }}
-              placeholder="Search evacuation center..."
-              className="resident-search-input"
-              aria-label="Search evacuation center"
-            />
-
-            {searching && (
-              <span className="resident-search-loading">Searching...</span>
-            )}
-
-            {searchText && (
-              <button
-                type="button"
-                className="search-clear-btn"
-                onClick={() => {
-                  setSearchText("");
-                  setSearchResults([]);
-                  setShowSearchResults(false);
-                  setHideRoomBarForSearch(false);
-                }}
-                aria-label="Clear search"
-              >
-                <FontAwesomeIcon icon={faXmark} />
-              </button>
-            )}
-          </div>
-
-          {showSearchResults && searchResults.length > 0 && (
-            <div className="resident-search-results">
-              {searchResults.map((result, index) => (
-                <button
-                  key={`${result.type}-${result.name}-${index}`}
-                  className="resident-search-result"
-                  onMouseDown={() => {
-                    selectingSuggestionRef.current = true;
-                  }}
-                  onClick={() => zoomToSearchResult(result)}
-                >
-                  <FontAwesomeIcon
-                    icon={result.type === "barangay" ? faLocationDot : faBuildingColumns}
-                    className="resident-search-result-icon"
-                  />
-
-                  <span className="resident-search-result-text">
-                    <strong>{result.name}</strong>
-                    <span>{result.subtitle}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {showSearchResults &&
-            !searching &&
-            searchText.trim().length >= 2 &&
-            searchResults.length === 0 && (
-              <div className="resident-search-no-results">
-                No evacuation center found.
-              </div>
-            )}
-        </div>
-      )}
 
       {/* Right control stack: "My location", "Street / Satellite", and "Help" */}
       <div

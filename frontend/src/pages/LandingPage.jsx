@@ -24,13 +24,20 @@ const STEPS = [
 
 function Logo() {
   return (
-    <Link to="/" className="ew-logo" aria-label="EvacWay home">
-      <svg width="24" height="24" viewBox="0 0 30 30" aria-hidden="true">
-        <rect width="30" height="30" rx="8" fill="#1B56C4" />
-        <path d="M7 22c6 0 5-9 9-9s3-4 7-4" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" />
-        <circle cx="7" cy="22" r="2.4" fill="#fff" />
-      </svg>
-      EvacWay
+    <Link to="/" className="ew-logo" aria-label="EvacWay - Municipality of Sogod">
+      <div className="ew-logo-brand">
+        <svg width="24" height="24" viewBox="0 0 30 30" aria-hidden="true">
+          <rect width="30" height="30" rx="8" fill="#1B56C4" />
+          <path d="M7 22c6 0 5-9 9-9s3-4 7-4" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" />
+          <circle cx="7" cy="22" r="2.4" fill="#fff" />
+        </svg>
+        <span className="ew-logo-name">EvacWay</span>
+      </div>
+      <span className="ew-brand-divider" aria-hidden="true" />
+      <div className="ew-lgu-partner">
+        <img src="/lgu-logo.png" alt="LGU Sogod Seal" className="ew-lgu-logo" />
+        <span className="ew-lgu-name">Municipality of Sogod</span>
+      </div>
     </Link>
   );
 }
@@ -586,6 +593,10 @@ export default function LandingPage() {
 
         <section className="ew-hero" aria-labelledby="ew-hero-title">
           <div className="ew-hero-copy">
+            <div className="ew-lgu-hero-pill">
+              <img src="/lgu-logo.png" alt="Municipality of Sogod Seal" className="ew-lgu-hero-logo" />
+              <span>Municipality of Sogod, Southern Leyte</span>
+            </div>
             <h1 id="ew-hero-title">
               Know where to go
               <br />
@@ -681,11 +692,35 @@ export default function LandingPage() {
 
       <footer className="ew-footer">
         <div className="ew-wrap ew-footer-inner">
-          <Logo />
-          <p className="ew-footer-credit">
-            Hazard data from HazardHunterPH. Roads from OpenStreetMap. A capstone project for Sogod, Southern Leyte.
-          </p>
-          <p className="ew-footer-copy">&copy; 2026 EvacWay</p>
+          <div className="ew-footer-brand-col">
+            <div className="ew-footer-logos">
+              <Link to="/" className="ew-logo" aria-label="EvacWay home">
+                <svg width="24" height="24" viewBox="0 0 30 30" aria-hidden="true">
+                  <rect width="30" height="30" rx="8" fill="#1B56C4" />
+                  <path d="M7 22c6 0 5-9 9-9s3-4 7-4" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" />
+                  <circle cx="7" cy="22" r="2.4" fill="#fff" />
+                </svg>
+                <span className="ew-logo-name">EvacWay</span>
+              </Link>
+              <span className="ew-footer-divider" aria-hidden="true" />
+              <div className="ew-footer-lgu">
+                <img src="/lgu-logo.png" alt="Municipality of Sogod Seal" className="ew-footer-lgu-logo" />
+                <div className="ew-footer-lgu-info">
+                  <span className="ew-footer-lgu-title">Municipality of Sogod</span>
+                  <span className="ew-footer-lgu-sub">Province of Southern Leyte</span>
+                </div>
+              </div>
+            </div>
+            <p className="ew-footer-tagline">
+              Official disaster evacuation and safe route advisory system for the Municipality of Sogod, Southern Leyte.
+            </p>
+          </div>
+          <div className="ew-footer-info-col">
+            <p className="ew-footer-credit">
+              Hazard data from HazardHunterPH. Roads from OpenStreetMap. MDRRMO Sogod, Southern Leyte.
+            </p>
+            <p className="ew-footer-copy">&copy; 2026 EvacWay &bull; Municipality of Sogod, Southern Leyte. All rights reserved.</p>
+          </div>
         </div>
       </footer>
 

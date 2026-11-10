@@ -8,7 +8,7 @@ from models import RoadSegment, EvacuationCenter
 
 logger = logging.getLogger(__name__)
 
-CLOSED_ROAD_PENALTY = 50
+CLOSED_ROAD_PENALTY = 1000000
 MAX_ENTRANCE_SNAP_DISTANCE_METERS = 25.0
 
 _cached_network = None
@@ -143,6 +143,22 @@ def snap_point_to_road(lat, lng):
     u, v = best_sub["u"], best_sub["v"]
     is_connected = (u in largest_cc) or (v in largest_cc)
 
+    # Intersection snapping: if within 15 meters of an intersection node where multiple
+    # segments meet, lock directly to the exact intersection node vertex so reports/pins
+    # sit dead-center in the intersection instead of drifting down a single road branch.
+    G = net.get("graph")
+    if G is not None:
+        d_u = haversine(snap_lat, snap_lng, u[0], u[1]) * 1000.0
+        d_v = haversine(snap_lat, snap_lng, v[0], v[1]) * 1000.0
+        if d_u <= 15.0 and d_u <= d_v and G.has_node(u) and G.degree(u) > 1:
+            snap_lat = round(u[0], 6)
+            snap_lng = round(u[1], 6)
+            dist_meters = haversine(lat, lng, snap_lat, snap_lng) * 1000.0
+        elif d_v <= 15.0 and d_v <= d_u and G.has_node(v) and G.degree(v) > 1:
+            snap_lat = round(v[0], 6)
+            snap_lng = round(v[1], 6)
+            dist_meters = haversine(lat, lng, snap_lat, snap_lng) * 1000.0
+
     return (snap_lat, snap_lng), dist_meters, best_sub, is_connected
 
 
@@ -189,7 +205,7 @@ def calculate_route_with_edge_snapping(start_lat, start_lng, target_lat, target_
                 w = d * u_sub["base_weight"]
                 if u_sub["is_closed"]:
                     w *= CLOSED_ROAD_PENALTY
-                G.add_edge(n1, n2, weight=w)
+                G.add_edge(n1, n2, weight=w, is_closed=bool(u_sub["is_closed"]))
 
         add_split_edge(u_node, first_pt)
         add_split_edge(first_pt, second_pt)
@@ -213,14 +229,34 @@ def calculate_route_with_edge_snapping(start_lat, start_lng, target_lat, target_
                 if sub["is_closed"]:
                     w2 *= CLOSED_ROAD_PENALTY
 
-                G.add_edge(u_node, snap_pt, weight=w1)
-                G.add_edge(snap_pt, v_node, weight=w2)
+                G.add_edge(u_node, snap_pt, weight=w1, is_closed=bool(sub["is_closed"]))
+                G.add_edge(snap_pt, v_node, weight=w2, is_closed=bool(sub["is_closed"]))
 
-    try:
-        path = nx.dijkstra_path(G, u_snap, t_snap, weight="weight")
-        road_km = nx.dijkstra_path_length(G, u_snap, t_snap, weight="weight")
-    except (nx.NetworkXNoPath, nx.NodeNotFound):
-        return None
+    # Pass 1: Strictly avoid blocked/closed roads
+    open_edges = [
+        (u, v)
+        for u, v, d in G.edges(data=True)
+        if not d.get("is_closed", False)
+    ]
+    G_open = G.edge_subgraph(open_edges)
+
+    path = None
+    road_km = 0.0
+
+    if G_open.has_node(u_snap) and G_open.has_node(t_snap):
+        try:
+            path = nx.dijkstra_path(G_open, u_snap, t_snap, weight="weight")
+            road_km = nx.dijkstra_path_length(G_open, u_snap, t_snap, weight="weight")
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            path = None
+
+    # Pass 2: Fallback to full graph with huge penalty only if no alternative route exists
+    if path is None:
+        try:
+            path = nx.dijkstra_path(G, u_snap, t_snap, weight="weight")
+            road_km = nx.dijkstra_path_length(G, u_snap, t_snap, weight="weight")
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return None
 
     road_distance_m = road_km * 1000.0
     start_leg = [[start_lat, start_lng], [u_snap[0], u_snap[1]]]

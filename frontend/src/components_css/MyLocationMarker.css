@@ -51,10 +51,9 @@
 
 .selected-location-marker {
   position: relative;
-  min-width: 44px;
-  min-height: 44px;
+  width: 24px;
+  height: 24px;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   cursor: grab;
@@ -107,7 +106,11 @@
 }
 
 .selected-location-label {
-  margin-top: 5px;
+  position: absolute;
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 0;
   padding: 2px 7px;
   border-radius: 4px;
   background: var(--ink, #0f172a);

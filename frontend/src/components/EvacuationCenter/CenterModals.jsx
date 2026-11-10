@@ -384,22 +384,202 @@ export function CenterRoomModal({ mode = 'add', selectedCenter, selectedRoom, ro
   );
 }
 
-export function AddBuildingModal({ open = false, buildingForm, onChange, saving = false, onSubmit, onClose }) {
+export function BuildingFormModal({
+  open = false,
+  mode = 'add',
+  buildingForm,
+  onChange,
+  activeRoomCount = 0,
+  saving = false,
+  onSubmit,
+  onClose,
+}) {
   const [fieldErrors, setFieldErrors] = useState({});
-  function clearFieldError(field) { setFieldErrors((prev) => { const next = { ...prev }; delete next[field]; return next; }); }
-  function setFieldError(field, message) { setFieldErrors((prev) => ({ ...prev, [field]: message })); }
-  function handleSubmit(e) { e.preventDefault(); let valid = true; if (!buildingForm.name || !buildingForm.name.trim()) { setFieldError('name', 'Building name is required.'); valid = false; } else { clearFieldError('name'); } if (buildingForm.max_rooms !== null && buildingForm.max_rooms !== '' && Number(buildingForm.max_rooms) < 1) { setFieldError('max_rooms', 'Max rooms must be at least 1.'); valid = false; } else { clearFieldError('max_rooms'); } if (buildingForm.floors !== null && buildingForm.floors !== '' && Number(buildingForm.floors) < 1) { setFieldError('floors', 'Floors must be at least 1.'); valid = false; } else { clearFieldError('floors'); } if (!valid) return; onSubmit(e); }
+  function clearFieldError(field) {
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  }
+  function setFieldError(field, message) {
+    setFieldErrors((prev) => ({ ...prev, [field]: message }));
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    let valid = true;
+    if (!buildingForm.name || !buildingForm.name.trim()) {
+      setFieldError('name', 'Building name is required.');
+      valid = false;
+    } else {
+      clearFieldError('name');
+    }
+
+    if (
+      buildingForm.max_rooms !== null &&
+      buildingForm.max_rooms !== '' &&
+      Number(buildingForm.max_rooms) < 1
+    ) {
+      setFieldError('max_rooms', 'Max rooms must be at least 1.');
+      valid = false;
+    } else if (
+      mode === 'edit' &&
+      buildingForm.max_rooms !== null &&
+      buildingForm.max_rooms !== '' &&
+      Number(buildingForm.max_rooms) < activeRoomCount
+    ) {
+      setFieldError(
+        'max_rooms',
+        `Max rooms cannot be less than currently linked rooms (${activeRoomCount}). Remove or unlink rooms first.`
+      );
+      valid = false;
+    } else {
+      clearFieldError('max_rooms');
+    }
+
+    if (
+      buildingForm.floors !== null &&
+      buildingForm.floors !== '' &&
+      Number(buildingForm.floors) < 1
+    ) {
+      setFieldError('floors', 'Floors must be at least 1.');
+      valid = false;
+    } else {
+      clearFieldError('floors');
+    }
+
+    if (!valid) return;
+    onSubmit(e);
+  }
+
+  const isEdit = mode === 'edit';
+  const title = isEdit ? `Edit Building` : 'Add Building';
+  const subtitle = isEdit
+    ? `Update ${buildingForm.name || 'building'} details and room capacity`
+    : 'Add a new building to this evacuation center';
+
   return (
-    <ModalShell open={open} title="Add Building" subtitle="Add a new building to this evacuation center" onClose={onClose} formId="building-form" loading={saving} primaryLabel={saving ? 'Saving...' : 'Add Building'}>
+    <ModalShell
+      open={open}
+      title={title}
+      subtitle={subtitle}
+      onClose={onClose}
+      formId="building-form"
+      loading={saving}
+      primaryLabel={saving ? 'Saving...' : isEdit ? 'Save Changes' : 'Add Building'}
+    >
       <form id="building-form" onSubmit={handleSubmit} noValidate>
-        <div className="form-group"><label htmlFor="building-name">Building Name <span>*</span></label><input id="building-name" type="text" className={fieldErrors.name ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. Main Building" value={buildingForm.name} onChange={(e) => { clearFieldError('name'); onChange({ ...buildingForm, name: e.target.value }); }} />{fieldErrors.name && <p className="field-error">{fieldErrors.name}</p>}</div>
-        <div className="form-group"><label htmlFor="building-max-rooms">Max Rooms</label><input id="building-max-rooms" type="number" min="1" className={fieldErrors.max_rooms ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 10 (optional)" value={buildingForm.max_rooms} onChange={(e) => { clearFieldError('max_rooms'); onChange({ ...buildingForm, max_rooms: e.target.value ? Number(e.target.value) : null }); }} />{fieldErrors.max_rooms && <p className="field-error">{fieldErrors.max_rooms}</p>}<p className="field-hint">Maximum number of rooms this building can have (optional)</p></div>
-        <div className="form-group"><label htmlFor="building-floors">Floors</label><input id="building-floors" type="number" min="1" className={fieldErrors.floors ? 'form-input is-invalid' : 'form-input'} placeholder="e.g. 3 (optional)" value={buildingForm.floors} onChange={(e) => { clearFieldError('floors'); onChange({ ...buildingForm, floors: e.target.value ? Number(e.target.value) : null }); }} />{fieldErrors.floors && <p className="field-error">{fieldErrors.floors}</p>}<p className="field-hint">Number of floors in this building (optional)</p></div>
-        <div className="form-group"><label htmlFor="building-status">Status</label><select id="building-status" className={fieldErrors.status ? 'form-input is-invalid' : 'form-input'} value={buildingForm.status || 'active'} onChange={(e) => { clearFieldError('status'); onChange({ ...buildingForm, status: e.target.value }); }}><option value="active">Active</option><option value="inactive">Inactive</option><option value="under_construction">Under Construction</option><option value="maintenance">Maintenance</option></select>{fieldErrors.status && <p className="field-error">{fieldErrors.status}</p>}<p className="field-hint">Current status of the building</p></div>
-        <div className="form-group"><label htmlFor="building-notes">Notes</label><textarea id="building-notes" className={fieldErrors.notes ? 'form-textarea is-invalid' : 'form-textarea'} placeholder="Optional notes about this building..." value={buildingForm.notes} onChange={(e) => { clearFieldError('notes'); onChange({ ...buildingForm, notes: e.target.value }); }} />{fieldErrors.notes && <p className="field-error">{fieldErrors.notes}</p>}</div>
+        <div className="form-group">
+          <label htmlFor="building-name">
+            Building Name <span>*</span>
+          </label>
+          <input
+            id="building-name"
+            type="text"
+            className={fieldErrors.name ? 'form-input is-invalid' : 'form-input'}
+            placeholder="e.g. Main Building, Science Wing"
+            value={buildingForm.name || ''}
+            onChange={(e) => {
+              clearFieldError('name');
+              onChange({ ...buildingForm, name: e.target.value });
+            }}
+          />
+          {fieldErrors.name && <p className="field-error">{fieldErrors.name}</p>}
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="building-max-rooms">
+            Max Rooms <span className="hint">(Room Capacity Limit)</span>
+          </label>
+          <input
+            id="building-max-rooms"
+            type="number"
+            min="1"
+            className={fieldErrors.max_rooms ? 'form-input is-invalid' : 'form-input'}
+            placeholder="e.g. 10 (leave empty for unlimited)"
+            value={buildingForm.max_rooms ?? ''}
+            onChange={(e) => {
+              clearFieldError('max_rooms');
+              onChange({
+                ...buildingForm,
+                max_rooms: e.target.value !== '' ? Number(e.target.value) : null,
+              });
+            }}
+          />
+          {fieldErrors.max_rooms && <p className="field-error">{fieldErrors.max_rooms}</p>}
+          <p className="field-hint">
+            {isEdit && activeRoomCount > 0
+              ? `Currently linked rooms: ${activeRoomCount}. Limits total rooms this building can have.`
+              : 'Maximum number of rooms this building can contain (optional).'}
+          </p>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="building-floors">Floors</label>
+          <input
+            id="building-floors"
+            type="number"
+            min="1"
+            className={fieldErrors.floors ? 'form-input is-invalid' : 'form-input'}
+            placeholder="e.g. 2 (optional)"
+            value={buildingForm.floors ?? ''}
+            onChange={(e) => {
+              clearFieldError('floors');
+              onChange({
+                ...buildingForm,
+                floors: e.target.value !== '' ? Number(e.target.value) : null,
+              });
+            }}
+          />
+          {fieldErrors.floors && <p className="field-error">{fieldErrors.floors}</p>}
+          <p className="field-hint">Number of floors or levels in this building (optional)</p>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="building-status">Status</label>
+          <select
+            id="building-status"
+            className={fieldErrors.status ? 'form-input is-invalid' : 'form-input'}
+            value={buildingForm.status || 'open'}
+            onChange={(e) => {
+              clearFieldError('status');
+              onChange({ ...buildingForm, status: e.target.value });
+            }}
+          >
+            <option value="open">Open (Operational)</option>
+            <option value="closed">Closed</option>
+            <option value="under_repair">Under Repair</option>
+          </select>
+          {fieldErrors.status && <p className="field-error">{fieldErrors.status}</p>}
+          <p className="field-hint">Operational readiness of this facility building</p>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="building-notes">Notes</label>
+          <textarea
+            id="building-notes"
+            className={fieldErrors.notes ? 'form-textarea is-invalid' : 'form-textarea'}
+            placeholder="Optional notes or instructions for this building..."
+            value={buildingForm.notes || ''}
+            onChange={(e) => {
+              clearFieldError('notes');
+              onChange({ ...buildingForm, notes: e.target.value });
+            }}
+          />
+          {fieldErrors.notes && <p className="field-error">{fieldErrors.notes}</p>}
+        </div>
       </form>
     </ModalShell>
   );
+}
+
+export function AddBuildingModal(props) {
+  return <BuildingFormModal {...props} mode="add" />;
+}
+
+export function EditBuildingModal(props) {
+  return <BuildingFormModal {...props} mode="edit" />;
 }
 
 export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, availableFamilies = [], loadingAvailableFamilies = false, selectedFamilyIdToAssign = '', assigningFamily = false, onClose, onFamilyChange, onConfirm }) {

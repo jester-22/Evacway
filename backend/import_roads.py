@@ -1,61 +1,89 @@
 """
 import_roads.py — Imports real Sogod road network (from OpenStreetMap via
-osmnx) into the EvacWay database.
+osmnx) into the EvacWay database, split at all intersections so that
+road segments span only between adjacent intersections.
 
 Usage (from inside backend/, with venv activated):
     python import_roads.py
 """
 
+import os
 import json
 from app import app
 from models import db, RoadSegment
 from geoalchemy2.shape import from_shape
-from shapely.geometry import shape
+from shapely.geometry import shape, LineString
+from shapely.ops import unary_union
+from shapely.strtree import STRtree
+from services.pathfinding import invalidate_road_network_cache
 
-FILEPATH = "data/roads_sogod.geojson"
+FILEPATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "roads_sogod.geojson")
+
+
+def flatten(value, fallback):
+    if value is None:
+        return fallback
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
 
 with app.app_context():
     print("Clearing existing road segments...")
     RoadSegment.query.delete()
     db.session.commit()
 
-    with open(FILEPATH, 'r', encoding='utf-8') as f:
+    with open(FILEPATH, "r", encoding="utf-8") as f:
         geojson_data = json.load(f)
 
-    count = 0
-    skipped = 0
+    orig_lines = []
+    orig_props = []
 
-    for feature in geojson_data['features']:
-        props = feature.get('properties', {})
-        geom = shape(feature['geometry'])
+    for feature in geojson_data["features"]:
+        props = feature.get("properties", {})
+        geom = shape(feature["geometry"])
 
-        if geom.is_empty or geom.geom_type != 'LineString':
-            skipped += 1
+        if geom.is_empty or geom.geom_type != "LineString":
             continue
 
-       # OSM fields can sometimes be lists (e.g. a road with two official
-        # names, or multiple highway classifications on one segment) —
-        # join them into a single string so they fit a plain VARCHAR column.
-        def flatten(value, fallback):
-            if value is None:
-                return fallback
-            if isinstance(value, list):
-                return ", ".join(str(v) for v in value)
-            return str(value)
-
-        raw_name = props.get('name')
+        orig_lines.append(geom)
+        raw_name = props.get("name")
         road_name = flatten(raw_name, f"Unnamed {flatten(props.get('highway'), 'road')}")
-        road_type = flatten(props.get('highway'), 'unclassified')
+        road_type = flatten(props.get("highway"), "unclassified")
+        orig_props.append(
+            {
+                "road_name": road_name,
+                "road_type": road_type,
+            }
+        )
+
+    print(f"Loaded {len(orig_lines)} raw road features. Splitting at intersections...")
+    union_result = unary_union(orig_lines)
+    split_segments = (
+        list(union_result.geoms)
+        if union_result.geom_type == "MultiLineString"
+        else [union_result]
+    )
+
+    tree = STRtree(orig_lines)
+    count = 0
+
+    for seg in split_segments:
+        if seg.is_empty or seg.geom_type != "LineString":
+            continue
+
+        # Find original feature for attributes by checking midpoint
+        mid = seg.interpolate(0.5, normalized=True)
+        nearest_idx = tree.nearest(mid)
+        matched_prop = orig_props[nearest_idx]
 
         segment = RoadSegment(
-            road_name=road_name,
-            road_type=road_type,
-            base_weight=1.0,   # distance itself comes from geometry length in routing.py;
-                                # this stays a multiplier, adjust per-road later if needed
-                                # (e.g. rough terrain = higher weight)
+            road_name=matched_prop["road_name"],
+            road_type=matched_prop["road_type"],
+            base_weight=1.0,
             is_closed=False,
             hazard_zone_id=None,
-            geom=from_shape(geom, srid=4326)
+            geom=from_shape(seg, srid=4326),
         )
         db.session.add(segment)
         count += 1
@@ -65,4 +93,5 @@ with app.app_context():
             print(f"  ...{count} imported so far")
 
     db.session.commit()
-    print(f"\nDone. Imported {count} road segments. Skipped {skipped} (empty or non-LineString geometry).")
+    invalidate_road_network_cache()
+    print(f"\nDone. Imported {count} intersection-bounded road segments.")

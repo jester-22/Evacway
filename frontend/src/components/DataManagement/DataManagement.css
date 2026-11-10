@@ -919,10 +919,10 @@
 /* Tables & Table Wrappers */
 .dm-table-wrap,
 .dm-table-wrapper {
-  width: 100%;
-  max-width: 100%;
+  width: 100% !important;
+  max-width: 100% !important;
   box-sizing: border-box;
-  overflow-x: hidden;
+  overflow-x: hidden !important;
   border-radius: 12px;
   border: 1px solid var(--line, #e2e8f0);
   background: #ffffff;
@@ -930,12 +930,12 @@
 }
 
 .dm-table {
-  width: 100%;
-  max-width: 100%;
-  table-layout: fixed;
+  width: 100% !important;
+  max-width: 100% !important;
+  table-layout: fixed !important;
   border-collapse: collapse;
   text-align: left;
-  font-size: 13px;
+  font-size: 12.5px;
   box-sizing: border-box;
 }
 
@@ -945,7 +945,7 @@
 }
 
 .dm-table th {
-  padding: 10px 10px;
+  padding: 10px 8px;
   font-weight: 700;
   font-size: 11px;
   text-transform: uppercase;
@@ -959,7 +959,7 @@
 }
 
 .dm-table td {
-  padding: 10px 10px;
+  padding: 10px 8px;
   border-bottom: 1px solid var(--line, #e2e8f0);
   color: var(--text-0, #0f172a);
   vertical-align: middle;

@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import joinedload
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, time as dtime, timedelta
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -22,6 +22,8 @@ from models import (
     Family,
     Resident,
     SystemLog,
+    EvacuationOperation,
+    EvacuationCheckInRecord,
     philippines_now,
 )
 from geoalchemy2.shape import to_shape, from_shape
@@ -173,10 +175,18 @@ def _center_metrics(center):
 
     linked_barangays = _center_barangays(center)
     total_room_capacity = sum(room.capacity or 0 for room in rooms)
-    total_capacity = center.capacity
-    effective_capacity = (
-        total_capacity if total_capacity is not None else total_room_capacity
-    )
+    if len(rooms) > 0 and (center.center_type != 'single_venue' or total_room_capacity > (center.capacity or 0)):
+        total_capacity = total_room_capacity
+        if center.capacity != total_capacity:
+            center.capacity = total_capacity
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+    else:
+        total_capacity = center.capacity if center.capacity is not None else total_room_capacity
+
+    effective_capacity = total_capacity
     center_available = max(effective_capacity - total_occupied, 0)
     center_unassigned = max(effective_capacity - total_assigned, 0)
 
@@ -232,16 +242,8 @@ def _center_metrics(center):
         "current_occupancy": total_occupied,
         "assigned": total_assigned,
         "total_assigned": total_assigned,
-        "available": (
-            max(total_capacity - total_occupied, 0)
-            if total_capacity is not None
-            else center_available
-        ),
-        "unassigned": (
-            max(total_capacity - total_assigned, 0)
-            if total_capacity is not None
-            else center_unassigned
-        ),
+        "available": center_available,
+        "unassigned": center_unassigned,
         "is_fully_assigned": bool(effective_capacity > 0 and total_assigned >= effective_capacity),
         "building_count": building_count,
         "buildings": [
@@ -1426,6 +1428,118 @@ def get_center_available_families(center_id):
     return jsonify(result), 200
 
 
+def _compute_center_cutoff_dt(center):
+    if not center or not center.evacuation_open_date:
+        return None
+    cutoff_date = center.evacuation_cutoff_date or center.evacuation_open_date
+    cutoff_time_str = center.evacuation_cutoff_time or "18:00"
+    try:
+        parts = str(cutoff_time_str).strip().split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        dt = datetime.combine(cutoff_date, dtime(hour, minute))
+        if center.evacuation_extended_until:
+            ext = center.evacuation_extended_until
+            if getattr(ext, 'tzinfo', None) is not None:
+                ext = ext.replace(tzinfo=None)
+            if ext > dt:
+                dt = ext
+        return dt
+    except Exception:
+        return None
+
+
+def _validate_center_evacuation_schedule(center, action='check_in'):
+    """
+    Enforces check-in requirements:
+    1) An evacuation opening date must be configured by an administrator.
+    2) Center operational status must not be 'closed'.
+    Advisory cutoff times do not lock staff out from checking in arriving evacuees.
+    """
+    if action in ('check_out', 'undo'):
+        return True, None
+
+    if not center.evacuation_open_date:
+        return False, (
+            f"Cannot mark as arrived: No evacuation operation schedule has been set for '{center.name}'. "
+            "An administrator must set an opening date before evacuees can be checked in."
+        )
+
+    status = (center.evacuation_status or 'standby').lower()
+    if status == 'closed':
+        return False, f"Cannot mark as arrived: Evacuation center '{center.name}' is currently closed for evacuation operations."
+
+    return True, None
+
+
+def _sync_operation_check_in_records(center, assignments, resident_ids_present=None, action='check_in', current_user_id=None, method='manual', now=None):
+    if not center or not assignments:
+        return
+    if now is None:
+        now = philippines_now()
+
+    try:
+        active_op = EvacuationOperation.query.filter(
+            or_(EvacuationOperation.center_id == center.id, EvacuationOperation.center_id.is_(None)),
+            EvacuationOperation.status == 'active'
+        ).first()
+
+        if not active_op and center.evacuation_open_date:
+            active_op = EvacuationOperation(
+                center_id=center.id,
+                event_name=center.evacuation_event_name or "Active Evacuation Operation",
+                open_date=center.evacuation_open_date or date.today(),
+                open_time=center.evacuation_open_time or "08:00",
+                cutoff_date=center.evacuation_cutoff_date or center.evacuation_open_date or date.today(),
+                cutoff_time=center.evacuation_cutoff_time or "18:00",
+                status="active",
+                created_by_user_id=current_user_id
+            )
+            db.session.add(active_op)
+            db.session.flush()
+
+        if not active_op:
+            return
+
+        present_set = set(int(rid) for rid in resident_ids_present) if resident_ids_present is not None else None
+
+        for a in assignments:
+            is_checked_in = (a.resident_id in present_set) if present_set is not None else (action == 'check_in')
+            rec = EvacuationCheckInRecord.query.filter_by(
+                operation_id=active_op.id,
+                resident_id=a.resident_id
+            ).first()
+
+            if is_checked_in:
+                if not rec:
+                    res = Resident.query.get(a.resident_id)
+                    fam_id = res.family_id if res else None
+                    new_rec = EvacuationCheckInRecord(
+                        operation_id=active_op.id,
+                        resident_id=a.resident_id,
+                        family_id=fam_id,
+                        center_id=center.id,
+                        room_id=a.room_id,
+                        checked_in_at=a.checked_in_at or now,
+                        checked_in_by_user_id=current_user_id,
+                        method=method or 'manual',
+                        status='checked_in'
+                    )
+                    db.session.add(new_rec)
+                else:
+                    rec.status = 'checked_in'
+                    rec.checked_in_at = a.checked_in_at or now
+                    rec.checked_out_at = None
+                    rec.room_id = a.room_id
+                    rec.method = method or rec.method
+            else:
+                if rec:
+                    rec.status = 'checked_out'
+                    rec.checked_out_at = now
+    except Exception as e:
+        print(f"Warning: error syncing operation check-in records: {e}")
+
+
 # ---------------------------------------------------------------------------
 # EVACUEE ARRIVAL & CHECK-IN ENDPOINTS
 # ---------------------------------------------------------------------------
@@ -1443,6 +1557,11 @@ def update_evacuee_check_in(center_id):
     resident_ids = data.get('resident_ids')  # Optional list of resident IDs specifically checked in
     action = data.get('action', 'check_in')  # 'check_in', 'check_out', or 'partial'
     method = data.get('method', 'manual')    # 'manual' or 'geofence'
+
+    # Enforce active schedule and valid arrival window
+    is_valid, err_msg = _validate_center_evacuation_schedule(center, action=action)
+    if not is_valid:
+        return jsonify({"error": err_msg}), 400
 
     if not family_id and not resident_id and not resident_ids:
         return jsonify({"error": "family_id, resident_id, or resident_ids is required"}), 400
@@ -1518,6 +1637,7 @@ def update_evacuee_check_in(center_id):
 
         log_action = f"Updated check-in for {head_name}{fam_code}: {checked_count}/{total_assigned} members present at {center.name}"
         db.session.add(SystemLog(user_id=current_user_id, action=log_action, timestamp=now))
+        _sync_operation_check_in_records(center, assignments, resident_ids_present=present_set, action='partial', current_user_id=current_user_id, method=method, now=now)
         db.session.commit()
 
         checkin_state = "full" if (checked_count >= total_assigned and total_assigned > 0) else ("partial" if checked_count > 0 else "none")
@@ -1542,6 +1662,7 @@ def update_evacuee_check_in(center_id):
 
         log_action = f"Checked in {head_name}{fam_code} at {center.name} via {method}"
         db.session.add(SystemLog(user_id=current_user_id, action=log_action, timestamp=now))
+        _sync_operation_check_in_records(center, assignments, resident_ids_present=None, action='check_in', current_user_id=current_user_id, method=method, now=now)
         db.session.commit()
 
         return jsonify({
@@ -1565,6 +1686,7 @@ def update_evacuee_check_in(center_id):
 
         log_action = f"Undid check-in for {head_name}{fam_code} at {center.name}"
         db.session.add(SystemLog(user_id=current_user_id, action=log_action, timestamp=now))
+        _sync_operation_check_in_records(center, assignments, resident_ids_present=None, action='check_out', current_user_id=current_user_id, method=method, now=now)
         db.session.commit()
 
         return jsonify({
@@ -1597,6 +1719,10 @@ def auto_geofence_check_in():
     center = EvacuationCenter.query.get(center_id)
     if not center:
         return jsonify({"error": "Evacuation center not found"}), 404
+
+    is_valid, err_msg = _validate_center_evacuation_schedule(center, action='check_in')
+    if not is_valid:
+        return jsonify({"success": False, "message": err_msg, "error": err_msg}), 400
 
     # Validate coordinate overlap / proximity
     is_inside = False
@@ -1673,6 +1799,7 @@ def auto_geofence_check_in():
         head_name = family.head_name if family else f"Resident #{resident_id}"
         fam_code = f" ({family.family_code})" if family and family.family_code else ""
         db.session.add(SystemLog(action=f"Auto checked in {head_name}{fam_code} at {center.name} via GPS geofence", timestamp=now))
+        _sync_operation_check_in_records(center, assignments, resident_ids_present=None, action='check_in', current_user_id=None, method='geofence', now=now)
         db.session.commit()
 
     # Find assigned room if any
@@ -1694,9 +1821,27 @@ def auto_geofence_check_in():
     }), 200
 
 
-def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='all', date_filter=None):
+def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='all', date_filter=None, operation_id_param=None):
     active_centers = EvacuationCenter.query.filter_by(is_active=True).order_by(EvacuationCenter.name.asc()).all()
-    centers_summary = []
+    operations = EvacuationOperation.query.order_by(EvacuationOperation.open_date.desc(), EvacuationOperation.id.desc()).all()
+
+    target_op = None
+    is_historical = False
+
+    if operation_id_param and str(operation_id_param).strip().lower() not in ('all', 'active', 'none', ''):
+        try:
+            op_id_int = int(operation_id_param)
+            target_op = next((o for o in operations if o.id == op_id_int), None)
+            if not target_op:
+                target_op = EvacuationOperation.query.get(op_id_int)
+        except (ValueError, TypeError):
+            pass
+
+    if not target_op:
+        target_op = next((o for o in operations if o.status == 'active'), None)
+
+    if target_op and target_op.status == 'concluded':
+        is_historical = True
 
     center_assigned_totals = dict(
         db.session.query(
@@ -1704,65 +1849,156 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
             func.count(EvacuationAssignment.id)
         ).group_by(EvacuationAssignment.evacuation_center_id).all()
     )
-    center_checked_totals = dict(
-        db.session.query(
-            EvacuationAssignment.evacuation_center_id,
-            func.count(EvacuationAssignment.id)
-        ).filter(EvacuationAssignment.checked_in_at.isnot(None))
-        .group_by(EvacuationAssignment.evacuation_center_id).all()
-    )
 
+    if is_historical and target_op:
+        hist_checked_by_center = dict(
+            db.session.query(
+                EvacuationCheckInRecord.center_id,
+                func.count(EvacuationCheckInRecord.id)
+            ).filter(
+                EvacuationCheckInRecord.operation_id == target_op.id,
+                EvacuationCheckInRecord.status == 'checked_in'
+            ).group_by(EvacuationCheckInRecord.center_id).all()
+        )
+        center_checked_totals = hist_checked_by_center
+    else:
+        center_checked_totals = dict(
+            db.session.query(
+                EvacuationAssignment.evacuation_center_id,
+                func.count(EvacuationAssignment.id)
+            ).filter(EvacuationAssignment.checked_in_at.isnot(None))
+            .group_by(EvacuationAssignment.evacuation_center_id).all()
+        )
+
+    now = philippines_now()
+    centers_summary = []
     for c in active_centers:
         tot_assigned = center_assigned_totals.get(c.id, 0)
         tot_checked = center_checked_totals.get(c.id, 0)
         cap = int(c.capacity or 0)
-        centers_summary.append({
-            "id": c.id,
-            "name": c.name,
-            "center_type": c.center_type or "campus",
-            "capacity": cap,
-            "assigned": tot_assigned,
-            "checked_in": tot_checked,
-            "space_left": max(cap - tot_assigned, 0),
-            "evacuation_open_date": c.evacuation_open_date.isoformat() if c.evacuation_open_date else None,
-            "evacuation_status": c.evacuation_status or "standby",
-            "evacuation_event_name": c.evacuation_event_name or "",
-        })
+        if is_historical and target_op:
+            centers_summary.append({
+                "id": c.id,
+                "name": c.name,
+                "center_type": c.center_type or "campus",
+                "capacity": cap,
+                "assigned": tot_assigned,
+                "checked_in": tot_checked,
+                "space_left": max(cap - tot_assigned, 0),
+                "evacuation_open_date": target_op.open_date.isoformat() if target_op.open_date else None,
+                "evacuation_open_time": target_op.open_time or "08:00",
+                "evacuation_cutoff_date": target_op.cutoff_date.isoformat() if target_op.cutoff_date else (target_op.open_date.isoformat() if target_op.open_date else None),
+                "evacuation_cutoff_time": target_op.cutoff_time or "18:00",
+                "evacuation_extension_count": int(target_op.extension_count or 0),
+                "evacuation_extended_until": target_op.extended_until.isoformat() if target_op.extended_until else None,
+                "evacuation_status": "concluded",
+                "evacuation_event_name": target_op.event_name or "",
+                "is_schedule_set": True,
+                "is_expired": True,
+                "can_check_in": False,
+                "is_historical": True,
+            })
+        else:
+            cutoff_dt = _compute_center_cutoff_dt(c)
+            is_expired = (now > cutoff_dt) if cutoff_dt else False
+            can_check_in = bool(c.evacuation_open_date) and (c.evacuation_status or 'standby') != 'closed'
+            centers_summary.append({
+                "id": c.id,
+                "name": c.name,
+                "center_type": c.center_type or "campus",
+                "capacity": cap,
+                "assigned": tot_assigned,
+                "checked_in": tot_checked,
+                "space_left": max(cap - tot_assigned, 0),
+                "evacuation_open_date": c.evacuation_open_date.isoformat() if c.evacuation_open_date else None,
+                "evacuation_open_time": c.evacuation_open_time or "08:00",
+                "evacuation_cutoff_date": c.evacuation_cutoff_date.isoformat() if c.evacuation_cutoff_date else (c.evacuation_open_date.isoformat() if c.evacuation_open_date else None),
+                "evacuation_cutoff_time": c.evacuation_cutoff_time or "18:00",
+                "evacuation_extension_count": int(c.evacuation_extension_count or 0),
+                "evacuation_extended_until": c.evacuation_extended_until.isoformat() if c.evacuation_extended_until else None,
+                "evacuation_status": c.evacuation_status or "standby",
+                "evacuation_event_name": c.evacuation_event_name or "",
+                "is_schedule_set": bool(c.evacuation_open_date),
+                "is_expired": is_expired,
+                "can_check_in": can_check_in,
+                "is_historical": False,
+            })
 
-    active_sched = None
-    if center_id_param and str(center_id_param).strip() != "all":
-        try:
-            cid = int(center_id_param)
-            matched_c = next((c for c in active_centers if c.id == cid), None)
-            if matched_c:
-                active_sched = {
-                    "center_id": matched_c.id,
-                    "center_name": matched_c.name,
-                    "evacuation_open_date": matched_c.evacuation_open_date.isoformat() if matched_c.evacuation_open_date else None,
-                    "evacuation_status": matched_c.evacuation_status or "standby",
-                    "evacuation_event_name": matched_c.evacuation_event_name or "",
-                }
-        except (ValueError, TypeError):
-            pass
+    if is_historical and target_op:
+        active_sched = {
+            "operation_id": target_op.id,
+            "center_id": target_op.center_id or "all",
+            "center_name": target_op.center.name if target_op.center else "All Evacuation Centers",
+            "evacuation_open_date": target_op.open_date.isoformat() if target_op.open_date else None,
+            "evacuation_open_time": target_op.open_time or "08:00",
+            "evacuation_cutoff_date": target_op.cutoff_date.isoformat() if target_op.cutoff_date else (target_op.open_date.isoformat() if target_op.open_date else None),
+            "evacuation_cutoff_time": target_op.cutoff_time or "18:00",
+            "evacuation_extension_count": int(target_op.extension_count or 0),
+            "evacuation_extended_until": target_op.extended_until.isoformat() if target_op.extended_until else None,
+            "evacuation_status": "concluded",
+            "evacuation_event_name": target_op.event_name or "Historical Evacuation Operation",
+            "is_schedule_set": True,
+            "is_expired": True,
+            "remaining_seconds": 0,
+            "can_check_in": False,
+            "is_historical": True,
+            "concluded_at": target_op.concluded_at.isoformat() if target_op.concluded_at else None,
+        }
+    else:
+        target_c = None
+        if center_id_param and str(center_id_param).strip() != "all":
+            try:
+                cid = int(center_id_param)
+                target_c = next((c for c in active_centers if c.id == cid), None)
+            except (ValueError, TypeError):
+                pass
 
-    if not active_sched:
-        open_c = next((c for c in active_centers if c.evacuation_status == "open"), None)
-        target_c = open_c or next((c for c in active_centers if c.evacuation_open_date), None)
+        if not target_c:
+            open_c = next((c for c in active_centers if c.evacuation_status == "open"), None)
+            target_c = open_c or next((c for c in active_centers if c.evacuation_open_date), None)
+
         if target_c:
+            cutoff_dt = _compute_center_cutoff_dt(target_c)
+            is_expired = (now > cutoff_dt) if cutoff_dt else False
+            remaining_secs = int((cutoff_dt - now).total_seconds()) if cutoff_dt else None
+            can_check_in = bool(target_c.evacuation_open_date) and (target_c.evacuation_status or 'standby') != 'closed'
+
             active_sched = {
-                "center_id": "all",
-                "center_name": "All Evacuation Centers" if open_c else target_c.name,
+                "operation_id": target_op.id if target_op else None,
+                "center_id": target_c.id if (center_id_param and str(center_id_param).strip() != "all") else "all",
+                "center_name": target_c.name if (center_id_param and str(center_id_param).strip() != "all") else "All Evacuation Centers",
                 "evacuation_open_date": target_c.evacuation_open_date.isoformat() if target_c.evacuation_open_date else None,
+                "evacuation_open_time": target_c.evacuation_open_time or "08:00",
+                "evacuation_cutoff_date": target_c.evacuation_cutoff_date.isoformat() if target_c.evacuation_cutoff_date else (target_c.evacuation_open_date.isoformat() if target_c.evacuation_open_date else None),
+                "evacuation_cutoff_time": target_c.evacuation_cutoff_time or "18:00",
+                "evacuation_extension_count": int(target_c.evacuation_extension_count or 0),
+                "evacuation_extended_until": target_c.evacuation_extended_until.isoformat() if target_c.evacuation_extended_until else None,
                 "evacuation_status": target_c.evacuation_status or "standby",
                 "evacuation_event_name": target_c.evacuation_event_name or "",
+                "is_schedule_set": bool(target_c.evacuation_open_date),
+                "is_expired": is_expired,
+                "remaining_seconds": remaining_secs,
+                "can_check_in": can_check_in,
+                "is_historical": False,
             }
         else:
             active_sched = {
+                "operation_id": target_op.id if target_op else None,
                 "center_id": "all",
                 "center_name": "All Evacuation Centers",
                 "evacuation_open_date": None,
+                "evacuation_open_time": "08:00",
+                "evacuation_cutoff_date": None,
+                "evacuation_cutoff_time": "18:00",
+                "evacuation_extension_count": 0,
+                "evacuation_extended_until": None,
                 "evacuation_status": "standby",
                 "evacuation_event_name": "",
+                "is_schedule_set": False,
+                "is_expired": False,
+                "remaining_seconds": None,
+                "can_check_in": False,
+                "is_historical": False,
             }
 
     base_filter = []
@@ -1848,10 +2084,18 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
         all_res_ids = [res.id for res in residents]
 
         assignment_checkin_map = {}
-        if all_res_ids:
-            ass_records = EvacuationAssignment.query.filter(EvacuationAssignment.resident_id.in_(all_res_ids)).all()
-            for a in ass_records:
-                assignment_checkin_map[a.resident_id] = a.checked_in_at
+        if is_historical and target_op:
+            hist_records = EvacuationCheckInRecord.query.filter_by(
+                operation_id=target_op.id
+            ).all()
+            for hr in hist_records:
+                if hr.status == 'checked_in':
+                    assignment_checkin_map[hr.resident_id] = hr.checked_in_at
+        else:
+            if all_res_ids:
+                ass_records = EvacuationAssignment.query.filter(EvacuationAssignment.resident_id.in_(all_res_ids)).all()
+                for a in ass_records:
+                    assignment_checkin_map[a.resident_id] = a.checked_in_at
 
         for res in residents:
             age = None
@@ -1930,14 +2174,40 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
                 if dt_val and dt_val.strftime("%Y-%m-%d") == date_filter:
                     has_date_match = True
                     break
-            if not has_date_match:
-                continue
+
+            center_date_match = False
+            if r.center_id:
+                c_obj = next((c for c in active_centers if c.id == r.center_id), None)
+                if c_obj and c_obj.evacuation_open_date and c_obj.evacuation_open_date.isoformat() == date_filter:
+                    center_date_match = True
+
+            if status_filter == 'checked_in':
+                if not has_date_match:
+                    continue
+            elif status_filter == 'pending':
+                if not center_date_match or checkin_state != 'none':
+                    continue
+            else:
+                if not has_date_match and not center_date_match:
+                    continue
 
         if search_query:
             member_names = " ".join(m["name"] for m in m_list).lower()
             target_str = f"{r.head_name or ''} {r.family_code or ''} {r.contact_number or ''} {r.room_number or ''} {r.barangay_name or ''} {r.center_name or ''} {member_names}".lower()
             if search_query not in target_str:
                 continue
+
+        for m in m_list:
+            m_dt = m.get("checked_in_dt")
+            m["checked_in_time_formatted"] = m_dt.strftime("%I:%M %p") if m_dt else None
+            m["checked_in_date_formatted"] = m_dt.strftime("%b %d, %Y") if m_dt else None
+            m["checked_in_full_formatted"] = m_dt.strftime("%b %d, %Y %I:%M %p") if m_dt else None
+
+        m_checked_times = [m["checked_in_dt"] for m in m_list if m.get("checked_in_dt")]
+        latest_dt = max(m_checked_times) if m_checked_times else (r.latest_checked_in_at if not is_historical else None)
+        latest_formatted = latest_dt.strftime("%b %d, %Y %I:%M %p") if latest_dt else None
+        latest_time_only = latest_dt.strftime("%I:%M %p") if latest_dt else None
+        latest_date_only = latest_dt.strftime("%b %d, %Y") if latest_dt else None
 
         evacuees.append({
             "family_id": r.family_id,
@@ -1958,6 +2228,9 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
             "is_checked_in": chk_count > 0,
             "checkin_state": checkin_state,
             "checked_in_at": latest_at,
+            "checked_in_at_formatted": latest_formatted,
+            "checked_in_time_only": latest_time_only,
+            "checked_in_date_only": latest_date_only,
             "checkin_status": (
                 "Fully arrived" if checkin_state == "full"
                 else (f"{chk_count} of {m_count} arrived" if checkin_state == "partial" else "Pending arrival")
@@ -1976,7 +2249,7 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
         "occupancy_rate": round(((tot_fully_checked_in + tot_partially_checked_in) / tot_assigned * 100), 1) if tot_assigned > 0 else 0
     }
 
-    return centers_summary, evacuees, summary, active_sched, active_centers
+    return centers_summary, evacuees, summary, active_sched, active_centers, operations, is_historical
 
 
 @centers_bp.route('/api/evacuation-centers/check-in-list', methods=['GET'])
@@ -1986,19 +2259,35 @@ def get_check_in_list():
     search_query = request.args.get('q', '').strip().lower()
     status_filter = request.args.get('status', 'all')
     date_filter = request.args.get('date')
+    operation_id_param = request.args.get('operation_id')
 
-    centers_summary, evacuees, summary, active_sched, _ = _get_checkin_dataset(
+    centers_summary, evacuees, summary, active_sched, _, operations, is_historical = _get_checkin_dataset(
         center_id_param=center_id_param,
         search_query=search_query,
         status_filter=status_filter,
-        date_filter=date_filter
+        date_filter=date_filter,
+        operation_id_param=operation_id_param
     )
 
     return jsonify({
         "centers": centers_summary,
         "evacuees": evacuees,
         "evacuation_schedule": active_sched,
-        "summary": summary
+        "summary": summary,
+        "operations": [op.to_dict() for op in operations],
+        "is_historical": is_historical
+    }), 200
+
+
+@centers_bp.route('/api/evacuation-operations', methods=['GET'])
+@role_required('admin', 'lgu_personnel')
+def get_evacuation_operations():
+    operations = EvacuationOperation.query.order_by(
+        EvacuationOperation.open_date.desc(),
+        EvacuationOperation.id.desc()
+    ).all()
+    return jsonify({
+        "operations": [op.to_dict() for op in operations]
     }), 200
 
 
@@ -2019,21 +2308,40 @@ def manage_evacuation_schedule():
         open_c = next((c for c in active_centers if c.evacuation_status == "open"), None)
         active_c = target_center or open_c or next((c for c in active_centers if c.evacuation_open_date), None)
 
+        now = philippines_now()
+        cutoff_dt = _compute_center_cutoff_dt(active_c) if active_c else None
+        is_expired = (now > cutoff_dt) if cutoff_dt else False
+        can_check_in = bool(active_c and active_c.evacuation_open_date and active_c.evacuation_status != 'closed')
+
         return jsonify({
             "schedule": {
                 "center_id": target_center.id if target_center else "all",
                 "center_name": target_center.name if target_center else ("All Evacuation Centers" if open_c else "All Centers"),
                 "evacuation_open_date": active_c.evacuation_open_date.isoformat() if (active_c and active_c.evacuation_open_date) else None,
+                "evacuation_open_time": active_c.evacuation_open_time or "08:00" if active_c else "08:00",
+                "evacuation_cutoff_date": active_c.evacuation_cutoff_date.isoformat() if (active_c and active_c.evacuation_cutoff_date) else (active_c.evacuation_open_date.isoformat() if (active_c and active_c.evacuation_open_date) else None),
+                "evacuation_cutoff_time": active_c.evacuation_cutoff_time or "18:00" if active_c else "18:00",
+                "evacuation_extension_count": int(active_c.evacuation_extension_count or 0) if active_c else 0,
+                "evacuation_extended_until": active_c.evacuation_extended_until.isoformat() if (active_c and active_c.evacuation_extended_until) else None,
                 "evacuation_status": active_c.evacuation_status if active_c else "standby",
                 "evacuation_event_name": active_c.evacuation_event_name if active_c else "",
+                "is_expired": is_expired,
+                "can_check_in": can_check_in,
             },
             "centers": [
                 {
                     "id": c.id,
                     "name": c.name,
                     "evacuation_open_date": c.evacuation_open_date.isoformat() if c.evacuation_open_date else None,
+                    "evacuation_open_time": c.evacuation_open_time or "08:00",
+                    "evacuation_cutoff_date": c.evacuation_cutoff_date.isoformat() if c.evacuation_cutoff_date else None,
+                    "evacuation_cutoff_time": c.evacuation_cutoff_time or "18:00",
+                    "evacuation_extension_count": int(c.evacuation_extension_count or 0),
+                    "evacuation_extended_until": c.evacuation_extended_until.isoformat() if c.evacuation_extended_until else None,
                     "evacuation_status": c.evacuation_status or "standby",
                     "evacuation_event_name": c.evacuation_event_name or "",
+                    "is_expired": (now > _compute_center_cutoff_dt(c)) if _compute_center_cutoff_dt(c) else False,
+                    "can_check_in": bool(c.evacuation_open_date and c.evacuation_status != 'closed'),
                 }
                 for c in active_centers
             ]
@@ -2042,9 +2350,10 @@ def manage_evacuation_schedule():
     # Write operations require admin role
     identity = get_jwt_identity()
     user_role = identity.get('role') if isinstance(identity, dict) else None
+    current_uid = identity.get('user_id') if isinstance(identity, dict) else (int(identity) if str(identity).isdigit() else None)
     if not user_role:
         from models import User
-        u = User.query.get(int(identity) if str(identity).isdigit() else None)
+        u = User.query.get(current_uid)
         if u:
             user_role = u.role
     if user_role != 'admin':
@@ -2053,6 +2362,9 @@ def manage_evacuation_schedule():
     data = request.get_json() or {}
     center_id_target = data.get('center_id', 'all')
     raw_date = data.get('evacuation_open_date')
+    raw_open_time = (data.get('evacuation_open_time') or '08:00').strip()
+    raw_cutoff_date = data.get('evacuation_cutoff_date')
+    raw_cutoff_time = (data.get('evacuation_cutoff_time') or '18:00').strip()
     evac_status = (data.get('evacuation_status') or 'standby').strip().lower()
     event_name = (data.get('evacuation_event_name') or '').strip()
 
@@ -2064,32 +2376,109 @@ def manage_evacuation_schedule():
             elif isinstance(raw_date, date):
                 parsed_date = raw_date
         except Exception as e:
-            return jsonify({"error": f"Invalid date format (expected YYYY-MM-DD): {e}"}), 400
+            return jsonify({"error": f"Invalid opening date format (expected YYYY-MM-DD): {e}"}), 400
+
+    parsed_cutoff_date = None
+    if raw_cutoff_date:
+        try:
+            if isinstance(raw_cutoff_date, str):
+                parsed_cutoff_date = date.fromisoformat(raw_cutoff_date.strip())
+            elif isinstance(raw_cutoff_date, date):
+                parsed_cutoff_date = raw_cutoff_date
+        except Exception as e:
+            return jsonify({"error": f"Invalid cutoff date format (expected YYYY-MM-DD): {e}"}), 400
+    else:
+        parsed_cutoff_date = parsed_date
 
     if evac_status not in ['open', 'standby', 'closed']:
         evac_status = 'standby'
 
     updated_count = 0
+    targets = []
     if str(center_id_target).strip() == 'all':
-        for c in active_centers:
-            c.evacuation_open_date = parsed_date
-            c.evacuation_status = evac_status
-            if event_name or 'evacuation_event_name' in data:
-                c.evacuation_event_name = event_name
-            updated_count += 1
+        targets = active_centers
     else:
         try:
             cid = int(center_id_target)
             target = EvacuationCenter.query.get(cid)
             if not target:
                 return jsonify({"error": f"Evacuation center #{cid} not found."}), 404
-            target.evacuation_open_date = parsed_date
-            target.evacuation_status = evac_status
-            if event_name or 'evacuation_event_name' in data:
-                target.evacuation_event_name = event_name
-            updated_count = 1
+            targets = [target]
         except (ValueError, TypeError):
             return jsonify({"error": "Invalid center_id."}), 400
+
+    for c in targets:
+        c.evacuation_open_date = parsed_date
+        c.evacuation_open_time = raw_open_time
+        c.evacuation_cutoff_date = parsed_cutoff_date
+        c.evacuation_cutoff_time = raw_cutoff_time
+        c.evacuation_status = evac_status
+        if event_name or 'evacuation_event_name' in data:
+            c.evacuation_event_name = event_name
+        # Reset extension markers on new schedule definition
+        c.evacuation_extension_count = 0
+        c.evacuation_extended_until = None
+        updated_count += 1
+
+    if current_uid:
+        log_center = "all centers" if str(center_id_target).strip() == 'all' else targets[0].name
+        db.session.add(SystemLog(
+            user_id=current_uid,
+            action=f"Set evacuation schedule for {log_center}: {parsed_date} {raw_open_time} - {parsed_cutoff_date} {raw_cutoff_time} ({evac_status})",
+            timestamp=philippines_now()
+        ))
+
+    # Synchronize active evacuation operation
+    start_new_op = bool(data.get('start_new_operation', False))
+    if start_new_op:
+        existing_actives = EvacuationOperation.query.filter_by(status='active').all()
+        for old_op in existing_actives:
+            old_op.status = 'concluded'
+            old_op.concluded_at = philippines_now()
+        # Reset live assignment check-ins so new disaster starts with a clean roster
+        EvacuationAssignment.query.update({EvacuationAssignment.checked_in_at: None})
+        target_op = EvacuationOperation(
+            center_id=int(center_id_target) if str(center_id_target).strip() != 'all' else None,
+            event_name=event_name or 'Evacuation Operation',
+            open_date=parsed_date or date.today(),
+            open_time=raw_open_time,
+            cutoff_date=parsed_cutoff_date or parsed_date or date.today(),
+            cutoff_time=raw_cutoff_time,
+            status=evac_status if evac_status != 'closed' else 'standby',
+            created_by_user_id=current_uid
+        )
+        db.session.add(target_op)
+    elif parsed_date:
+        existing_actives = EvacuationOperation.query.filter_by(status='active').all()
+        for old_op in existing_actives:
+            if old_op.open_date != parsed_date:
+                old_op.status = 'concluded'
+                old_op.concluded_at = philippines_now()
+
+        target_op = EvacuationOperation.query.filter_by(open_date=parsed_date, status='active').first()
+        if not target_op:
+            target_op = EvacuationOperation(
+                center_id=int(center_id_target) if str(center_id_target).strip() != 'all' else None,
+                event_name=event_name or 'Evacuation Operation',
+                open_date=parsed_date,
+                open_time=raw_open_time,
+                cutoff_date=parsed_cutoff_date,
+                cutoff_time=raw_cutoff_time,
+                status=evac_status if evac_status != 'closed' else 'standby',
+                created_by_user_id=current_uid
+            )
+            db.session.add(target_op)
+        else:
+            if event_name:
+                target_op.event_name = event_name
+            target_op.open_time = raw_open_time
+            target_op.cutoff_date = parsed_cutoff_date
+            target_op.cutoff_time = raw_cutoff_time
+            if evac_status == 'closed':
+                target_op.status = 'concluded'
+                target_op.concluded_at = philippines_now()
+            else:
+                target_op.status = evac_status
 
     db.session.commit()
 
@@ -2098,9 +2487,109 @@ def manage_evacuation_schedule():
         "schedule": {
             "center_id": center_id_target,
             "evacuation_open_date": parsed_date.isoformat() if parsed_date else None,
+            "evacuation_open_time": raw_open_time,
+            "evacuation_cutoff_date": parsed_cutoff_date.isoformat() if parsed_cutoff_date else None,
+            "evacuation_cutoff_time": raw_cutoff_time,
             "evacuation_status": evac_status,
             "evacuation_event_name": event_name,
+            "evacuation_extension_count": 0,
         }
+    }), 200
+
+
+@centers_bp.route('/api/evacuation-centers/schedule/extend', methods=['POST'])
+@role_required('admin')
+def extend_evacuation_schedule():
+    """
+    Extends the evacuee arrival deadline for a center or all centers.
+    Accepts:
+      center_id: 'all' or integer ID
+      extend_hours: integer hours to add (e.g., 2, 4, 8, 24)
+      custom_cutoff_date: optional 'YYYY-MM-DD'
+      custom_cutoff_time: optional 'HH:MM'
+    """
+    identity = get_jwt_identity()
+    current_uid = identity.get('user_id') if isinstance(identity, dict) else (int(identity) if str(identity).isdigit() else None)
+
+    data = request.get_json() or {}
+    center_id_target = data.get('center_id', 'all')
+    extend_hours = data.get('extend_hours')
+    custom_cutoff_date = data.get('custom_cutoff_date')
+    custom_cutoff_time = data.get('custom_cutoff_time')
+
+    active_centers = EvacuationCenter.query.filter_by(is_active=True).all()
+    targets = []
+    if str(center_id_target).strip() == 'all':
+        targets = [c for c in active_centers if c.evacuation_open_date]
+        if not targets:
+            return jsonify({"error": "No centers have an active schedule to extend."}), 400
+    else:
+        try:
+            cid = int(center_id_target)
+            target = EvacuationCenter.query.get(cid)
+            if not target:
+                return jsonify({"error": f"Evacuation center #{cid} not found."}), 404
+            if not target.evacuation_open_date:
+                return jsonify({"error": f"Cannot extend arrival deadline: No schedule is set for '{target.name}'."}), 400
+            targets = [target]
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid center_id."}), 400
+
+    now = philippines_now()
+    extended_count = 0
+    new_deadline_formatted = ""
+
+    for c in targets:
+        curr_cutoff = _compute_center_cutoff_dt(c)
+        base_dt = curr_cutoff if (curr_cutoff and curr_cutoff > now) else now
+
+        if extend_hours:
+            try:
+                hrs = float(extend_hours)
+                new_dt = base_dt + timedelta(hours=hrs)
+            except (ValueError, TypeError):
+                return jsonify({"error": "Invalid extend_hours value."}), 400
+        elif custom_cutoff_date:
+            try:
+                c_date = date.fromisoformat(str(custom_cutoff_date).strip())
+                time_str = (custom_cutoff_time or "18:00").strip()
+                t_parts = time_str.split(":")
+                new_dt = datetime.combine(c_date, dtime(int(t_parts[0]), int(t_parts[1]) if len(t_parts) > 1 else 0))
+            except Exception as e:
+                return jsonify({"error": f"Invalid custom date/time: {e}"}), 400
+        else:
+            new_dt = base_dt + timedelta(hours=2)
+
+        c.evacuation_cutoff_date = new_dt.date()
+        c.evacuation_cutoff_time = new_dt.strftime("%H:%M")
+        c.evacuation_extended_until = new_dt
+        c.evacuation_extension_count = (c.evacuation_extension_count or 0) + 1
+        c.evacuation_status = "open"  # Re-open facility if it had lapsed
+        extended_count += 1
+        new_deadline_formatted = new_dt.strftime("%b %d, %Y at %I:%M %p")
+
+    if current_uid:
+        log_label = "all centers" if str(center_id_target).strip() == 'all' else targets[0].name
+        hrs_label = f"+{extend_hours}h" if extend_hours else f"to {new_deadline_formatted}"
+        db.session.add(SystemLog(
+            user_id=current_uid,
+            action=f"Extended arrival deadline for {log_label} {hrs_label} (New deadline: {new_deadline_formatted})",
+            timestamp=now
+        ))
+
+    # Synchronize extension on active operations
+    active_ops = EvacuationOperation.query.filter_by(status='active').all()
+    for op in active_ops:
+        op.extended_until = new_dt
+        op.extension_count = (op.extension_count or 0) + 1
+
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "message": f"Evacuation arrival deadline extended until {new_deadline_formatted} for {extended_count} center(s).",
+        "new_cutoff": new_deadline_formatted,
+        "extension_count": targets[0].evacuation_extension_count if targets else 1
     }), 200
 
 
@@ -2112,12 +2601,14 @@ def export_check_in_report():
     status_filter = request.args.get('status', 'all')
     date_filter = request.args.get('date')
     search_query = request.args.get('q', '').strip().lower()
+    operation_id_param = request.args.get('operation_id')
 
-    centers_summary, evacuees, summary, active_sched, active_centers = _get_checkin_dataset(
+    centers_summary, evacuees, summary, active_sched, active_centers, operations, is_historical = _get_checkin_dataset(
         center_id_param=center_id_param,
         search_query=search_query,
         status_filter=status_filter,
-        date_filter=date_filter
+        date_filter=date_filter,
+        operation_id_param=operation_id_param
     )
 
     wb = Workbook()
@@ -2159,16 +2650,26 @@ def export_check_in_report():
             pass
 
     open_date_str = active_sched.get("evacuation_open_date") or "Not set"
+    open_time_str = active_sched.get("evacuation_open_time") or "08:00"
+    cutoff_date_str = active_sched.get("evacuation_cutoff_date") or open_date_str
+    cutoff_time_str = active_sched.get("evacuation_cutoff_time") or "18:00"
+    ext_count = active_sched.get("evacuation_extension_count") or 0
     evac_status_str = (active_sched.get("evacuation_status") or "Standby").title()
     event_label = active_sched.get("evacuation_event_name") or "Standard Evacuation Operation"
     now_str = philippines_now().strftime("%B %d, %Y %I:%M %p")
 
+    sched_line = f"Opening: {open_date_str} at {open_time_str} • Cutoff: {cutoff_date_str} at {cutoff_time_str}"
+    if ext_count > 0:
+        sched_line += f" (Extended {ext_count}x)"
+
+    archive_tag = " (ARCHIVE / HISTORICAL RECORD)" if active_sched.get("is_historical") else ""
+
     # Title block
-    ws1["A1"] = "EVACWAY — EVACUEE ARRIVAL & CHECK-IN REPORT"
+    ws1["A1"] = f"EVACWAY — EVACUEE ARRIVAL & CHECK-IN REPORT{archive_tag}"
     ws1["A1"].font = font_title
     ws1["A2"] = f"Municipality of Sogod, Southern Leyte • MDRRMO Roster • Generated: {now_str}"
     ws1["A2"].font = font_subtitle
-    ws1["A3"] = f"Center: {center_name_label} | Event: {event_label} | Scheduled Opening: {open_date_str} ({evac_status_str}) | Filter: {status_filter.title()}"
+    ws1["A3"] = f"Center: {center_name_label} | Event: {event_label}{archive_tag} | Schedule: {sched_line} ({evac_status_str}) | Filter: {status_filter.title()}"
     ws1["A3"].font = font_meta
 
     headers1 = [
@@ -2321,6 +2822,9 @@ def export_check_in_report():
         "Space Remaining",
         "Occupancy Rate",
         "Scheduled Open Date",
+        "Open Time",
+        "Arrival Deadline",
+        "Extensions",
         "Evacuation Status",
         "Event / Purpose"
     ]
@@ -2329,7 +2833,7 @@ def export_check_in_report():
         cell = ws2.cell(row=4, column=col_idx, value=h)
         cell.font = font_header
         cell.fill = fill_header
-        cell.alignment = align_center if col_idx in [3, 4, 5, 6, 7, 8, 9] else align_left
+        cell.alignment = align_center if col_idx in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12] else align_left
         cell.border = border_cell
 
     for s_idx, cs in enumerate(centers_summary, start=5):
@@ -2337,6 +2841,9 @@ def export_check_in_report():
         checked_val = cs.get("checked_in", 0)
         cap_val = cs.get("capacity", 0)
         occ_rate = f"{round((checked_val / cap_val * 100), 1)}%" if cap_val > 0 else "0.0%"
+        cutoff_d = cs.get("evacuation_cutoff_date") or cs.get("evacuation_open_date") or "—"
+        cutoff_t = cs.get("evacuation_cutoff_time") or "18:00"
+        deadline_display = f"{cutoff_d} {cutoff_t}" if cs.get("evacuation_open_date") else "—"
 
         row_vals = [
             cs.get("name"),
@@ -2347,6 +2854,9 @@ def export_check_in_report():
             cs.get("space_left", 0),
             occ_rate,
             cs.get("evacuation_open_date") or "—",
+            cs.get("evacuation_open_time") or "08:00",
+            deadline_display,
+            f"{cs.get('evacuation_extension_count', 0)}x" if cs.get("evacuation_extension_count") else "None",
             (cs.get("evacuation_status") or "Standby").title(),
             cs.get("evacuation_event_name") or "—"
         ]
@@ -2360,7 +2870,7 @@ def export_check_in_report():
             cell.border = border_cell
             if current_fill:
                 cell.fill = current_fill
-            if col_idx in [3, 4, 5, 6, 7, 8, 9]:
+            if col_idx in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]:
                 cell.alignment = align_center
             else:
                 cell.alignment = align_left

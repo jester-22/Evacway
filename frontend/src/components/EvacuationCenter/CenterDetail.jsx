@@ -6,7 +6,7 @@ import {
   faPersonPregnant, faPersonBooth, faPersonWalking, faCircleExclamation,
   faCheck, faTriangleExclamation, faEdit,
   faChartPie, faPeopleGroup, faClockRotateLeft, faEllipsisVertical,
-  faMapPin, faXmark, faLink,
+  faMapPin, faXmark, faLink, faLinkSlash,
   faBuildingColumns, faUserPlus, faRotateLeft, faDoorOpen, faBed, faUsers, faCircleCheck,
   faLocationDot, faCube, faWheelchair, faArrowRight, faListCheck, faMinus, faDrawPolygon, faArrowsRotate,
 } from '@fortawesome/free-solid-svg-icons'
@@ -117,11 +117,15 @@ export default function CenterDetail({
   onEditCenter,
   onAddRooms,
   onAddBuilding,
+  onEditBuilding,
+  onDeleteBuilding,
+  onAddRoomToBuilding,
   onAddRoom,
   onEditRoom,
   onViewBuildingMap,
   onPlaceBuilding,
   onLinkRoom,
+  onUnlinkRoom,
   onDeleteRoom,
   onMove,
   onUnassign,
@@ -205,6 +209,9 @@ export default function CenterDetail({
             rooms={rooms}
             buildings={buildings}
             onAddBuilding={isAdmin ? onAddBuilding : undefined}
+            onEditBuilding={isAdmin ? onEditBuilding : undefined}
+            onDeleteBuilding={isAdmin ? onDeleteBuilding : undefined}
+            onAddRoomToBuilding={isAdmin ? onAddRoomToBuilding : undefined}
             onAddRoom={onAddRoom}
             onAssignHousehold={onAssignHousehold}
             onEditCenter={onEditCenter}
@@ -212,6 +219,7 @@ export default function CenterDetail({
             onViewBuildingMap={onViewBuildingMap}
             onPlaceBuilding={onPlaceBuilding}
             onLinkRoom={onLinkRoom}
+            onUnlinkRoom={isAdmin ? onUnlinkRoom : undefined}
             onDeleteRoom={onDeleteRoom}
           />
         </section>
@@ -664,7 +672,24 @@ export function OverviewTab({ center, rooms = [], buildings = [], centerFamilies
     </div>
   )
 }
-export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding, onAddRoom, onEditRoom, onViewBuildingMap, onPlaceBuilding, onLinkRoom, onDeleteRoom, onAssignHousehold, onEditCenter }) {
+export function StructureTab({
+  center,
+  rooms = [],
+  buildings = [],
+  onAddBuilding,
+  onEditBuilding,
+  onDeleteBuilding,
+  onAddRoomToBuilding,
+  onAddRoom,
+  onEditRoom,
+  onViewBuildingMap,
+  onPlaceBuilding,
+  onLinkRoom,
+  onUnlinkRoom,
+  onDeleteRoom,
+  onAssignHousehold,
+  onEditCenter,
+}) {
   const isSingleVenue = center?.center_type === 'single_venue'
   const isPrivateProperty = center?.center_type === 'private_property'
 
@@ -884,12 +909,76 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
                           {isMapped ? 'Mapped' : 'Not placed'}
                         </span>
                       )}
+                      {!isUnassigned && (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            backgroundColor: '#f1f5f9',
+                            color: '#475569',
+                            fontWeight: 600,
+                            border: '1px solid #e2e8f0',
+                          }}
+                        >
+                          {groupRooms.length} {groupRooms.length === 1 ? 'room' : 'rooms'}
+                          {building?.max_rooms ? ` / max ${building.max_rooms}` : ''}
+                        </span>
+                      )}
+                      {!isUnassigned && building?.status && (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            padding: '2px 8px',
+                            borderRadius: '999px',
+                            fontWeight: 600,
+                            backgroundColor:
+                              building.status === 'open'
+                                ? '#dcfce7'
+                                : building.status === 'under_repair'
+                                ? '#fef3c7'
+                                : '#fee2e2',
+                            color:
+                              building.status === 'open'
+                                ? '#166534'
+                                : building.status === 'under_repair'
+                                ? '#b45309'
+                                : '#991b1b',
+                          }}
+                        >
+                          {building.status === 'under_repair'
+                            ? 'Under Repair'
+                            : building.status.charAt(0).toUpperCase() + building.status.slice(1)}
+                        </span>
+                      )}
                     </div>
                     {building?.notes && <p className="ec-building-notes">{building.notes}</p>}
                   </div>
 
                   {!isUnassigned && (
                     <div className="ec-structure-building-actions">
+                      {onAddRoomToBuilding && (
+                        <button
+                          type="button"
+                          className="ec-btn-building-action is-view"
+                          onClick={() => onAddRoomToBuilding(building)}
+                          title={`Add room to ${building.name}`}
+                        >
+                          <FontAwesomeIcon icon={faPlus} size="xs" />
+                          <span>Add room</span>
+                        </button>
+                      )}
+                      {onEditBuilding && (
+                        <button
+                          type="button"
+                          className="ec-btn-building-action is-view"
+                          onClick={() => onEditBuilding(building)}
+                          title={`Edit ${building.name} (name, max rooms, floors)`}
+                        >
+                          <FontAwesomeIcon icon={faPen} size="xs" />
+                          <span>Edit</span>
+                        </button>
+                      )}
                       {isMapped ? (
                         <>
                           {onViewBuildingMap && (
@@ -928,6 +1017,18 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
                           </button>
                         )
                       )}
+                      {onDeleteBuilding && (
+                        <button
+                          type="button"
+                          className="ec-btn-building-action is-delete"
+                          onClick={() => onDeleteBuilding(building)}
+                          title={`Delete ${building.name} (rooms remain safe as unassigned)`}
+                          style={{ color: '#dc2626' }}
+                        >
+                          <FontAwesomeIcon icon={faTrash} size="xs" />
+                          <span>Delete</span>
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -964,12 +1065,24 @@ export function StructureTab({ center, rooms = [], buildings = [], onAddBuilding
                               </button>
                             )}
 
-                            {onLinkRoom && (
+                            {!isUnassigned && onUnlinkRoom && (
+                              <button
+                                type="button"
+                                className="ds-btn ds-btn--ghost ds-btn--icon"
+                                onClick={() => onUnlinkRoom(room, building)}
+                                title={`Remove room ${room.room_number || ''} from ${building.name} (unlink)`}
+                                style={{ color: '#d97706' }}
+                              >
+                                <FontAwesomeIcon icon={faLinkSlash} size="xs" />
+                              </button>
+                            )}
+
+                            {isUnassigned && onLinkRoom && (
                               <button
                                 type="button"
                                 className="ds-btn ds-btn--ghost ds-btn--icon"
                                 onClick={() => onLinkRoom(room)}
-                                title="Link to building"
+                                title="Link room to building"
                               >
                                 <FontAwesomeIcon icon={faLink} size="xs" />
                               </button>
@@ -1054,7 +1167,8 @@ export function HouseholdsTab({ center, centerFamilies = [], rooms = [], onAssig
               </tr>
             </thead>
             <tbody>
-              {centerFamilies.map((fam) => {
+              {centerFamilies.map((fam, idx) => {
+                const famKey = fam.id ?? fam.family_id ?? fam.family_code ?? fam.resident_id ?? `fam-${idx}`
                 const headName = fam.household_head_name || fam.head_name || 'Unnamed'
                 const initials = headName
                   .split(' ')
@@ -1068,7 +1182,7 @@ export function HouseholdsTab({ center, centerFamilies = [], rooms = [], onAssig
                 const isRowLoading = loadingFamId === (fam.id ?? fam.family_id)
 
                 return (
-                  <tr key={fam.id} className="ec-table-row">
+                  <tr key={famKey} className="ec-table-row">
                     <td>
                       <div className="ec-household-user-cell">
                         <div className="ec-avatar-circle" aria-hidden="true">

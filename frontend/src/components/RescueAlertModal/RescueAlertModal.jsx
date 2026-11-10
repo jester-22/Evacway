@@ -15,6 +15,7 @@ import {
 import { api } from "../../services/api";
 import { queryKeys } from "../../hooks/useEvacuationQueries";
 import { createSelectedLocationElement } from "../../utils/mapLocationIndicators";
+import { useAuth } from "../../context/AuthContext";
 import "./RescueAlertModal.css";
 
 const MAX_PHOTOS = 5;
@@ -27,9 +28,11 @@ export default function RescueAlertModal({
   onLocationCaptured,
 }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const loggedInName = user?.name || user?.full_name || (user?.first_name ? `${user.first_name} ${user.last_name || ""}`.trim() : "") || user?.email || "";
   const [description, setDescription] = useState("");
-  const [requesterName, setRequesterName] = useState("");
-  const [requesterContact, setRequesterContact] = useState("");
+  const [requesterName, setRequesterName] = useState(loggedInName);
+  const [requesterContact, setRequesterContact] = useState(user?.contact_number || user?.phone || "");
   const [proofImages, setProofImages] = useState([]);
   const [locationDescription, setLocationDescription] = useState("");
   const [coordinates, setCoordinates] = useState(initialCoordinates);
@@ -55,6 +58,16 @@ export default function RescueAlertModal({
       previewUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [previewUrls]);
+
+  // Sync user details if logged in
+  useEffect(() => {
+    if (user) {
+      if (loggedInName && !requesterName) setRequesterName(loggedInName);
+      if ((user.contact_number || user.phone) && !requesterContact) {
+        setRequesterContact(user.contact_number || user.phone);
+      }
+    }
+  }, [user, loggedInName]);
 
   // Sync initialCoordinates if provided
   useEffect(() => {
@@ -224,7 +237,8 @@ export default function RescueAlertModal({
 
   async function handleSubmit(event) {
     event.preventDefault();
-    if (!requesterName.trim()) {
+    const finalName = (user ? loggedInName : requesterName).trim();
+    if (!finalName) {
       setError("Please provide your name.");
       return;
     }
@@ -242,7 +256,7 @@ export default function RescueAlertModal({
     try {
       const formData = new FormData();
       formData.append("description", description.trim());
-      formData.append("requester_name", requesterName.trim());
+      formData.append("requester_name", finalName);
       formData.append("requester_contact", requesterContact.trim());
       formData.append("location_description", locationDescription.trim() || "");
       formData.append("latitude", coordinates?.latitude ?? coordinates?.lat ?? "");
@@ -300,40 +314,70 @@ export default function RescueAlertModal({
             </p>
           )}
 
-          {/* 2-Column Row for Name & Contact Number */}
-          <div className="rescue-field-row">
-            <label className="rescue-field">
-              <span className="rescue-field-label">
-                <FontAwesomeIcon icon={faUser} className="rescue-label-icon" />
-                Your name <em className="rescue-req">*</em>
-              </span>
-              <input
-                type="text"
-                className="rescue-text-input"
-                value={requesterName}
-                onChange={(event) => setRequesterName(event.target.value)}
-                maxLength={100}
-                required
-                placeholder="e.g. Juan Dela Cruz"
-              />
-            </label>
+          {/* If logged in, show compact verified account info without asking for name input */}
+          {user ? (
+            <div className="rescue-logged-in-box">
+              <div className="rescue-logged-in-profile">
+                <div className="rescue-logged-in-avatar">
+                  <FontAwesomeIcon icon={faUser} />
+                </div>
+                <div className="rescue-logged-in-details">
+                  <span className="rescue-logged-in-label">Requesting as:</span>
+                  <strong className="rescue-logged-in-name">{loggedInName}</strong>
+                  {user.email && <span className="rescue-logged-in-email">{user.email}</span>}
+                </div>
+              </div>
+              <label className="rescue-field" style={{ margin: 0 }}>
+                <span className="rescue-field-label">
+                  <FontAwesomeIcon icon={faPhone} className="rescue-label-icon" />
+                  Contact number for rescuers <em className="rescue-req">*</em>
+                </span>
+                <input
+                  type="tel"
+                  className="rescue-text-input"
+                  value={requesterContact}
+                  onChange={(event) => setRequesterContact(event.target.value)}
+                  maxLength={20}
+                  required
+                  placeholder="e.g. 0917 123 4567"
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="rescue-field-row">
+              <label className="rescue-field">
+                <span className="rescue-field-label">
+                  <FontAwesomeIcon icon={faUser} className="rescue-label-icon" />
+                  Your name <em className="rescue-req">*</em>
+                </span>
+                <input
+                  type="text"
+                  className="rescue-text-input"
+                  value={requesterName}
+                  onChange={(event) => setRequesterName(event.target.value)}
+                  maxLength={100}
+                  required
+                  placeholder="e.g. Juan Dela Cruz"
+                />
+              </label>
 
-            <label className="rescue-field">
-              <span className="rescue-field-label">
-                <FontAwesomeIcon icon={faPhone} className="rescue-label-icon" />
-                Contact number <em className="rescue-req">*</em>
-              </span>
-              <input
-                type="tel"
-                className="rescue-text-input"
-                value={requesterContact}
-                onChange={(event) => setRequesterContact(event.target.value)}
-                maxLength={20}
-                required
-                placeholder="e.g. 0917 123 4567"
-              />
-            </label>
-          </div>
+              <label className="rescue-field">
+                <span className="rescue-field-label">
+                  <FontAwesomeIcon icon={faPhone} className="rescue-label-icon" />
+                  Contact number <em className="rescue-req">*</em>
+                </span>
+                <input
+                  type="tel"
+                  className="rescue-text-input"
+                  value={requesterContact}
+                  onChange={(event) => setRequesterContact(event.target.value)}
+                  maxLength={20}
+                  required
+                  placeholder="e.g. 0917 123 4567"
+                />
+              </label>
+            </div>
+          )}
 
           <label className="rescue-field">
             <span className="rescue-field-label">

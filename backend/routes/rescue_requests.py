@@ -7,7 +7,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, verify_jwt_in_request
 from werkzeug.utils import secure_filename
 
-from models import RescueRequest, SystemLog, db
+from models import RescueRequest, SystemLog, db, ResidentAccount, User
 from services.notifications import (
     create_staff_notifications,
     send_staff_push_notifications,
@@ -79,6 +79,29 @@ def submit_rescue_request():
     location_description = str(data.get('location_description') or '').strip() or None
     requester_name = str(data.get('requester_name') or '').strip()
     requester_contact = str(data.get('requester_contact') or '').strip()
+
+    if not requester_name:
+        try:
+            verify_jwt_in_request(optional=True)
+            claims = get_jwt() or {}
+            if claims.get('name'):
+                requester_name = str(claims.get('name')).strip()
+            else:
+                ident = get_jwt_identity()
+                if ident:
+                    account_type = claims.get('account_type', 'user')
+                    if account_type == 'resident_account':
+                        acct = ResidentAccount.query.get(int(ident))
+                        if acct and acct.resident:
+                            requester_name = acct.resident.get_full_name()
+                        elif acct and acct.email:
+                            requester_name = acct.email.split('@')[0]
+                    else:
+                        usr = User.query.get(int(ident))
+                        if usr:
+                            requester_name = usr.name or (usr.email.split('@')[0] if usr.email else '')
+        except Exception:
+            pass
 
     photo_files = [
         f for f in request.files.getlist('proof_images') if f and f.filename

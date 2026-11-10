@@ -83,7 +83,13 @@ class ResidentRegistrationApiTests(unittest.TestCase):
                 'CREATE TABLE barangays (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, population INTEGER, geom BLOB)'
             ))
             connection.execute(text(
-                'CREATE TABLE evacuation_centers (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, capacity INTEGER, building_material VARCHAR(50), building_material_id INTEGER, accessibility_notes TEXT, hazard_exposure_score FLOAT, contact_number VARCHAR(20), is_active BOOLEAN DEFAULT 1, center_type VARCHAR(50), center_type_id INTEGER, owner_name VARCHAR(150), evacuation_open_date DATE, evacuation_status VARCHAR(30) DEFAULT \'standby\', evacuation_event_name VARCHAR(150), max_rooms INTEGER, geom BLOB, entrance_geom BLOB, managed_by INTEGER, created_at DATETIME)'
+                'CREATE TABLE evacuation_centers (id INTEGER PRIMARY KEY, name VARCHAR(100) NOT NULL, capacity INTEGER, building_material VARCHAR(50), building_material_id INTEGER, accessibility_notes TEXT, hazard_exposure_score FLOAT, contact_number VARCHAR(20), is_active BOOLEAN DEFAULT 1, center_type VARCHAR(50), center_type_id INTEGER, owner_name VARCHAR(150), evacuation_open_date DATE, evacuation_open_time VARCHAR(10) DEFAULT \'08:00\', evacuation_cutoff_date DATE, evacuation_cutoff_time VARCHAR(10) DEFAULT \'18:00\', evacuation_extension_count INTEGER DEFAULT 0, evacuation_extended_until DATETIME, evacuation_status VARCHAR(30) DEFAULT \'standby\', evacuation_event_name VARCHAR(150), max_rooms INTEGER, geom BLOB, entrance_geom BLOB, managed_by INTEGER, created_at DATETIME)'
+            ))
+            connection.execute(text(
+                'CREATE TABLE evacuation_operations (id INTEGER PRIMARY KEY, center_id INTEGER, event_name VARCHAR(255) NOT NULL, open_date DATE, open_time VARCHAR(10) DEFAULT \'08:00\', cutoff_date DATE, cutoff_time VARCHAR(10) DEFAULT \'18:00\', status VARCHAR(30) DEFAULT \'active\', extension_count INTEGER DEFAULT 0, extended_until DATETIME, created_by_user_id INTEGER, created_at DATETIME, concluded_at DATETIME)'
+            ))
+            connection.execute(text(
+                'CREATE TABLE evacuation_check_in_records (id INTEGER PRIMARY KEY, operation_id INTEGER NOT NULL, resident_id INTEGER NOT NULL, family_id INTEGER, center_id INTEGER NOT NULL, room_id INTEGER, checked_in_at DATETIME, checked_in_by_user_id INTEGER, method VARCHAR(30) DEFAULT \'manual\', status VARCHAR(20) DEFAULT \'checked_in\', checked_out_at DATETIME)'
             ))
 
     @classmethod

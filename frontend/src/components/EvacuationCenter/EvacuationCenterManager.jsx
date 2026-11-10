@@ -23,7 +23,7 @@ import "./EvacuationCenterManager.css";
 
 import CenterList from "./CenterList";
 import CenterDetailPage from "./CenterDetail";
-import { CenterFormModal, CenterRoomModal, AddBuildingModal, AssignFamilyModal, MoveFamilyModal, ConfirmCenterDialog } from "./CenterModals";
+import { CenterFormModal, CenterRoomModal, AddBuildingModal, EditBuildingModal, BuildingFormModal, AssignFamilyModal, MoveFamilyModal, ConfirmCenterDialog } from "./CenterModals";
 
 function isCenterMapped(item) {
   if (!item) return false;
@@ -162,7 +162,15 @@ export default function EvacuationCenterManager({
 
   // Building modal
   const [buildingModalOpen, setBuildingModalOpen] = useState(false);
-  const [buildingForm, setBuildingForm] = useState({ name: '', notes: '' });
+  const [buildingModalMode, setBuildingModalMode] = useState("add");
+  const [selectedBuilding, setSelectedBuilding] = useState(null);
+  const [buildingForm, setBuildingForm] = useState({
+    name: '',
+    max_rooms: null,
+    floors: null,
+    status: 'open',
+    notes: '',
+  });
   const [savingBuilding, setSavingBuilding] = useState(false);
 
   // Assign family modal
@@ -447,8 +455,47 @@ export default function EvacuationCenterManager({
     }
   }
 
+  function openAddBuildingModal() {
+    setSelectedBuilding(null);
+    setBuildingForm({
+      name: '',
+      max_rooms: null,
+      floors: null,
+      status: 'open',
+      notes: '',
+    });
+    setBuildingModalMode('add');
+    setBuildingModalOpen(true);
+    setError('');
+  }
+
+  function openEditBuildingModal(building) {
+    setSelectedBuilding(building);
+    setBuildingForm({
+      name: building.name || '',
+      max_rooms: building.max_rooms != null ? Number(building.max_rooms) : null,
+      floors: building.floors != null ? Number(building.floors) : null,
+      status: building.status || 'open',
+      notes: building.notes || '',
+    });
+    setBuildingModalMode('edit');
+    setBuildingModalOpen(true);
+    setError('');
+  }
+
+  function openAddRoomForBuilding(building) {
+    setRoomForm({
+      room_number: '',
+      capacity: '',
+      building_id: building?.id != null ? String(building.id) : '',
+    });
+    setSelectedRoom(null);
+    setRoomModalMode('add');
+    setError('');
+  }
+
   async function handleSaveBuilding(e) {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     if (!buildingForm.name || !buildingForm.name.trim()) {
       setError('Building name is required.');
       return;
@@ -461,21 +508,80 @@ export default function EvacuationCenterManager({
     setError('');
 
     try {
-      await api.createBuilding(cId, {
+      const payload = {
         name: buildingForm.name.trim(),
-        notes: buildingForm.notes.trim() || null,
-      });
-      setNotice(`Building "${buildingForm.name.trim()}" added successfully.`);
+        max_rooms: buildingForm.max_rooms !== null && buildingForm.max_rooms !== '' ? Number(buildingForm.max_rooms) : null,
+        floors: buildingForm.floors !== null && buildingForm.floors !== '' ? Number(buildingForm.floors) : null,
+        status: buildingForm.status || 'open',
+        notes: buildingForm.notes?.trim() || null,
+      };
+
+      if (buildingModalMode === 'edit' && selectedBuilding) {
+        await api.updateBuilding(selectedBuilding.id, payload);
+        setNotice(`Building "${payload.name}" updated successfully.`);
+      } else {
+        await api.createBuilding(cId, payload);
+        setNotice(`Building "${payload.name}" added successfully.`);
+      }
+
       setBuildingModalOpen(false);
+      setSelectedBuilding(null);
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.buildings(cId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms(cId) }),
+        queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
+        queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] }),
+      ]);
+    } catch (err) {
+      setError(err.message || "Failed to save building.");
+    } finally {
+      setSavingBuilding(false);
+    }
+  }
+
+  function confirmDeleteBuilding(building) {
+    const bldName = building.name || `Building #${building.id}`;
+    const linkedRoomsCount = centerRooms.filter((r) => String(r.building_id) === String(building.id)).length;
+    setConfirmDialog({
+      title: "Delete Building",
+      message: linkedRoomsCount > 0
+        ? `Are you sure you want to delete "${bldName}"? Its ${linkedRoomsCount} linked room(s) will be safely unlinked and kept as unassigned rooms. Any assigned households will remain intact.`
+        : `Are you sure you want to delete building "${bldName}"?`,
+      confirmText: "Delete Building",
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await api.deleteBuilding(building.id);
+          setNotice(`Building "${bldName}" deleted successfully.`);
+          const cId = selectedCenter?.id || selectedCenter?.properties?.id;
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: queryKeys.buildings(cId) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.rooms(cId) }),
+            queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
+            queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] }),
+          ]);
+        } catch (err) {
+          setError(err.message || "Failed to delete building.");
+        }
+      },
+    });
+  }
+
+  async function handleUnlinkRoomFromBuilding(room, building) {
+    const roomName = formatRoomLabel(room.room_number);
+    const bldName = building?.name || "building";
+    try {
+      await api.unlinkRoomFromBuilding(room.id);
+      setNotice(`${roomName} removed from ${bldName} (now unassigned).`);
+      const cId = selectedCenter?.id || selectedCenter?.properties?.id;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms(cId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.buildings(cId) }),
         queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] }),
         queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] }),
       ]);
     } catch (err) {
-      setError(err.message || "Failed to add building.");
-    } finally {
-      setSavingBuilding(false);
+      setError(err.message || "Failed to unlink room from building.");
     }
   }
 
@@ -845,14 +951,13 @@ export default function EvacuationCenterManager({
 
             setError("");
           }}
-          onAddBuilding={() => {
-            setBuildingForm({ name: '', notes: '' });
-            setBuildingModalOpen(true);
-            setError('');
-          }}
+          onAddBuilding={openAddBuildingModal}
+          onEditBuilding={openEditBuildingModal}
+          onDeleteBuilding={confirmDeleteBuilding}
+          onAddRoomToBuilding={openAddRoomForBuilding}
+          onUnlinkRoom={handleUnlinkRoomFromBuilding}
           onAddRoom={() => {
             setRoomModalMode("add");
-
             setError("");
           }}
           onEditRoom={(room) => openEditRoomModal(room)}
@@ -962,13 +1067,22 @@ export default function EvacuationCenterManager({
         onConfirmMove={handleConfirmMove}
       />
       {buildingModalOpen && (
-        <AddBuildingModal
+        <BuildingFormModal
           open={buildingModalOpen}
+          mode={buildingModalMode}
           buildingForm={buildingForm}
           onChange={setBuildingForm}
+          activeRoomCount={
+            selectedBuilding
+              ? centerRooms.filter((r) => String(r.building_id) === String(selectedBuilding.id)).length
+              : 0
+          }
           saving={savingBuilding}
           onSubmit={handleSaveBuilding}
-          onClose={() => setBuildingModalOpen(false)}
+          onClose={() => {
+            setBuildingModalOpen(false);
+            setSelectedBuilding(null);
+          }}
         />
       )}
       <ConfirmCenterDialog

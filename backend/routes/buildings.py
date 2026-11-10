@@ -450,6 +450,8 @@ def update_building(building_id):
                 EvacuationCenterRoom.building_id == building.id
             ).update({EvacuationCenterRoom.building_id: None}, synchronize_session=False)
 
+    db.session.flush()
+
     # Update max_rooms with validation
     if 'max_rooms' in data:
         max_rooms = data.get('max_rooms')
@@ -469,7 +471,7 @@ def update_building(building_id):
         ).count()
         if max_rooms is not None and max_rooms < active_rooms_count:
             return jsonify({
-                "error": f"Cannot set max_rooms to {max_rooms}: this building has {active_rooms_count} active room(s). Deactivate or delete rooms first."
+                "error": f"Cannot set max_rooms to {max_rooms}: this building has {active_rooms_count} active room(s). Remove or unlink rooms from this building first."
             }), 400
 
         building.max_rooms = max_rooms
@@ -518,32 +520,24 @@ def delete_building(building_id):
     if not building:
         return jsonify({"error": "Building not found"}), 404
 
-    # Check if building has any rooms (active or inactive)
-    room_count = EvacuationCenterRoom.query.filter_by(building_id=building.id).count()
-    if room_count > 0:
-        return jsonify({
-            "error": f"Cannot delete building: it still has {room_count} room(s). Remove or reassign them first."
-        }), 400
+    # Unlink all rooms linked to this building so they remain safe as unassigned rooms in this center
+    EvacuationCenterRoom.query.filter_by(building_id=building.id).update(
+        {EvacuationCenterRoom.building_id: None},
+        synchronize_session=False
+    )
+    db.session.flush()
 
-    # Check if any households are assigned through rooms in this building
-    assigned_families = db.session.query(func.count(func.distinct(Family.id))) \
-        .join(Resident, Resident.family_id == Family.id) \
-        .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id) \
-        .join(EvacuationCenterRoom, EvacuationCenterRoom.id == EvacuationAssignment.room_id) \
-        .filter(EvacuationCenterRoom.building_id == building.id) \
-        .scalar() or 0
-
-    if assigned_families > 0:
-        return jsonify({
-            "error": f"Cannot delete building: {assigned_families} household(s) are assigned to rooms in this building. Move or unassign them first."
-        }), 400
-
+    bld_name = building.name or f"Building #{building_id}"
     db.session.delete(building)
+    db.session.commit()
+
+    user_id = get_jwt_identity()
+    db.session.add(SystemLog(user_id=user_id, action=f"Deleted building '{bld_name}' (ID: {building_id}). Rooms safely unlinked."))
     db.session.commit()
 
     return jsonify({
         "success": True,
-        "message": "Building deleted successfully"
+        "message": f"Building '{bld_name}' deleted successfully. Linked rooms were safely unlinked."
     })
 
 

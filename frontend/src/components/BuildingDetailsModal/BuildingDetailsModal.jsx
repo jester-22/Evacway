@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faXmark,
@@ -11,6 +12,7 @@ import {
   faCheckCircle,
   faChevronDown,
   faArrowRightToBracket,
+  faLinkSlash,
 } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../../services/api";
 import "./BuildingDetailsModal.css";
@@ -28,11 +30,31 @@ export default function BuildingDetailsModal({
   const closeBtnRef = useRef(null);
   const lastActiveElementRef = useRef(null);
 
+  const queryClient = useQueryClient();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
   const [selectedRoomId, setSelectedRoomId] = useState(null);
   const [expandedFamilyKeys, setExpandedFamilyKeys] = useState({});
+
+  const handleUnlinkRoom = async (roomId, roomLabel) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to remove ${roomLabel} from this building? The room will become unassigned and remain in the evacuation center.`
+      )
+    )
+      return;
+    try {
+      await api.unlinkRoomFromBuilding(roomId);
+      queryClient.invalidateQueries({ queryKey: ["evacuation-centers"] });
+      queryClient.invalidateQueries({ queryKey: ["evacuation-center-details"] });
+      if (buildingId) {
+        api.getBuildingDetails(buildingId).then(setData).catch(() => {});
+      }
+    } catch (err) {
+      alert(err.message || "Failed to unlink room");
+    }
+  };
 
   const toggleFamilyExpanded = (key) => {
     setExpandedFamilyKeys((prev) => ({
@@ -757,6 +779,32 @@ export default function BuildingDetailsModal({
                                   </div>
                                 );
                               })()}
+                              {/* Staff Action: Unlink Room from Building */}
+                              {hasStaffAccess && (
+                                <div style={{ marginTop: "12px", paddingTop: "10px", borderTop: "1px dashed #e2e8f0", display: "flex", justifyContent: "flex-end" }}>
+                                  <button
+                                    type="button"
+                                    style={{
+                                      background: "#fffbeb",
+                                      border: "1px solid #fde68a",
+                                      borderRadius: "6px",
+                                      padding: "5px 12px",
+                                      fontSize: "12px",
+                                      fontWeight: 600,
+                                      color: "#b45309",
+                                      cursor: "pointer",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "6px",
+                                    }}
+                                    onClick={() => handleUnlinkRoom(r.id, roomLabel)}
+                                    title={`Remove ${roomLabel} from this building`}
+                                  >
+                                    <FontAwesomeIcon icon={faLinkSlash} />
+                                    <span>Remove from Building (Unlink)</span>
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
                         )}

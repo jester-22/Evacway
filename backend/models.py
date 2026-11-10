@@ -386,6 +386,37 @@ class EvacuationCenter(BaseModel):
         nullable=True
     )
 
+    evacuation_open_time = db.Column(
+        db.String(10),
+        nullable=True,
+        default='08:00',
+        server_default='08:00'
+    )
+
+    evacuation_cutoff_date = db.Column(
+        db.Date,
+        nullable=True
+    )
+
+    evacuation_cutoff_time = db.Column(
+        db.String(10),
+        nullable=True,
+        default='18:00',
+        server_default='18:00'
+    )
+
+    evacuation_extension_count = db.Column(
+        db.Integer,
+        nullable=True,
+        default=0,
+        server_default='0'
+    )
+
+    evacuation_extended_until = db.Column(
+        db.DateTime(timezone=True),
+        nullable=True
+    )
+
     evacuation_status = db.Column(
         db.String(30),
         nullable=True,
@@ -550,6 +581,19 @@ class EvacuationCenter(BaseModel):
             "evacuation_open_date": (
                 self.evacuation_open_date.isoformat()
                 if self.evacuation_open_date
+                else None
+            ),
+            "evacuation_open_time": self.evacuation_open_time or "08:00",
+            "evacuation_cutoff_date": (
+                self.evacuation_cutoff_date.isoformat()
+                if self.evacuation_cutoff_date
+                else (self.evacuation_open_date.isoformat() if self.evacuation_open_date else None)
+            ),
+            "evacuation_cutoff_time": self.evacuation_cutoff_time or "18:00",
+            "evacuation_extension_count": int(self.evacuation_extension_count or 0),
+            "evacuation_extended_until": (
+                self.evacuation_extended_until.isoformat()
+                if self.evacuation_extended_until
                 else None
             ),
             "evacuation_status": self.evacuation_status or "standby",
@@ -1623,4 +1667,88 @@ class EvacuationAssignment(BaseModel):
             f"center={self.evacuation_center_id} "
             f"room={self.room_id}>"
         )
+
+
+class EvacuationOperation(BaseModel):
+    __tablename__ = 'evacuation_operations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    center_id = db.Column(db.Integer, db.ForeignKey('evacuation_centers.id', ondelete='SET NULL'), nullable=True, index=True)
+    event_name = db.Column(db.String(255), nullable=False)
+    open_date = db.Column(db.Date, nullable=False)
+    open_time = db.Column(db.String(10), default='08:00')
+    cutoff_date = db.Column(db.Date, nullable=False)
+    cutoff_time = db.Column(db.String(10), default='18:00')
+    status = db.Column(db.String(30), default='active')  # 'active', 'concluded', 'standby'
+    extension_count = db.Column(db.Integer, default=0)
+    extended_until = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime, default=philippines_now)
+    concluded_at = db.Column(db.DateTime, nullable=True)
+
+    center = db.relationship('EvacuationCenter', foreign_keys=[center_id], lazy=True)
+    created_by = db.relationship('User', foreign_keys=[created_by_user_id], lazy=True)
+    check_in_records = db.relationship('EvacuationCheckInRecord', backref='operation', cascade='all, delete-orphan', lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "center_id": self.center_id,
+            "center_name": self.center.name if self.center else "All Evacuation Centers",
+            "event_name": self.event_name,
+            "open_date": self.open_date.isoformat() if self.open_date else None,
+            "open_time": self.open_time or "08:00",
+            "cutoff_date": self.cutoff_date.isoformat() if self.cutoff_date else None,
+            "cutoff_time": self.cutoff_time or "18:00",
+            "status": self.status,
+            "extension_count": self.extension_count or 0,
+            "extended_until": self.extended_until.isoformat() if self.extended_until else None,
+            "created_by_user_id": self.created_by_user_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "concluded_at": self.concluded_at.isoformat() if self.concluded_at else None,
+            "is_active": self.status == 'active',
+        }
+
+    def __repr__(self):
+        return f"<EvacuationOperation id={self.id} event='{self.event_name}' date={self.open_date} status='{self.status}'>"
+
+
+class EvacuationCheckInRecord(BaseModel):
+    __tablename__ = 'evacuation_check_in_records'
+
+    id = db.Column(db.Integer, primary_key=True)
+    operation_id = db.Column(db.Integer, db.ForeignKey('evacuation_operations.id', ondelete='CASCADE'), nullable=False, index=True)
+    resident_id = db.Column(db.Integer, db.ForeignKey('residents.id', ondelete='CASCADE'), nullable=False, index=True)
+    family_id = db.Column(db.Integer, db.ForeignKey('families.id', ondelete='SET NULL'), nullable=True, index=True)
+    center_id = db.Column(db.Integer, db.ForeignKey('evacuation_centers.id', ondelete='CASCADE'), nullable=False, index=True)
+    room_id = db.Column(db.Integer, db.ForeignKey('evacuation_center_rooms.id', ondelete='SET NULL'), nullable=True)
+    checked_in_at = db.Column(db.DateTime, default=philippines_now, nullable=False)
+    checked_in_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    method = db.Column(db.String(30), default='manual')
+    status = db.Column(db.String(20), default='checked_in')  # 'checked_in', 'checked_out'
+    checked_out_at = db.Column(db.DateTime, nullable=True)
+
+    resident = db.relationship('Resident', foreign_keys=[resident_id], lazy=True)
+    family = db.relationship('Family', foreign_keys=[family_id], lazy=True)
+    center = db.relationship('EvacuationCenter', foreign_keys=[center_id], lazy=True)
+    room = db.relationship('EvacuationCenterRoom', foreign_keys=[room_id], lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "operation_id": self.operation_id,
+            "resident_id": self.resident_id,
+            "family_id": self.family_id,
+            "center_id": self.center_id,
+            "room_id": self.room_id,
+            "checked_in_at": self.checked_in_at.isoformat() if self.checked_in_at else None,
+            "checked_in_by_user_id": self.checked_in_by_user_id,
+            "method": self.method,
+            "status": self.status,
+            "checked_out_at": self.checked_out_at.isoformat() if self.checked_out_at else None,
+        }
+
+    def __repr__(self):
+        return f"<EvacuationCheckInRecord id={self.id} op={self.operation_id} res={self.resident_id} center={self.center_id} status='{self.status}'>"
+
 

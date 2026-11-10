@@ -996,11 +996,14 @@
 }
 
 @keyframes sos-subtle-glow {
-  0%, 100% {
+
+  0%,
+  100% {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.3),
       0 4px 14px rgba(220, 38, 38, 0.35);
   }
+
   50% {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.35),
@@ -2422,15 +2425,17 @@
 
 .resident-hazard-marker {
   position: relative;
+  width: 34px;
+  height: 34px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
   padding: 0;
   border: 0;
   background: transparent;
   cursor: pointer;
   font-family: inherit;
+  transition: none !important;
 }
 
 .resident-hazard-marker-icon {
@@ -2444,9 +2449,15 @@
   background: #bd3c31;
   box-shadow: 0 3px 10px rgba(45, 31, 22, 0.35);
   font-size: 15px;
+  transition: none !important;
 }
 
 .resident-hazard-marker-label {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 3px;
   max-width: 150px;
   padding: 3px 7px;
   border: 1px solid rgba(157, 49, 39, 0.25);
@@ -2460,11 +2471,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
+  transition: none !important;
 }
 
 .resident-hazard-marker:hover .resident-hazard-marker-icon {
   background: #982d26;
-  transform: translateY(-2px);
 }
 
 .resident-hazard-marker.blocked-road-marker {
@@ -4069,5 +4081,191 @@
     min-height: 38px;
     font-size: 12px;
     padding: 6px 10px;
+  }
+}
+
+/* During hazard location picking: default cursor is not-allowed (block) when off-road */
+.resident-home.picking-hazard-mode .map-container,
+.resident-home.picking-hazard-mode .mapboxgl-map,
+.resident-home.picking-hazard-mode .mapboxgl-canvas-container,
+.resident-home.picking-hazard-mode .mapboxgl-canvas-container.mapboxgl-interactive,
+.resident-home.picking-hazard-mode .mapboxgl-canvas,
+.resident-home.picking-hazard-mode .mapboxgl-marker,
+.resident-home.picking-hazard-mode .mapboxgl-popup {
+  cursor: not-allowed;
+}
+
+.resident-home.picking-hazard-mode button,
+.resident-home.picking-hazard-mode .hazard-pick-banner,
+.resident-home.picking-hazard-mode .hazard-pick-banner * {
+  cursor: auto;
+}
+
+.resident-home.picking-hazard-mode button,
+.resident-home.picking-hazard-mode .hazard-pick-banner button {
+  cursor: pointer !important;
+}
+
+/* --- HAZARD ROAD-ONLY LOCATION PICKING BANNER & TOAST --- */
+.hazard-pick-banner {
+  position: fixed;
+  top: calc(var(--top-h, 54px) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1200;
+  width: min(520px, calc(100vw - 24px));
+  background: #ffffff;
+  border: 1.5px solid #f59e0b;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+  animation: hzm-pop-in 0.2s ease;
+  overflow: hidden;
+}
+
+.hazard-pick-banner-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+}
+
+.hazard-pick-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hazard-pick-banner-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #92400e;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hazard-pick-banner-sub {
+  font-size: 11px;
+  color: #78716c;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hazard-pick-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.hazard-pick-gps-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #2563eb;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 32px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.hazard-pick-gps-btn:hover {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.hazard-pick-gps-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.hazard-pick-cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 32px;
+  transition: all 0.15s ease;
+}
+
+.hazard-pick-cancel-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.off-road-alert-toast {
+  position: fixed;
+  top: calc(var(--top-h, 54px) + 68px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1250;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #dc2626;
+  color: #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(220, 38, 38, 0.35);
+  font-size: 12.5px;
+  font-weight: 600;
+  animation: hzm-pop-in 0.2s ease;
+  max-width: min(440px, calc(100vw - 32px));
+  text-align: center;
+}
+
+.off-road-close-btn {
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  opacity: 0.8;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.off-road-close-btn:hover {
+  opacity: 1;
+}
+
+@media (max-width: 600px) {
+  .hazard-pick-banner-content {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .hazard-pick-banner-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .off-road-alert-toast {
+    top: calc(var(--top-h, 54px) + 90px);
+    font-size: 11.5px;
+    padding: 8px 12px;
   }
 }

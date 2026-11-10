@@ -147,6 +147,13 @@ def home():
 
 if __name__ == "__main__":
     with app.app_context():
+        try:
+            from sqlalchemy import text
+            with db.engine.connect() as conn:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis;"))
+                conn.commit()
+        except Exception as e:
+            app.logger.warning("Could not enable postgis extension: %s", e)
         db.create_all()
 
     app.run(debug=True)

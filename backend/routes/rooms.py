@@ -183,38 +183,13 @@ def create_room(center_id):
 
     # Enforce building_id rules based on center_type
     center_type = center.center_type or 'campus'
-    if center_type == 'campus':
-        # Campus: building_id is REQUIRED
-        if raw_building_id is None or str(raw_building_id).strip() == "":
-            return jsonify({"error": "building_id is required for campus type centers"}), 400
-        try:
-            b_id = int(raw_building_id)
-        except (TypeError, ValueError):
-            return jsonify({"error": "Invalid building_id"}), 400
-        building = db.session.get(EvacuationCenterBuilding, b_id)
-        if not building or building.evacuation_center_id != center_id:
-            return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
-
-        # Check building status - cannot add rooms to closed/under_repair buildings
-        if building.status != 'open':
-            return jsonify({"error": f"Cannot add rooms to a building with status '{building.status}'. Only 'open' buildings can have rooms added."}), 400
-
-        # Check building max_rooms limit
-        if building.max_rooms is not None:
-            active_rooms_in_building = EvacuationCenterRoom.query.filter_by(
-                building_id=building.id, is_active=True
-            ).count()
-            if active_rooms_in_building >= building.max_rooms:
-                return jsonify({"error": f"Building has reached its maximum room limit of {building.max_rooms}"}), 400
-
-        parsed_building_id = building.id
-    elif center_type in ('private_property', 'single_venue'):
+    if center_type in ('private_property', 'single_venue'):
         # private_property and single_venue: building_id MUST BE NULL
         if raw_building_id is not None and str(raw_building_id).strip() != "":
             return jsonify({"error": f"building_id must not be provided for {center_type} type centers"}), 400
         parsed_building_id = None
     else:
-        # Fallback for any unknown type - treat as campus (require building)
+        # Campus or other: building_id is optional (can be assigned to building or unassigned)
         if raw_building_id is not None and str(raw_building_id).strip() != "":
             try:
                 b_id = int(raw_building_id)
@@ -223,7 +198,22 @@ def create_room(center_id):
             building = db.session.get(EvacuationCenterBuilding, b_id)
             if not building or building.evacuation_center_id != center_id:
                 return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
+
+            # Check building status - cannot add rooms to closed/under_repair buildings
+            if building.status != 'open':
+                return jsonify({"error": f"Cannot add rooms to a building with status '{building.status}'. Only 'open' buildings can have rooms added."}), 400
+
+            # Check building max_rooms limit
+            if building.max_rooms is not None:
+                active_rooms_in_building = EvacuationCenterRoom.query.filter_by(
+                    building_id=building.id, is_active=True
+                ).count()
+                if active_rooms_in_building >= building.max_rooms:
+                    return jsonify({"error": f"Building has reached its maximum room limit of {building.max_rooms}"}), 400
+
             parsed_building_id = building.id
+        else:
+            parsed_building_id = None
 
     room = EvacuationCenterRoom(
         evacuation_center_id=center_id,
@@ -236,6 +226,13 @@ def create_room(center_id):
     )
 
     db.session.add(room)
+    db.session.commit()
+
+    # Keep center.capacity in sync with active room capacities
+    active_rooms = EvacuationCenterRoom.query.filter_by(
+        evacuation_center_id=center_id, is_active=True
+    ).all()
+    center.capacity = sum(r.capacity or 0 for r in active_rooms)
     db.session.commit()
 
     user_id = get_jwt_identity()
@@ -315,38 +312,13 @@ def update_room(room_id):
         raw_building_id = data.get('building_id')
         center_type = room.evacuation_center.center_type or 'campus'
 
-        if center_type == 'campus':
-            # Campus: building_id is REQUIRED (cannot be set to null)
-            if raw_building_id is None or str(raw_building_id).strip() == "":
-                return jsonify({"error": "building_id is required for campus type centers"}), 400
-            try:
-                b_id = int(raw_building_id)
-            except (TypeError, ValueError):
-                return jsonify({"error": "Invalid building_id"}), 400
-            building = db.session.get(EvacuationCenterBuilding, b_id)
-            if not building or building.evacuation_center_id != room.evacuation_center_id:
-                return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
-
-            # Check building status
-            if building.status != 'open':
-                return jsonify({"error": f"Cannot assign room to a building with status '{building.status}'. Only 'open' buildings can have rooms."}), 400
-
-            # Check building max_rooms limit
-            if building.max_rooms is not None:
-                active_rooms_in_building = EvacuationCenterRoom.query.filter_by(
-                    building_id=building.id, is_active=True
-                ).count()
-                if active_rooms_in_building >= building.max_rooms:
-                    return jsonify({"error": f"Building has reached its maximum room limit of {building.max_rooms}"}), 400
-
-            room.building_id = building.id
-        elif center_type in ('private_property', 'single_venue'):
+        if center_type in ('private_property', 'single_venue'):
             # private_property and single_venue: building_id MUST BE NULL
             if raw_building_id is not None and str(raw_building_id).strip() != "":
                 return jsonify({"error": f"building_id must not be provided for {center_type} type centers"}), 400
             room.building_id = None
         else:
-            # Fallback
+            # Campus or other: None/empty unlinks the room from building
             if raw_building_id is None or str(raw_building_id).strip() == "":
                 room.building_id = None
             else:
@@ -357,10 +329,32 @@ def update_room(room_id):
                 building = db.session.get(EvacuationCenterBuilding, b_id)
                 if not building or building.evacuation_center_id != room.evacuation_center_id:
                     return jsonify({"error": "Selected building does not belong to this evacuation center"}), 400
+
+                # Check building status
+                if building.status != 'open':
+                    return jsonify({"error": f"Cannot assign room to a building with status '{building.status}'. Only 'open' buildings can have rooms."}), 400
+
+                # Check building max_rooms limit (exclude current room if already in this building)
+                if building.max_rooms is not None:
+                    active_rooms_in_building = EvacuationCenterRoom.query.filter(
+                        EvacuationCenterRoom.building_id == building.id,
+                        EvacuationCenterRoom.is_active == True,
+                        EvacuationCenterRoom.id != room.id
+                    ).count()
+                    if active_rooms_in_building >= building.max_rooms:
+                        return jsonify({"error": f"Building has reached its maximum room limit of {building.max_rooms}"}), 400
+
                 room.building_id = building.id
 
 # Room coordinates are deprecated in favor of building mapping
 
+    db.session.commit()
+
+    # Automatically keep center.capacity in sync with rooms
+    active_rooms = EvacuationCenterRoom.query.filter_by(
+        evacuation_center_id=room.evacuation_center_id, is_active=True
+    ).all()
+    room.evacuation_center.capacity = sum(r.capacity or 0 for r in active_rooms)
     db.session.commit()
 
     user_id = get_jwt_identity()
@@ -551,8 +545,18 @@ def delete_room(room_id):
             "error": f"Cannot delete room with {active_assignments} assigned resident(s). Please move or unassign families first."
         }), 400
 
-    # Soft delete to preserve historical references
+    # Soft delete to preserve historical references and unlink from building
+    center = room.evacuation_center
     room.is_active = False
+    room.building_id = None
+    db.session.commit()
+
+    # Automatically keep center.capacity in sync with active rooms
+    active_rooms = EvacuationCenterRoom.query.filter_by(
+        evacuation_center_id=room.evacuation_center_id, is_active=True
+    ).all()
+    if center:
+        center.capacity = sum(r.capacity or 0 for r in active_rooms)
     db.session.commit()
 
     user_id = get_jwt_identity()
@@ -560,7 +564,32 @@ def delete_room(room_id):
     db.session.commit()
 
     return jsonify({
-        "message": f"Room '{room.room_number}' deactivated safely.",
+        "message": f"Room '{room.room_number}' deleted safely.",
+        "room_id": room.id
+    }), 200
+
+
+# ==========================================
+# UNLINK ROOM FROM BUILDING
+# ==========================================
+@rooms_bp.route(
+    '/api/rooms/<int:room_id>/unlink-building',
+    methods=['POST']
+)
+@role_required('admin', 'lgu_personnel')
+def unlink_room_building(room_id):
+    room = EvacuationCenterRoom.query.get_or_404(room_id)
+    old_building_id = room.building_id
+    room.building_id = None
+    db.session.commit()
+
+    user_id = get_jwt_identity()
+    db.session.add(SystemLog(user_id=user_id, action=f"Unlinked room '{room.room_number}' (ID: {room.id}) from building (ID: {old_building_id})"))
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "message": f"Room '{room.room_number}' unlinked from building successfully.",
         "room_id": room.id
     }), 200
 

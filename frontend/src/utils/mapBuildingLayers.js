@@ -225,6 +225,9 @@ export function initBuildingLayers(map, onBuildingClick = null, options = {}) {
   }
 
   map.__buildingMouseMoveHandler = (e) => {
+    if (map.__pickingLocation) {
+      return;
+    }
     map.getCanvas().style.cursor = "pointer";
     if (e.features && e.features.length > 0) {
       const feat = e.features[0];
@@ -292,6 +295,9 @@ export function initBuildingLayers(map, onBuildingClick = null, options = {}) {
     }
 
     map.__buildingClickHandler = (e) => {
+      if (map.__pickingLocation) {
+        return;
+      }
       if (e.features && e.features.length > 0) {
         onBuildingClick(e.features[0]);
       }

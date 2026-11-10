@@ -75,7 +75,7 @@ import { LoginDialog, ResidentSignUpDialog } from "../../components/AuthModals/A
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
-const SOGOD_CENTER = [10.435, 124.996];
+const SOGOD_CENTER = [10.3932, 124.9886];
 
 const SOGOD_BOUNDS = [
   [10.368, 124.912],
@@ -297,6 +297,206 @@ function createNavigationArrowMarker(heading = 0) {
   return container;
 }
 
+function drawCanvasRoundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (typeof ctx.roundRect === "function") {
+    ctx.roundRect(x, y, w, h, r);
+  } else {
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+  }
+}
+
+function createHazardMarkerImage(isBlocked, labelText, iconDef, withLabel = true) {
+  const dpr = 2;
+  const squareSize = 34;
+  const squareRadius = 10;
+  const squareHalf = squareSize / 2;
+
+  if (!withLabel) {
+    // Compact icon (zoomed out far): ONLY the red rounded-square badge, no label
+    const pad = 6;
+    const logicalW = squareSize + pad * 2; // 46px
+    const logicalH = squareSize + pad * 2; // 46px
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(logicalW * dpr);
+    canvas.height = Math.round(logicalH * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+
+    const cx = logicalW / 2;
+    const cy = logicalH / 2;
+    const squareX = cx - squareHalf;
+    const squareY = cy - squareHalf;
+
+    // 1. Red rounded-square badge shadow
+    ctx.save();
+    ctx.shadowColor = "rgba(45, 31, 22, 0.35)";
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 3;
+    ctx.fillStyle = isBlocked ? "#dc2626" : "#bd3c31";
+    drawCanvasRoundedRect(ctx, squareX, squareY, squareSize, squareSize, squareRadius);
+    ctx.fill();
+    ctx.restore();
+
+    // 2. White outline (border) around the badge
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    drawCanvasRoundedRect(ctx, squareX, squareY, squareSize, squareSize, squareRadius);
+    ctx.stroke();
+
+    // 3. White symbol inside badge
+    if (iconDef && Array.isArray(iconDef.icon) && iconDef.icon[4]) {
+      const [iconW, iconH, , , pathData] = iconDef.icon;
+      const targetIconSize = 16;
+      const scale = targetIconSize / Math.max(iconW, iconH);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(scale, scale);
+      ctx.translate(-iconW / 2, -iconH / 2);
+      ctx.fillStyle = "#ffffff";
+      try {
+        ctx.fill(new Path2D(pathData));
+      } catch {
+        ctx.beginPath();
+        ctx.arc(iconW / 2, iconH / 2, iconW / 3, 0, Math.PI * 2);
+        ctx.lineWidth = iconW / 8;
+        ctx.strokeStyle = "#ffffff";
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+  }
+
+  // Full icon (zoomed in): Badge + "Road blocked" label sitting just below
+  const fontSize = 10;
+  const font = `800 ${fontSize}px "Public Sans", system-ui, -apple-system, sans-serif`;
+
+  const tempCanvas = document.createElement("canvas");
+  const tempCtx = tempCanvas.getContext("2d");
+  tempCtx.font = font;
+  const textWidth = Math.ceil(tempCtx.measureText(labelText).width);
+
+  const pillPaddingX = 7;
+  const pillPaddingY = 3;
+  const pillWidth = textWidth + pillPaddingX * 2;
+  const pillHeight = fontSize + pillPaddingY * 2 + 2; // ~18px
+  const gap = 3;
+
+  // Symmetrical anchor: center of square badge sits at (cx, yCenter).
+  // Distance from badge center to bottom of label: 17 + 3 + 18 = 38px.
+  // Symmetrical height = 76px so badge center sits at exact canvas center.
+  const yCenter = squareHalf + gap + pillHeight; // 38px
+  const logicalH = yCenter * 2; // 76px
+  const logicalW = Math.max(squareSize + 20, pillWidth + 16, 92);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(logicalW * dpr);
+  canvas.height = Math.round(logicalH * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+
+  const cx = logicalW / 2;
+  const squareX = cx - squareSize / 2;
+  const squareY = yCenter - squareSize / 2; // 21px
+
+  // 1. Red rounded-square badge with subtle drop shadow
+  ctx.save();
+  ctx.shadowColor = "rgba(45, 31, 22, 0.35)";
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 3;
+  ctx.fillStyle = isBlocked ? "#dc2626" : "#bd3c31";
+  drawCanvasRoundedRect(ctx, squareX, squareY, squareSize, squareSize, squareRadius);
+  ctx.fill();
+  ctx.restore();
+
+  // 2. White outline (border) around the badge so it stands out from the red road
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 2;
+  drawCanvasRoundedRect(ctx, squareX, squareY, squareSize, squareSize, squareRadius);
+  ctx.stroke();
+
+  // 3. White circle-slash (no-entry) symbol inside the badge
+  if (iconDef && Array.isArray(iconDef.icon) && iconDef.icon[4]) {
+    const [iconW, iconH, , , pathData] = iconDef.icon;
+    const targetIconSize = 16;
+    const scale = targetIconSize / Math.max(iconW, iconH);
+    ctx.save();
+    ctx.translate(cx, yCenter);
+    ctx.scale(scale, scale);
+    ctx.translate(-iconW / 2, -iconH / 2);
+    ctx.fillStyle = "#ffffff";
+    try {
+      ctx.fill(new Path2D(pathData));
+    } catch {
+      ctx.beginPath();
+      ctx.arc(iconW / 2, iconH / 2, iconW / 3, 0, Math.PI * 2);
+      ctx.lineWidth = iconW / 8;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(iconW * 0.25, iconH * 0.25);
+      ctx.lineTo(iconW * 0.75, iconH * 0.75);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 4. Small red "Road blocked" label sitting just below the badge
+  const pillX = cx - pillWidth / 2;
+  const pillY = squareY + squareSize + gap; // 58px
+
+  // Pill shadow
+  ctx.save();
+  ctx.shadowColor = "rgba(45, 31, 22, 0.25)";
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 1;
+  ctx.fillStyle = isBlocked ? "#dc2626" : "#fff8f4";
+  drawCanvasRoundedRect(ctx, pillX, pillY, pillWidth, pillHeight, 5);
+  ctx.fill();
+  ctx.restore();
+
+  // Pill border
+  ctx.strokeStyle = isBlocked ? "#ffffff" : "rgba(157, 49, 39, 0.25)";
+  ctx.lineWidth = 1;
+  drawCanvasRoundedRect(ctx, pillX, pillY, pillWidth, pillHeight, 5);
+  ctx.stroke();
+
+  // Pill text
+  ctx.font = font;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = isBlocked ? "#ffffff" : "#7d241e";
+  ctx.fillText(labelText, cx, pillY + pillHeight / 2);
+
+  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+function ensureHazardImage(map, isBlocked, labelText, iconDef, withLabel = true) {
+  if (!map) return "";
+  const variant = withLabel ? "full" : "compact";
+  const safeId = `hazard-marker-v5-${isBlocked ? "badge" : "warning"}-${variant}-${encodeURIComponent(labelText).replace(/[%._-]/g, "")}`;
+  if (!map.hasImage(safeId)) {
+    try {
+      const imgData = createHazardMarkerImage(isBlocked, labelText, iconDef, withLabel);
+      map.addImage(safeId, imgData, { pixelRatio: 2 });
+    } catch (err) {
+      console.warn("Could not add hazard marker image:", err);
+    }
+  }
+  return safeId;
+}
+
 function distanceBetweenPointsMeters(p1, p2) {
   const R = 6371000;
   const dLat = ((p2[1] - p1[1]) * Math.PI) / 180;
@@ -304,9 +504,9 @@ function distanceBetweenPointsMeters(p1, p2) {
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos((p1[1] * Math.PI) / 180) *
-      Math.cos((p2[1] * Math.PI) / 180) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
+    Math.cos((p2[1] * Math.PI) / 180) *
+    Math.sin(dLng / 2) *
+    Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
@@ -485,6 +685,56 @@ function isPointInGeoPolygon(point, coordinates) {
     return coordinates.some((poly) => checkRing(poly[0]));
   }
   return false;
+}
+
+// --------------------------------------------------
+// Project point [lng, lat] onto LineString or MultiLineString geometry
+// --------------------------------------------------
+
+function projectPointToLineStringGeometry(point, geometry) {
+  if (!point || !geometry || !geometry.coordinates) return point;
+  const [lng, lat] = point;
+
+  let coordinateRings = [];
+  if (geometry.type === "LineString") {
+    coordinateRings = [geometry.coordinates];
+  } else if (geometry.type === "MultiLineString") {
+    coordinateRings = geometry.coordinates;
+  } else {
+    return point;
+  }
+
+  let minDistSq = Infinity;
+  let bestPoint = [lng, lat];
+
+  for (const coords of coordinateRings) {
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    for (let i = 0; i < coords.length - 1; i++) {
+      const p1 = coords[i];
+      const p2 = coords[i + 1];
+      if (!Array.isArray(p1) || !Array.isArray(p2)) continue;
+
+      const dx = p2[0] - p1[0];
+      const dy = p2[1] - p1[1];
+      const lenSq = dx * dx + dy * dy;
+
+      let proj;
+      if (lenSq === 0) {
+        proj = p1;
+      } else {
+        const t = Math.max(0, Math.min(1, ((lng - p1[0]) * dx + (lat - p1[1]) * dy) / lenSq));
+        proj = [p1[0] + t * dx, p1[1] + t * dy];
+      }
+
+      const distSq = (lng - proj[0]) ** 2 + (lat - proj[1]) ** 2;
+      if (distSq < minDistSq) {
+        minDistSq = distSq;
+        bestPoint = proj;
+      }
+    }
+  }
+
+  return bestPoint;
 }
 
 // Get center point of evacuation building polygon
@@ -1029,8 +1279,12 @@ const ResidentHome = () => {
   const [rescueCoordinates, setRescueCoordinates] = useState(null);
   const selectedLocationMarkerRef = useRef(null);
   const savedReportHighlightRef = useRef(null);
+  const hazardPopupRef = useRef(null);
   const accuracyCircleStateRef = useRef(null);
   const pickingPurposeRef = useRef("hazard");
+
+  const [pendingSuggestedRoad, setPendingSuggestedRoad] = useState(null);
+  const [quickLocating, setQuickLocating] = useState(false);
 
   const [reportConfirmation, setReportConfirmation] = useState("");
 
@@ -1111,6 +1365,9 @@ const ResidentHome = () => {
 
   useEffect(() => {
     pickingLocationRef.current = pickingLocation;
+    if (mapRef.current) {
+      mapRef.current.__pickingLocation = pickingLocation;
+    }
   }, [pickingLocation]);
 
   // --------------------------------------------------
@@ -1276,6 +1533,7 @@ const ResidentHome = () => {
     }
 
     const handleZoneClick = (event) => {
+      if (pickingLocationRef.current) return;
       const feature = event.features?.[0];
       if (!feature) return;
 
@@ -1287,14 +1545,14 @@ const ResidentHome = () => {
 
     const handleMouseEnter = () => {
       try {
+        if (pickingLocationRef.current) return;
         map.getCanvas().style.cursor = "pointer";
       } catch (e) { }
     };
     const handleMouseLeave = () => {
       try {
-        map.getCanvas().style.cursor = pickingLocationRef.current
-          ? "crosshair"
-          : "";
+        if (pickingLocationRef.current) return;
+        map.getCanvas().style.cursor = "";
       } catch (e) { }
     };
 
@@ -1313,14 +1571,23 @@ const ResidentHome = () => {
     };
   }, [filteredHazardZones, mapLoaded, pickingLocation, mapStyle, styleVersion]);
 
-  // Put photo-bearing hazard reports on the map as labeled, clickable tags.
+  // Put photo-bearing hazard reports on the map as native WebGL symbols.
+  // Anchored mathematically to the exact road coordinates, moving with 100% GPU smoothness
+  // and automatic collision decluttering so close icons never stack or overlap on zoom out.
   useEffect(() => {
     const map = mapRef.current;
 
     if (!map || !mapLoaded) return;
 
+    const sourceId = "resident-hazard-reports-source";
+    const layerIdFull = "resident-hazard-reports-layer";
+    const layerIdCompact = "resident-hazard-reports-layer-compact";
+
+    // Clean up any legacy DOM markers if present
     hazardMarkersRef.current.forEach((marker) => marker.remove());
     hazardMarkersRef.current = [];
+
+    const features = [];
 
     hazardReports.forEach((report) => {
       const coordinates = getValidCoordinates([
@@ -1331,73 +1598,181 @@ const ResidentHome = () => {
       if (!coordinates) return;
 
       const blocked = isBlockedRoadReport(report);
+      const labelText = blocked ? "Road blocked" : report.report_type || "Hazard";
+      const iconDef = blocked ? faBan : faTriangleExclamation;
+      const iconNameFull = ensureHazardImage(map, blocked, labelText, iconDef, true);
+      const iconNameCompact = ensureHazardImage(map, blocked, labelText, iconDef, false);
 
-      const closedRoadNames = Array.isArray(report.closed_roads)
-        ? report.closed_roads
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates,
+        },
+        properties: {
+          id: report.id,
+          icon_name: iconNameFull,
+          icon_name_full: iconNameFull,
+          icon_name_compact: iconNameCompact,
+          is_blocked: blocked,
+          report_type: report.report_type || "",
+        },
+      });
+    });
+
+    const geojsonData = {
+      type: "FeatureCollection",
+      features,
+    };
+
+    try {
+      const existingSource = map.getSource(sourceId);
+      if (existingSource) {
+        existingSource.setData(geojsonData);
+      } else {
+        map.addSource(sourceId, {
+          type: "geojson",
+          data: geojsonData,
+        });
+      }
+
+      // Compact layer (zoomed out far < 15.0): badge icon ONLY, no label
+      if (!map.getLayer(layerIdCompact)) {
+        map.addLayer({
+          id: layerIdCompact,
+          type: "symbol",
+          source: sourceId,
+          maxzoom: 15.0,
+          layout: {
+            "icon-image": ["get", "icon_name_compact"],
+            "icon-anchor": "center",
+            "icon-size": 1.0,
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+            "icon-padding": 0,
+          },
+        });
+      }
+
+      // Full layer (zoomed in >= 15.0): badge icon + "Road blocked" label underneath
+      if (!map.getLayer(layerIdFull)) {
+        map.addLayer({
+          id: layerIdFull,
+          type: "symbol",
+          source: sourceId,
+          minzoom: 15.0,
+          layout: {
+            "icon-image": ["get", "icon_name_full"],
+            "icon-anchor": "center",
+            "icon-size": 1.0,
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+            "icon-padding": 0,
+          },
+        });
+      }
+
+      // Always hoist the hazard symbols above all road lines and route layers
+      try {
+        if (map.getLayer(layerIdCompact)) map.moveLayer(layerIdCompact);
+        if (map.getLayer(layerIdFull)) map.moveLayer(layerIdFull);
+      } catch { }
+    } catch (err) {
+      console.warn("Error updating hazard reports layer:", err);
+    }
+
+    function handleHazardSymbolClick(e) {
+      if (pickingLocationRef.current) return;
+      const feature = e.features?.[0];
+      if (!feature) return;
+      const reportId = feature.properties?.id;
+      const targetReport = hazardReports.find((r) => String(r.id) === String(reportId));
+      if (!targetReport) return;
+
+      const coordinates = getValidCoordinates([
+        targetReport.longitude ?? targetReport.lng,
+        targetReport.latitude ?? targetReport.lat,
+      ]);
+      if (!coordinates) return;
+
+      // Close previous popup if open
+      if (hazardPopupRef.current) {
+        try {
+          hazardPopupRef.current.remove();
+        } catch { }
+        hazardPopupRef.current = null;
+      }
+
+      const closedRoadNames = Array.isArray(targetReport.closed_roads)
+        ? targetReport.closed_roads
         : [];
 
-      const element = document.createElement("button");
-      element.type = "button";
-      element.className = blocked
-        ? "resident-hazard-marker blocked-road-marker"
-        : "resident-hazard-marker";
-      element.setAttribute(
-        "aria-label",
-        `View ${blocked ? "blocked road" : "hazard"}: ${report.report_type || "Hazard report"}`
-      );
+      const fullReport = {
+        ...targetReport,
+        closed_roads: closedRoadNames.length > 0 ? closedRoadNames : targetReport.closed_roads,
+      };
 
-      const iconElement = document.createElement("span");
-      iconElement.className = "resident-hazard-marker-icon";
-      iconElement.innerHTML = icon(
-        blocked ? faBan : faTriangleExclamation
-      ).html.join("");
-
-      const label = document.createElement("span");
-      label.className = "resident-hazard-marker-label";
-      label.textContent = blocked
-        ? "Road blocked"
-        : report.report_type || "Hazard";
-
-      element.append(iconElement, label);
-
-      element.addEventListener("click", () => {
-        highlightAndOpenSavedReport(map, savedReportHighlightRef, {
-          ...report,
-          closed_roads: closedRoadNames.length > 0 ? closedRoadNames : report.closed_roads,
-        });
-      });
-
-      const marker = new mapboxgl.Marker({ element, anchor: "bottom" })
+      // Open blockage details popup directly on the map (no white circle, no pulsing ring)
+      const popup = new mapboxgl.Popup({
+        offset: [0, -28],
+        className: "ew-popup",
+        maxWidth: "340px",
+        closeButton: true,
+        closeOnClick: true,
+      })
         .setLngLat(coordinates)
-        .setPopup(
-          new mapboxgl.Popup({
-            className: "ew-popup",
-            maxWidth: "460px",
-          }).setDOMContent(
-            createReportPopup({
-              ...report,
-              closed_roads: closedRoadNames.length > 0
-                ? closedRoadNames
-                : report.closed_roads,
-            })
-          )
-        )
+        .setDOMContent(createReportPopup(fullReport))
         .addTo(map);
 
-      hazardMarkersRef.current.push(marker);
-    });
+      hazardPopupRef.current = popup;
+    }
+
+    function handleHazardSymbolMouseEnter() {
+      if (!pickingLocationRef.current) {
+        map.getCanvas().style.cursor = "pointer";
+      }
+    }
+
+    function handleHazardSymbolMouseLeave() {
+      if (!pickingLocationRef.current) {
+        map.getCanvas().style.cursor = "";
+      }
+    }
+
+    try {
+      [layerIdCompact, layerIdFull].forEach((lId) => {
+        if (map.getLayer(lId)) {
+          map.on("click", lId, handleHazardSymbolClick);
+          map.on("mouseenter", lId, handleHazardSymbolMouseEnter);
+          map.on("mouseleave", lId, handleHazardSymbolMouseLeave);
+        }
+      });
+    } catch (e) { }
 
     return () => {
       cancelAnimationFrame(flowFrameRef.current);
       flowFrameRef.current = null;
+      if (hazardPopupRef.current) {
+        try {
+          hazardPopupRef.current.remove();
+        } catch { }
+        hazardPopupRef.current = null;
+      }
       if (savedReportHighlightRef.current) {
         savedReportHighlightRef.current.remove();
         savedReportHighlightRef.current = null;
       }
-      hazardMarkersRef.current.forEach((marker) => marker.remove());
-      hazardMarkersRef.current = [];
+      try {
+        [layerIdCompact, layerIdFull].forEach((lId) => {
+          if (map.getLayer(lId)) {
+            map.off("click", lId, handleHazardSymbolClick);
+            map.off("mouseenter", lId, handleHazardSymbolMouseEnter);
+            map.off("mouseleave", lId, handleHazardSymbolMouseLeave);
+          }
+        });
+      } catch (e) { }
     };
-  }, [hazardReports, roads, mapLoaded]);
+  }, [hazardReports, roads, mapLoaded, mapStyle, styleVersion]);
 
   // Deep-link / notification opening a saved hazard report on the map
   useEffect(() => {
@@ -1449,7 +1824,7 @@ const ResidentHome = () => {
           setMyCenter(match);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [user]);
 
   // --------------------------------------------------
@@ -1634,12 +2009,12 @@ const ResidentHome = () => {
 
       center: [SOGOD_CENTER[1], SOGOD_CENTER[0]],
 
-      zoom: 12,
+      zoom: 14.5,
 
       pitch: 0,
       bearing: 0,
 
-      minZoom: 12.3,
+      minZoom: 11,
       maxZoom: 18,
 
       attributionControl: true,
@@ -1675,7 +2050,7 @@ const ResidentHome = () => {
     });
 
     // Clicking the map while reporting a hazard or requesting rescue.
-    map.on("click", (e) => {
+    map.on("click", async (e) => {
       if (!pickingLocationRef.current) {
         return;
       }
@@ -1693,10 +2068,99 @@ const ResidentHome = () => {
           setRescueCoordinates(updatedLoc);
         });
       } else {
-        setPendingReportLocation(loc);
+        // Hazard reporting: click is ONLY valid directly on a road
+        const bbox = [
+          [e.point.x - 8, e.point.y - 8],
+          [e.point.x + 8, e.point.y + 8],
+        ];
+        let hitRoadLayer = false;
+        let roadFeatures = [];
+        try {
+          if (map.getLayer("roads-layer")) {
+            const features = map.queryRenderedFeatures(bbox, { layers: ["roads-layer"] });
+            if (features && features.length > 0) {
+              hitRoadLayer = true;
+              roadFeatures = features;
+            }
+          }
+        } catch (err) {
+          console.warn("Could not query roads layer:", err);
+        }
+
+        // If not directly clicking on a road, outside area is UNCLICKABLE - do nothing!
+        if (!hitRoadLayer || roadFeatures.length === 0) {
+          return;
+        }
+
+        // Check if click is near an intersection node (vertex where segments meet or endpoint within ~15m)
+        let bestTarget = null;
+        let minVertexDist = Infinity;
+        for (const rf of roadFeatures) {
+          const coords = rf.geometry?.coordinates;
+          if (Array.isArray(coords)) {
+            const pts = rf.geometry.type === "LineString" ? coords : coords.flat();
+            for (const pt of pts) {
+              if (Array.isArray(pt) && pt.length >= 2) {
+                const d = Math.hypot(pt[0] - loc.lng, pt[1] - loc.lat);
+                if (d < 0.00018 && d < minVertexDist) {
+                  minVertexDist = d;
+                  const rProps = rf.properties || {};
+                  bestTarget = {
+                    lng: Number(pt[0].toFixed(6)),
+                    lat: Number(pt[1].toFixed(6)),
+                    road_name: rProps.road_name || rProps.name || "Road",
+                  };
+                }
+              }
+            }
+          }
+        }
+
+        // If not snapping to an intersection vertex, project to the closest road segment among clicked features
+        if (!bestTarget) {
+          let minProjDist = Infinity;
+          for (const rf of roadFeatures) {
+            const proj = projectPointToLineStringGeometry([loc.lng, loc.lat], rf.geometry);
+            const d = Math.hypot(proj[0] - loc.lng, proj[1] - loc.lat);
+            if (d < minProjDist) {
+              minProjDist = d;
+              const rProps = rf.properties || {};
+              bestTarget = {
+                lng: Number(proj[0].toFixed(6)),
+                lat: Number(proj[1].toFixed(6)),
+                road_name: rProps.road_name || rProps.name || "Road",
+              };
+            }
+          }
+        }
+
+        const targetLoc = bestTarget || {
+          lat: Number(loc.lat.toFixed(6)),
+          lng: Number(loc.lng.toFixed(6)),
+          road_name: "Road",
+        };
+
+        setPendingSuggestedRoad(null);
+        setPendingReportLocation(targetLoc);
         setPickingLocation(false);
-        setOrUpdateSelectedLocationMarker(map, selectedLocationMarkerRef, loc, (updatedLoc) => {
-          setPendingReportLocation(updatedLoc);
+        setOrUpdateSelectedLocationMarker(map, selectedLocationMarkerRef, targetLoc, async (updatedLoc) => {
+          let reSnapped = updatedLoc;
+          try {
+            const snapRes = await api.snapCoordinate(updatedLoc.lat, updatedLoc.lng);
+            if (snapRes && Number.isFinite(snapRes.snapped_lat) && Number.isFinite(snapRes.snapped_lng)) {
+              reSnapped = {
+                lat: snapRes.snapped_lat,
+                lng: snapRes.snapped_lng,
+                road_name: snapRes.nearest_road || targetLoc.road_name,
+              };
+              if (selectedLocationMarkerRef.current) {
+                selectedLocationMarkerRef.current.setLngLat([reSnapped.lng, reSnapped.lat]);
+              }
+            }
+          } catch (err) {
+            console.warn("Could not re-snap dragged hazard marker:", err);
+          }
+          setPendingReportLocation(reSnapped);
         });
       }
     });
@@ -1762,7 +2226,7 @@ const ResidentHome = () => {
   }
 
   // --------------------------------------------------
-  // Update click behavior
+  // Update click behavior & cursor
   // --------------------------------------------------
 
   useEffect(() => {
@@ -1772,7 +2236,65 @@ const ResidentHome = () => {
       return;
     }
 
-    map.getCanvas().style.cursor = pickingLocation ? "crosshair" : "";
+    map.__pickingLocation = pickingLocation;
+    const isPickingHazard = pickingLocation && pickingPurposeRef.current === "hazard";
+
+    if (!isPickingHazard) {
+      try {
+        const resetCursor = pickingLocation ? "crosshair" : "";
+        map.getCanvas().style.cursor = resetCursor;
+        if (map.getCanvasContainer()) {
+          map.getCanvasContainer().style.cursor = resetCursor;
+        }
+      } catch (e) { }
+      return;
+    }
+
+    // Default cursor is not-allowed (block) when off-road
+    try {
+      map.getCanvas().style.cursor = "not-allowed";
+      if (map.getCanvasContainer()) {
+        map.getCanvasContainer().style.cursor = "not-allowed";
+      }
+    } catch (e) { }
+
+    const handleMouseMove = (e) => {
+      if (!pickingLocationRef.current || pickingPurposeRef.current !== "hazard") return;
+
+      const bbox = [
+        [e.point.x - 7, e.point.y - 7],
+        [e.point.x + 7, e.point.y + 7],
+      ];
+      let isOnRoad = false;
+      try {
+        if (map.getLayer("roads-layer")) {
+          const features = map.queryRenderedFeatures(bbox, { layers: ["roads-layer"] });
+          if (features && features.length > 0) {
+            isOnRoad = true;
+          }
+        }
+      } catch (err) { }
+
+      const nextCursor = isOnRoad ? "crosshair" : "not-allowed";
+      try {
+        map.getCanvas().style.cursor = nextCursor;
+        if (map.getCanvasContainer()) {
+          map.getCanvasContainer().style.cursor = nextCursor;
+        }
+      } catch (e) { }
+    };
+
+    map.on("mousemove", handleMouseMove);
+
+    return () => {
+      try {
+        map.off("mousemove", handleMouseMove);
+        map.getCanvas().style.cursor = "";
+        if (map.getCanvasContainer()) {
+          map.getCanvasContainer().style.cursor = "";
+        }
+      } catch (e) { }
+    };
   }, [pickingLocation, mapLoaded]);
 
   // --------------------------------------------------
@@ -1793,6 +2315,9 @@ const ResidentHome = () => {
     const data = roads || EMPTY_FEATURE_COLLECTION;
 
     try {
+      if (map.getLayer("roads-closed-stripes")) {
+        map.removeLayer("roads-closed-stripes");
+      }
       const source = map.getSource(sourceId);
 
       if (source) {
@@ -1802,6 +2327,12 @@ const ResidentHome = () => {
           type: "geojson",
           data,
         });
+
+        const beforeId = map.getLayer("resident-hazard-reports-layer-compact")
+          ? "resident-hazard-reports-layer-compact"
+          : map.getLayer("resident-hazard-reports-layer")
+            ? "resident-hazard-reports-layer"
+            : undefined;
 
         map.addLayer({
           id: layerId,
@@ -1816,11 +2347,35 @@ const ResidentHome = () => {
               "#94a3b8",
             ],
 
-            "line-width": ["case", ["==", ["get", "is_closed"], true], 4, 2],
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              10, ["case", ["==", ["get", "is_closed"], true], 3.5, 1],
+              14, ["case", ["==", ["get", "is_closed"], true], 4.5, 2],
+              18, ["case", ["==", ["get", "is_closed"], true], 6, 3],
+            ],
 
-            "line-opacity": ["case", ["==", ["get", "is_closed"], true], 0.9, 0.5],
+            "line-opacity": ["case", ["==", ["get", "is_closed"], true], 1.0, 0.5],
           },
-        });
+        }, beforeId);
+      }
+
+      // Ensure the hazard icon layers always remain on top of the road lines
+      if (map.getLayer("resident-hazard-reports-layer-compact")) {
+        try {
+          map.moveLayer("resident-hazard-reports-layer-compact");
+        } catch { }
+      }
+      if (map.getLayer("resident-hazard-reports-layer-compact")) {
+        try {
+          map.moveLayer("resident-hazard-reports-layer-compact");
+        } catch { }
+      }
+      if (map.getLayer("resident-hazard-reports-layer")) {
+        try {
+          map.moveLayer("resident-hazard-reports-layer");
+        } catch { }
       }
     } catch (err) {
       console.warn("Error updating roads layer:", err);
@@ -1828,6 +2383,18 @@ const ResidentHome = () => {
     }
 
     function handleRoadClick(e) {
+      if (pickingLocationRef.current) {
+        return;
+      }
+
+      const hazardLayerIds = ["resident-hazard-reports-layer", "resident-hazard-reports-layer-compact"].filter((id) => map.getLayer(id));
+      if (hazardLayerIds.length > 0) {
+        const hazardFeatures = map.queryRenderedFeatures(e.point, { layers: hazardLayerIds });
+        if (hazardFeatures && hazardFeatures.length > 0) {
+          return;
+        }
+      }
+
       const feature = e.features?.[0];
 
       if (!feature) {
@@ -1835,12 +2402,47 @@ const ResidentHome = () => {
       }
 
       const properties = feature.properties || {};
-      const content = properties.is_closed
-        ? createBlockedRoadPopup(
-          properties,
-          findReportForRoad(properties, hazardReports)
-        )
-        : createRoadPopup(properties);
+      if (properties.is_closed) {
+        const report = findReportForRoad(properties, hazardReports);
+        if (report) {
+          const coordinates = getValidCoordinates([
+            report.longitude ?? report.lng,
+            report.latitude ?? report.lat,
+          ]) || [e.lngLat.lng, e.lngLat.lat];
+
+          if (hazardPopupRef.current) {
+            try {
+              hazardPopupRef.current.remove();
+            } catch { }
+            hazardPopupRef.current = null;
+          }
+
+          const closedRoadNames = Array.isArray(report.closed_roads)
+            ? report.closed_roads
+            : [];
+
+          const fullReport = {
+            ...report,
+            closed_roads: closedRoadNames.length > 0 ? closedRoadNames : report.closed_roads,
+          };
+
+          const popup = new mapboxgl.Popup({
+            offset: [0, -28],
+            className: "ew-popup",
+            maxWidth: "340px",
+            closeButton: true,
+            closeOnClick: true,
+          })
+            .setLngLat(coordinates)
+            .setDOMContent(createReportPopup(fullReport))
+            .addTo(map);
+
+          hazardPopupRef.current = popup;
+        }
+        return;
+      }
+
+      const content = createRoadPopup(properties);
 
       new mapboxgl.Popup({
         offset: 10,
@@ -1850,13 +2452,29 @@ const ResidentHome = () => {
         .addTo(map);
     }
 
+    function handleRoadMouseEnter() {
+      if (!pickingLocationRef.current) {
+        map.getCanvas().style.cursor = "pointer";
+      }
+    }
+
+    function handleRoadMouseLeave() {
+      if (!pickingLocationRef.current) {
+        map.getCanvas().style.cursor = "";
+      }
+    }
+
     try {
       map.on("click", layerId, handleRoadClick);
+      map.on("mouseenter", layerId, handleRoadMouseEnter);
+      map.on("mouseleave", layerId, handleRoadMouseLeave);
     } catch (e) { }
 
     return () => {
       try {
         map.off("click", layerId, handleRoadClick);
+        map.off("mouseenter", layerId, handleRoadMouseEnter);
+        map.off("mouseleave", layerId, handleRoadMouseLeave);
       } catch (e) { }
     };
   }, [roads, hazardReports, mapLoaded, mapStyle, styleVersion]);
@@ -1933,82 +2551,6 @@ const ResidentHome = () => {
     }
   }, [sogodBoundary, mapLoaded, mapStyle, styleVersion]);
 
-  // --------------------------------------------------
-  // Fit map to actual Sogod boundary
-  // --------------------------------------------------
-
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!map || !mapLoaded || !sogodBoundary) {
-      return;
-    }
-
-    const bounds = new mapboxgl.LngLatBounds();
-
-    function extendCoordinates(coordinates) {
-      if (!Array.isArray(coordinates)) {
-        return;
-      }
-
-      if (
-        coordinates.length >= 2 &&
-        typeof coordinates[0] !== "object" &&
-        typeof coordinates[1] !== "object"
-      ) {
-        const valid = getValidCoordinates(coordinates);
-
-        if (valid) {
-          bounds.extend(valid);
-        }
-
-        return;
-      }
-
-      coordinates.forEach(extendCoordinates);
-    }
-
-    function extendGeoJSON(geojson) {
-      if (!geojson) {
-        return;
-      }
-
-      if (geojson.type === "FeatureCollection") {
-        geojson.features?.forEach(extendGeoJSON);
-
-        return;
-      }
-
-      if (geojson.type === "Feature") {
-        extendGeoJSON(geojson.geometry);
-
-        return;
-      }
-
-      if (geojson.coordinates) {
-        extendCoordinates(geojson.coordinates);
-      }
-    }
-
-    extendGeoJSON(sogodBoundary);
-
-    if (bounds.isEmpty()) {
-      console.warn("Sogod boundary has no valid coordinates.");
-
-      return;
-    }
-
-    map.fitBounds(bounds, {
-      padding: {
-        top: 90,
-        bottom: 100,
-        left: 50,
-        right: 50,
-      },
-      duration: 0,
-      maxZoom: 11,
-    });
-  }, [sogodBoundary, mapLoaded]);
 
   // --------------------------------------------------
   // Evacuation center outlines + entrances
@@ -2132,19 +2674,20 @@ const ResidentHome = () => {
 
     const handleMouseEnter = () => {
       try {
+        if (pickingLocationRef.current) return;
         map.getCanvas().style.cursor = "pointer";
       } catch (e) { }
     };
 
     const handleMouseLeave = () => {
       try {
-        map.getCanvas().style.cursor = pickingLocationRef.current
-          ? "crosshair"
-          : "";
+        if (pickingLocationRef.current) return;
+        map.getCanvas().style.cursor = "";
       } catch (e) { }
     };
 
     const handleEvacCenterClick = (e) => {
+      if (pickingLocationRef.current) return;
       // If a building was clicked at this point, building details handles it
       try {
         const buildingHits = map.queryRenderedFeatures(e.point, {
@@ -2153,7 +2696,7 @@ const ResidentHome = () => {
         if (buildingHits && buildingHits.length > 0) {
           return;
         }
-      } catch (err) {}
+      } catch (err) { }
 
       const feature = e.features?.[0];
 
@@ -2331,6 +2874,7 @@ const ResidentHome = () => {
         element.appendChild(label);
 
         element.addEventListener("click", (event) => {
+          if (pickingLocationRef.current) return;
           event.stopPropagation();
           setSelectedCenter(center);
         });
@@ -2369,6 +2913,7 @@ const ResidentHome = () => {
 
     window.__mapboxMap = map;
     window.__evacwaySelectBuilding = (bId) => {
+      if (pickingLocationRef.current) return;
       const bFeature = buildingsGeoJSON?.features?.find(
         (f) => String(f.id) === String(bId) || String(f.properties?.id) === String(bId)
       );
@@ -2380,6 +2925,7 @@ const ResidentHome = () => {
     initBuildingLayers(
       map,
       (buildingFeature) => {
+        if (pickingLocationRef.current) return;
         const bProps = buildingFeature.properties || {};
         const bId = bProps.id ?? buildingFeature.id;
         setSelectedBuildingId(bId);
@@ -2769,6 +3315,17 @@ const ResidentHome = () => {
         };
         arrowAnimRef.current = requestAnimationFrame(animateArrows);
       }
+
+      if (map.getLayer("resident-hazard-reports-layer-compact")) {
+        try {
+          map.moveLayer("resident-hazard-reports-layer-compact");
+        } catch { }
+      }
+      if (map.getLayer("resident-hazard-reports-layer")) {
+        try {
+          map.moveLayer("resident-hazard-reports-layer");
+        } catch { }
+      }
     } catch (err) {
       console.warn("Error drawing route layers:", err);
       return;
@@ -2798,9 +3355,8 @@ const ResidentHome = () => {
     destinationName.textContent = destination.name || "Evacuation Center";
 
     const destinationInfo = document.createElement("div");
-    destinationInfo.textContent = `${route.distance_km ?? "?"} km away - about ${
-      route.estimated_time_min ?? "?"
-    } min`;
+    destinationInfo.textContent = `${route.distance_km ?? "?"} km away - about ${route.estimated_time_min ?? "?"
+      } min`;
 
     destinationPopupContent.appendChild(destinationName);
     destinationPopupContent.appendChild(destinationInfo);
@@ -3209,13 +3765,13 @@ const ResidentHome = () => {
         const chosenEntrance = latestRoute?.chosen_entrance || target?.chosen_entrance || activeEntranceRef.current;
         const arrivalCoordinates = chosenEntrance
           ? getValidCoordinates([
-              chosenEntrance.longitude ?? chosenEntrance.lng,
-              chosenEntrance.latitude ?? chosenEntrance.lat,
-            ])
+            chosenEntrance.longitude ?? chosenEntrance.lng,
+            chosenEntrance.latitude ?? chosenEntrance.lat,
+          ])
           : getValidCoordinates([
-              target.longitude ?? target.lng,
-              target.latitude ?? target.lat,
-            ]);
+            target.longitude ?? target.lng,
+            target.latitude ?? target.lat,
+          ]);
 
         // Check arrival (within 20m of chosen entrance)
         if (arrivalCoordinates) {
@@ -3242,7 +3798,7 @@ const ResidentHome = () => {
                 if (res.success) {
                   setMyCenter((prev) => (prev ? { ...prev, is_checked_in: true, checkin_status: "Checked in" } : prev));
                 }
-              }).catch(() => {});
+              }).catch(() => { });
             }
 
             stopWalkingNavigation(arrivalMsg);
@@ -3615,6 +4171,51 @@ const ResidentHome = () => {
     pickingPurposeRef.current = "hazard";
     setPickingLocation(true);
     setPendingReportLocation(null);
+    setPendingSuggestedRoad(null);
+  }
+
+  function handleQuickUseMyLocation() {
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported by your browser.");
+      return;
+    }
+    setQuickLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const rawLat = pos.coords.latitude;
+        const rawLng = pos.coords.longitude;
+        try {
+          const snapData = await api.snapCoordinate(rawLat, rawLng);
+          setQuickLocating(false);
+          const targetLoc = {
+            lat: snapData.snapped_lat,
+            lng: snapData.snapped_lng,
+            road_name: snapData.nearest_road,
+            accuracy: pos.coords.accuracy,
+          };
+          const sugg = {
+            road_name: snapData.nearest_road || "Unnamed road",
+            distance_meters: snapData.snap_distance_meters,
+            lat: snapData.snapped_lat,
+            lng: snapData.snapped_lng,
+            rawLat,
+            rawLng,
+          };
+          setPendingSuggestedRoad(sugg);
+          setPendingReportLocation(targetLoc);
+          setPickingLocation(false);
+          setOrUpdateSelectedLocationMarker(mapRef.current, selectedLocationMarkerRef, targetLoc);
+        } catch (err) {
+          setQuickLocating(false);
+          console.warn("Could not snap GPS location to road:", err);
+        }
+      },
+      (err) => {
+        setQuickLocating(false);
+        console.warn("GPS location error:", err);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
   }
 
   function handleReportLocationChange(newLoc) {
@@ -3629,14 +4230,31 @@ const ResidentHome = () => {
       });
       setMyLocation({ lat: newLoc.lat, lng: newLoc.lng, accuracy: newLoc.accuracy });
       setOrUpdateAccuracyCircle(map, newLoc.lng, newLoc.lat, newLoc.accuracy || 30);
-      setOrUpdateSelectedLocationMarker(map, selectedLocationMarkerRef, newLoc, (updatedLoc) => {
-        setPendingReportLocation(updatedLoc);
+      setOrUpdateSelectedLocationMarker(map, selectedLocationMarkerRef, newLoc, async (updatedLoc) => {
+        let reSnapped = updatedLoc;
+        try {
+          const snapRes = await api.snapCoordinate(updatedLoc.lat, updatedLoc.lng);
+          if (snapRes && Number.isFinite(snapRes.snapped_lat) && Number.isFinite(snapRes.snapped_lng)) {
+            reSnapped = {
+              lat: snapRes.snapped_lat,
+              lng: snapRes.snapped_lng,
+              road_name: snapRes.nearest_road,
+            };
+            if (selectedLocationMarkerRef.current) {
+              selectedLocationMarkerRef.current.setLngLat([reSnapped.lng, reSnapped.lat]);
+            }
+          }
+        } catch (err) {
+          console.warn("Could not re-snap dragged hazard marker:", err);
+        }
+        setPendingReportLocation(reSnapped);
       });
     }
   }
 
   function handleCloseReportModal() {
     setPendingReportLocation(null);
+    setPendingSuggestedRoad(null);
     if (selectedLocationMarkerRef.current) {
       selectedLocationMarkerRef.current.remove();
       selectedLocationMarkerRef.current = null;
@@ -3647,6 +4265,7 @@ const ResidentHome = () => {
 
   function handleReportSubmitted() {
     setPendingReportLocation(null);
+    setPendingSuggestedRoad(null);
     setPickingLocation(false);
     if (selectedLocationMarkerRef.current) {
       selectedLocationMarkerRef.current.remove();
@@ -3693,6 +4312,7 @@ const ResidentHome = () => {
   function handleAdjustHazardOnMap() {
     pickingPurposeRef.current = "hazard";
     setPendingReportLocation(null);
+    setPendingSuggestedRoad(null);
     setPickingLocation(true);
   }
 
@@ -4303,11 +4923,11 @@ const ResidentHome = () => {
     myCenter?.evacuation_center?.name || "Sogod Central School";
   const roomLabel = hasRoom
     ? (hasBuilding
-        ? `${centerDisplayName} · ${roomNum} (${myCenter.room.building_name})`
-        : `${centerDisplayName} · ${roomNum}`)
+      ? `${centerDisplayName} · ${roomNum} (${myCenter.room.building_name})`
+      : `${centerDisplayName} · ${roomNum}`)
     : (hasBuilding
-        ? `${centerDisplayName} · ${myCenter.room.building_name}`
-        : centerDisplayName);
+      ? `${centerDisplayName} · ${myCenter.room.building_name}`
+      : centerDisplayName);
   const fullCenterRoomLabel = roomLabel;
 
   const handleOpenMyRoomBuilding = useCallback(() => {
@@ -4377,12 +4997,15 @@ const ResidentHome = () => {
 
   return (
     <div
-      className={`resident-home ${isRoomCardVisible ? "has-room-card" : ""} ${
-        isRoomCardExpanded ? "has-room-card-expanded" : ""
-      }`}
+      className={`resident-home ${isRoomCardVisible ? "has-room-card" : ""} ${isRoomCardExpanded ? "has-room-card-expanded" : ""
+        } ${pickingLocation && pickingPurposeRef.current === "hazard" ? "picking-hazard-mode" : ""}`}
     >
       {/* Mapbox map */}
-      <div ref={mapContainerRef} className="map-container" />
+      <div
+        ref={mapContainerRef}
+        className={`map-container ${pickingLocation && pickingPurposeRef.current === "hazard" ? "is-picking-hazard" : ""
+          }`}
+      />
 
       {/* Header (slim 48px bar on phones) */}
       <header className="top-bar">
@@ -4423,6 +5046,41 @@ const ResidentHome = () => {
           )}
         </div>
       </header>
+
+      {/* Hazard road location picking instruction banner */}
+      {pickingLocation && pickingPurposeRef.current === "hazard" && (
+        <div className="hazard-pick-banner" role="status">
+          <div className="hazard-pick-banner-content">
+            <div className="hazard-pick-banner-text">
+              <span className="hazard-pick-banner-title">
+                <FontAwesomeIcon icon={faMapPin} /> Click on a road to report danger
+              </span>
+              <span className="hazard-pick-banner-sub">
+                Only roads can be selected
+              </span>
+            </div>
+            <div className="hazard-pick-banner-actions">
+              <button
+                type="button"
+                className="hazard-pick-gps-btn"
+                onClick={handleQuickUseMyLocation}
+                disabled={quickLocating}
+                title="Detect GPS and suggest nearest road"
+              >
+                <FontAwesomeIcon icon={faLocationCrosshairs} spin={quickLocating} />
+                <span>{quickLocating ? "Locating..." : "Use My Location"}</span>
+              </button>
+              <button
+                type="button"
+                className="hazard-pick-cancel-btn"
+                onClick={() => setPickingLocation(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* "Your room" / "Your shelter" card: collapsed bar by default; expanded under search on desktop, bottom sheet on mobile */}
       {isRoomCardVisible && (
@@ -4637,102 +5295,102 @@ const ResidentHome = () => {
       {/* Top area: search (hidden during route preview, navigation & building modal so it does not block the card/bar/modal) */}
       {!navigationActive && !route && !buildingModalOpen && (
         <div className={`top-left-panel ${isMobile ? "compact" : ""}`}>
-        <div className="resident-search-box">
-          <FontAwesomeIcon
-            icon={faMagnifyingGlass}
-            className="resident-search-icon"
-            aria-hidden="true"
-          />
+          <div className="resident-search-box">
+            <FontAwesomeIcon
+              icon={faMagnifyingGlass}
+              className="resident-search-icon"
+              aria-hidden="true"
+            />
 
-          <input
-            type="search"
-            enterKeyHint="search"
-            value={searchText}
-            onChange={(e) => {
-              const val = e.target.value;
-              setSearchText(val);
-              if (val.length > 0) {
-                setHideRoomBarForSearch(true);
-                setShowSearchResults(true);
-              } else {
-                setHideRoomBarForSearch(false);
-                setShowSearchResults(false);
-              }
-            }}
-            onFocus={() => {
-              setHideRoomBarForSearch(true);
-              if (searchResults.length > 0 || searchText.trim().length >= 2) {
-                setShowSearchResults(true);
-              }
-            }}
-            onBlur={() => {
-              setTimeout(() => {
-                if (!selectingSuggestionRef.current) {
+            <input
+              type="search"
+              enterKeyHint="search"
+              value={searchText}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSearchText(val);
+                if (val.length > 0) {
+                  setHideRoomBarForSearch(true);
+                  setShowSearchResults(true);
+                } else {
                   setHideRoomBarForSearch(false);
                   setShowSearchResults(false);
                 }
-              }, 150);
-            }}
-            placeholder="Search evacuation center..."
-            className="resident-search-input"
-            aria-label="Search evacuation center"
-          />
-
-          {searching && (
-            <span className="resident-search-loading">Searching...</span>
-          )}
-
-          {searchText && (
-            <button
-              type="button"
-              className="search-clear-btn"
-              onClick={() => {
-                setSearchText("");
-                setSearchResults([]);
-                setShowSearchResults(false);
-                setHideRoomBarForSearch(false);
               }}
-              aria-label="Clear search"
-            >
-              <FontAwesomeIcon icon={faXmark} />
-            </button>
-          )}
-        </div>
+              onFocus={() => {
+                setHideRoomBarForSearch(true);
+                if (searchResults.length > 0 || searchText.trim().length >= 2) {
+                  setShowSearchResults(true);
+                }
+              }}
+              onBlur={() => {
+                setTimeout(() => {
+                  if (!selectingSuggestionRef.current) {
+                    setHideRoomBarForSearch(false);
+                    setShowSearchResults(false);
+                  }
+                }, 150);
+              }}
+              placeholder="Search evacuation center..."
+              className="resident-search-input"
+              aria-label="Search evacuation center"
+            />
 
-        {showSearchResults && searchResults.length > 0 && (
-          <div className="resident-search-results">
-            {searchResults.map((result, index) => (
+            {searching && (
+              <span className="resident-search-loading">Searching...</span>
+            )}
+
+            {searchText && (
               <button
-                key={`${result.type}-${result.name}-${index}`}
-                className="resident-search-result"
-                onMouseDown={() => {
-                  selectingSuggestionRef.current = true;
+                type="button"
+                className="search-clear-btn"
+                onClick={() => {
+                  setSearchText("");
+                  setSearchResults([]);
+                  setShowSearchResults(false);
+                  setHideRoomBarForSearch(false);
                 }}
-                onClick={() => zoomToSearchResult(result)}
+                aria-label="Clear search"
               >
-                <FontAwesomeIcon
-                  icon={result.type === "barangay" ? faLocationDot : faBuildingColumns}
-                  className="resident-search-result-icon"
-                />
-
-                <span className="resident-search-result-text">
-                  <strong>{result.name}</strong>
-                  <span>{result.subtitle}</span>
-                </span>
+                <FontAwesomeIcon icon={faXmark} />
               </button>
-            ))}
+            )}
           </div>
-        )}
 
-        {showSearchResults &&
-          !searching &&
-          searchText.trim().length >= 2 &&
-          searchResults.length === 0 && (
-            <div className="resident-search-no-results">
-              No evacuation center found.
+          {showSearchResults && searchResults.length > 0 && (
+            <div className="resident-search-results">
+              {searchResults.map((result, index) => (
+                <button
+                  key={`${result.type}-${result.name}-${index}`}
+                  className="resident-search-result"
+                  onMouseDown={() => {
+                    selectingSuggestionRef.current = true;
+                  }}
+                  onClick={() => zoomToSearchResult(result)}
+                >
+                  <FontAwesomeIcon
+                    icon={result.type === "barangay" ? faLocationDot : faBuildingColumns}
+                    className="resident-search-result-icon"
+                  />
+
+                  <span className="resident-search-result-text">
+                    <strong>{result.name}</strong>
+                    <span>{result.subtitle}</span>
+                  </span>
+                </button>
+              ))}
             </div>
           )}
-      </div>
+
+          {showSearchResults &&
+            !searching &&
+            searchText.trim().length >= 2 &&
+            searchResults.length === 0 && (
+              <div className="resident-search-no-results">
+                No evacuation center found.
+              </div>
+            )}
+        </div>
       )}
 
       {/* Right control stack: "My location", "Street / Satellite", and "Help" */}
@@ -5028,10 +5686,10 @@ const ResidentHome = () => {
                         bCap === 0
                           ? "#94a3b8"
                           : bOcc >= bCap
-                          ? "#dc2626"
-                          : bPct >= 70
-                          ? "#d97706"
-                          : "#16a34a";
+                            ? "#dc2626"
+                            : bPct >= 70
+                              ? "#d97706"
+                              : "#16a34a";
 
                       const isUserBuilding =
                         myCenter?.room?.building_id != null &&
@@ -5041,9 +5699,8 @@ const ResidentHome = () => {
                         <button
                           type="button"
                           key={b.id}
-                          className={`center-building-row-btn ${
-                            isUserBuilding ? "is-user-building" : ""
-                          }`}
+                          className={`center-building-row-btn ${isUserBuilding ? "is-user-building" : ""
+                            }`}
                           onClick={() => {
                             setSelectedBuildingId(b.id);
                             setSelectedBuildingData(b);
@@ -5127,122 +5784,122 @@ const ResidentHome = () => {
 
       {/* Bottom Action Bar (always visible & clickable) */}
       <div className={`bottom-actions-container ${isMobile ? "mobile" : ""}`}>
-          {isMobile ? (
-            /* Phones/tablets: compact single-row dock */
-            <div className="mobile-action-dock">
+        {isMobile ? (
+          /* Phones/tablets: compact single-row dock */
+          <div className="mobile-action-dock">
+            {locationPermission !== "granted" ? (
+              <button
+                type="button"
+                onClick={handleEnableLocation}
+                className="action-btn-primary mobile-route-btn"
+              >
+                <FontAwesomeIcon icon={faLocationCrosshairs} />
+                <span>Nearest safe place</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleFindRoute()}
+                disabled={findingRoute}
+                className="action-btn-primary mobile-route-btn"
+              >
+                <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
+                <span>
+                  {findingRoute
+                    ? "Finding..."
+                    : myCenter
+                      ? "My center"
+                      : "Nearest safe place"}
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => openSheet("more")}
+              className="action-btn-secondary mobile-more-btn"
+              aria-label="More options"
+              aria-expanded={moreMenuOpen}
+            >
+              <FontAwesomeIcon icon={faEllipsis} />
+              <span>More</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setRescueAlertOpen(true)}
+              className="action-btn-sos mobile-sos-btn"
+              aria-label="I need rescue"
+            >
+              <FontAwesomeIcon icon={faTriangleExclamation} />
+              <span>I need rescue</span>
+            </button>
+          </div>
+        ) : (
+          /* Desktop Row */
+          <div className="desktop-action-bar">
+            <div className="desktop-primary-group">
               {locationPermission !== "granted" ? (
                 <button
                   type="button"
                   onClick={handleEnableLocation}
-                  className="action-btn-primary mobile-route-btn"
+                  className="action-btn-primary"
                 >
                   <FontAwesomeIcon icon={faLocationCrosshairs} />
-                  <span>Nearest safe place</span>
+                  <span>Go to nearest safe place</span>
                 </button>
               ) : (
                 <button
                   type="button"
                   onClick={() => handleFindRoute()}
                   disabled={findingRoute}
-                  className="action-btn-primary mobile-route-btn"
+                  className="action-btn-primary"
                 >
                   <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
                   <span>
                     {findingRoute
-                      ? "Finding..."
+                      ? "Finding route..."
                       : myCenter
-                        ? "My center"
-                        : "Nearest safe place"}
+                        ? "Go to my evacuation center"
+                        : "Go to nearest safe place"}
                   </span>
                 </button>
               )}
 
               <button
                 type="button"
-                onClick={() => openSheet("more")}
-                className="action-btn-secondary mobile-more-btn"
-                aria-label="More options"
-                aria-expanded={moreMenuOpen}
+                onClick={handleReportMapClick}
+                className="action-btn-secondary"
               >
-                <FontAwesomeIcon icon={faEllipsis} />
-                <span>More</span>
+                <FontAwesomeIcon icon={faMapPin} />
+                <span>{pickingLocation ? "Tap map..." : "Report a danger"}</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setRescueAlertOpen(true)}
-                className="action-btn-sos mobile-sos-btn"
-                aria-label="I need rescue"
+                onClick={openMyCenter}
+                className={`action-btn-secondary ${myCenter ? "verified" : ""}`}
+                title={myCenter ? "My Evacuation Center" : "Find My Evacuation Center"}
               >
-                <FontAwesomeIcon icon={faTriangleExclamation} />
-                <span>I need rescue</span>
+                <FontAwesomeIcon icon={myCenter ? faCircleCheck : faUser} />
+                <span>{myCenter ? `My Evacuation Center (${firstName})` : "My Evacuation Center"}</span>
               </button>
             </div>
-          ) : (
-            /* Desktop Row */
-            <div className="desktop-action-bar">
-              <div className="desktop-primary-group">
-                {locationPermission !== "granted" ? (
-                  <button
-                    type="button"
-                    onClick={handleEnableLocation}
-                    className="action-btn-primary"
-                  >
-                    <FontAwesomeIcon icon={faLocationCrosshairs} />
-                    <span>Go to nearest safe place</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleFindRoute()}
-                    disabled={findingRoute}
-                    className="action-btn-primary"
-                  >
-                    <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
-                    <span>
-                      {findingRoute
-                        ? "Finding route..."
-                        : myCenter
-                          ? "Go to my evacuation center"
-                          : "Go to nearest safe place"}
-                    </span>
-                  </button>
-                )}
 
-                <button
-                  type="button"
-                  onClick={handleReportMapClick}
-                  className="action-btn-secondary"
-                >
-                  <FontAwesomeIcon icon={faMapPin} />
-                  <span>{pickingLocation ? "Tap map..." : "Report a danger"}</span>
-                </button>
+            <div className="desktop-sos-divider" aria-hidden="true" />
 
-                <button
-                  type="button"
-                  onClick={openMyCenter}
-                  className={`action-btn-secondary ${myCenter ? "verified" : ""}`}
-                  title={myCenter ? "My Evacuation Center" : "Find My Evacuation Center"}
-                >
-                  <FontAwesomeIcon icon={myCenter ? faCircleCheck : faUser} />
-                  <span>{myCenter ? `My Evacuation Center (${firstName})` : "My Evacuation Center"}</span>
-                </button>
-              </div>
-
-              <div className="desktop-sos-divider" aria-hidden="true" />
-
-              <button
-                type="button"
-                onClick={() => setRescueAlertOpen(true)}
-                className="action-btn-sos"
-                aria-label="I need rescue"
-              >
-                <FontAwesomeIcon icon={faTriangleExclamation} />
-                <span>I need rescue</span>
-              </button>
-            </div>
-          )}
-        </div>
+            <button
+              type="button"
+              onClick={() => setRescueAlertOpen(true)}
+              className="action-btn-sos"
+              aria-label="I need rescue"
+            >
+              <FontAwesomeIcon icon={faTriangleExclamation} />
+              <span>I need rescue</span>
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Phones/tablets: More bottom sheet */}
       {moreMenuOpen && isMobile && (
@@ -5669,9 +6326,8 @@ const ResidentHome = () => {
                               id={`mc-suggest-item-${idx}`}
                               role="option"
                               aria-selected={isSelected}
-                              className={`mc-autosuggest-item ${
-                                isSelected ? "is-active" : ""
-                              }`}
+                              className={`mc-autosuggest-item ${isSelected ? "is-active" : ""
+                                }`}
                               onClick={() => handleSelectSuggestion(item.name)}
                               onMouseEnter={() => setAutosuggestIndex(idx)}
                             >
@@ -5758,6 +6414,7 @@ const ResidentHome = () => {
       {pendingReportLocation && (
         <HazardReportModal
           location={pendingReportLocation}
+          initialSuggestedRoad={pendingSuggestedRoad}
           onClose={handleCloseReportModal}
           onSubmitted={handleReportSubmitted}
           onLocationChange={handleReportLocationChange}

@@ -1122,10 +1122,10 @@ function DataManagement() {
                       <th style={{ width: "12%" }}>Family Code</th>
                       <th style={{ width: "19%" }}>Resident Name</th>
                       <th style={{ width: "17%" }}>Barangay & Address</th>
-                      <th style={{ width: "11%" }}>Relationship</th>
-                      <th style={{ width: "11%" }}>Age & Gender</th>
+                      <th style={{ width: "10%" }}>Relationship</th>
+                      <th style={{ width: "10%" }}>Age & Gender</th>
                       <th style={{ width: "16%" }}>Special Needs</th>
-                      <th style={{ width: "14%" }}>Shelter Status</th>
+                      <th style={{ width: "16%" }}>Shelter Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1138,53 +1138,53 @@ function DataManagement() {
                             <span
                               className="dm-meta-code-pill"
                               title={r.family_code}
-                              style={{ fontWeight: 700 }}
+                              style={{ fontWeight: 700, maxWidth: "100%", display: "inline-block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                             >
                               {r.family_code}
                             </span>
                           </td>
                           <td>
-                            <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                                <strong style={{ fontSize: "13.5px", color: "var(--text-0, #0f172a)", whiteSpace: "normal", lineHeight: 1.35 }}>
+                                <strong style={{ fontSize: "13px", color: "var(--text-0, #0f172a)", lineHeight: 1.3, wordBreak: "break-word" }}>
                                   {r.full_name || [r.first_name, r.middle_name, r.last_name, r.suffix].filter(Boolean).join(" ") || "Unnamed"}
                                 </strong>
                                 {isHead && (
                                   <span
                                     className="dm-badge dm-badge-blue"
-                                    style={{ fontSize: "10px", padding: "1px 6px", fontWeight: 700, flexShrink: 0 }}
+                                    style={{ fontSize: "9.5px", padding: "1px 5px", fontWeight: 700, flexShrink: 0 }}
                                   >
                                     HEAD
                                   </span>
                                 )}
                               </div>
                               {r.contact_number && (
-                                <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>
+                                <span style={{ fontSize: "11.5px", color: "var(--muted, #64748b)", whiteSpace: "nowrap" }}>
                                   {r.contact_number}
                                 </span>
                               )}
                             </div>
                           </td>
                           <td>
-                            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                              <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-0, #0f172a)" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+                              <span style={{ fontWeight: 600, fontSize: "12.5px", color: "var(--text-0, #0f172a)", wordBreak: "break-word" }}>
                                 {r.barangay_name || "—"}
                               </span>
                               {r.address && (
-                                <span style={{ fontSize: "12px", color: "var(--muted, #64748b)", whiteSpace: "normal" }}>
+                                <span style={{ fontSize: "11.5px", color: "var(--muted, #64748b)", wordBreak: "break-word", lineHeight: 1.25 }}>
                                   {r.address}
                                 </span>
                               )}
                             </div>
                           </td>
                           <td>
-                            <span style={{ fontSize: "13px", color: "#334155" }}>
+                            <span style={{ fontSize: "12.5px", color: "#334155", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block" }}>
                               {r.relationship_to_head || (isHead ? "Household Head" : "Member")}
                             </span>
                           </td>
                           <td>
-                            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                              <span style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-0, #0f172a)", whiteSpace: "nowrap" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+                              <span style={{ fontWeight: 600, fontSize: "12.5px", color: "var(--text-0, #0f172a)", whiteSpace: "nowrap" }}>
                                 {r.computed_age != null
                                   ? `${r.computed_age} yrs old`
                                   : r.age != null
@@ -1193,41 +1193,41 @@ function DataManagement() {
                                       ? `DOB: ${r.date_of_birth}`
                                       : "—"}
                               </span>
-                              <span style={{ fontSize: "12px", color: r.gender ? "var(--text-1, #334155)" : "var(--muted, #94a3b8)" }}>
+                              <span style={{ fontSize: "11.5px", color: r.gender ? "var(--text-1, #334155)" : "var(--muted, #94a3b8)", whiteSpace: "nowrap" }}>
                                 {r.gender || "Not specified"}
                               </span>
                             </div>
                           </td>
                           <td>
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "3px" }}>
                               {r.is_pwd && (
-                                <span className="dm-badge dm-badge-blue" style={{ fontSize: "11px" }}>
-                                  <FontAwesomeIcon icon={faWheelchair} style={{ marginRight: "4px" }} />
+                                <span className="dm-badge dm-badge-blue" style={{ fontSize: "10px", padding: "1px 5px", whiteSpace: "nowrap" }}>
+                                  <FontAwesomeIcon icon={faWheelchair} style={{ marginRight: "3px" }} />
                                   PWD{r.disability_type ? `: ${r.disability_type}` : ""}
                                 </span>
                               )}
                               {isSenior && (
                                 <span
                                   className="dm-badge"
-                                  style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fde68a", fontSize: "11px" }}
+                                  style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fde68a", fontSize: "10px", padding: "1px 5px", whiteSpace: "nowrap" }}
                                 >
-                                  <FontAwesomeIcon icon={faPersonWalkingWithCane} style={{ marginRight: "4px" }} />
+                                  <FontAwesomeIcon icon={faPersonWalkingWithCane} style={{ marginRight: "3px" }} />
                                   Senior (60+)
                                 </span>
                               )}
                               {r.is_pregnant && (
                                 <span
                                   className="dm-badge"
-                                  style={{ background: "#fdf2f8", color: "#9d174d", borderColor: "#fbcfe8", fontSize: "11px" }}
+                                  style={{ background: "#fdf2f8", color: "#9d174d", borderColor: "#fbcfe8", fontSize: "10px", padding: "1px 5px", whiteSpace: "nowrap" }}
                                 >
-                                  <FontAwesomeIcon icon={faBaby} style={{ marginRight: "4px" }} />
+                                  <FontAwesomeIcon icon={faBaby} style={{ marginRight: "3px" }} />
                                   Pregnant
                                 </span>
                               )}
                               {r.is_lactating && (
                                 <span
                                   className="dm-badge"
-                                  style={{ background: "#fdf4ff", color: "#86198f", borderColor: "#f0abfc", fontSize: "11px" }}
+                                  style={{ background: "#fdf4ff", color: "#86198f", borderColor: "#f0abfc", fontSize: "10px", padding: "1px 5px", whiteSpace: "nowrap" }}
                                 >
                                   Lactating
                                 </span>
@@ -1235,19 +1235,19 @@ function DataManagement() {
                               {r.needs_assistance && (
                                 <span
                                   className="dm-badge"
-                                  style={{ background: "#fff1f2", color: "#be123c", borderColor: "#fecdd3", fontSize: "11px" }}
+                                  style={{ background: "#fff1f2", color: "#be123c", borderColor: "#fecdd3", fontSize: "10px", padding: "1px 5px", whiteSpace: "nowrap" }}
                                 >
-                                  Needs Assistance
+                                  Needs Asst
                                 </span>
                               )}
                               {r.medical_notes && (
                                 <span
                                   className="dm-badge"
                                   title={r.medical_notes}
-                                  style={{ background: "#f8fafc", color: "#475569", borderColor: "#cbd5e1", fontSize: "11px" }}
+                                  style={{ background: "#f8fafc", color: "#475569", borderColor: "#cbd5e1", fontSize: "10px", padding: "1px 5px", whiteSpace: "nowrap" }}
                                 >
-                                  <FontAwesomeIcon icon={faNotesMedical} style={{ marginRight: "4px" }} />
-                                  Medical Notes
+                                  <FontAwesomeIcon icon={faNotesMedical} style={{ marginRight: "3px" }} />
+                                  Medical
                                 </span>
                               )}
                               {!r.is_pwd && !isSenior && !r.is_pregnant && !r.is_lactating && !r.needs_assistance && !r.medical_notes && (
@@ -1257,17 +1257,17 @@ function DataManagement() {
                           </td>
                           <td>
                             {r.assignment_status === "Assigned" ? (
-                              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                                <span className="dm-badge dm-badge-green" style={{ width: "fit-content", fontSize: "11px" }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+                                <span className="dm-badge dm-badge-green" style={{ width: "fit-content", fontSize: "10.5px", padding: "1px 6px" }}>
                                   <FontAwesomeIcon icon={faCircleCheck} style={{ marginRight: "4px" }} />
                                   Assigned
                                 </span>
-                                <span style={{ fontSize: "11.5px", color: "#334155" }}>
+                                <span style={{ fontSize: "11px", color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }} title={`${r.evacuation_center || "Center"} ${r.rooms ? `- ${r.rooms}` : ""}`}>
                                   {r.evacuation_center || "Center"} {r.rooms ? `- ${r.rooms}` : ""}
                                 </span>
                               </div>
                             ) : (
-                              <span className="dm-badge" style={{ color: "var(--muted, #64748b)", background: "#f1f5f9", fontSize: "11px" }}>
+                              <span className="dm-badge" style={{ color: "var(--muted, #64748b)", background: "#f1f5f9", fontSize: "10.5px", padding: "1px 6px" }}>
                                 Unassigned
                               </span>
                             )}
@@ -1504,13 +1504,13 @@ function DataManagement() {
                 <table className="dm-table">
                   <thead>
                     <tr>
-                      <th style={{ width: "32px", textAlign: "center" }}></th>
-                      <th style={{ width: "14%" }}>Family Code</th>
-                      <th style={{ width: "22%" }}>Head of Household</th>
+                      <th style={{ width: "36px", textAlign: "center" }}></th>
+                      <th style={{ width: "13%" }}>Family Code</th>
+                      <th style={{ width: "21%" }}>Head of Household</th>
                       <th style={{ width: "19%" }}>Barangay & Address</th>
-                      <th style={{ width: "10%" }}>Members</th>
-                      <th style={{ width: "17%" }}>Special Needs</th>
-                      <th style={{ width: "18%" }}>Shelter Status</th>
+                      <th style={{ width: "9%" }}>Members</th>
+                      <th style={{ width: "19%" }}>Special Needs</th>
+                      <th style={{ width: "19%" }}>Shelter Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1532,7 +1532,7 @@ function DataManagement() {
                             onClick={() => toggleHouseholdExpand(f.id)}
                             style={{ cursor: "pointer", background: isExpanded ? "#f8fafc" : "transparent" }}
                           >
-                            <td>
+                            <td style={{ textAlign: "center" }}>
                               <FontAwesomeIcon
                                 icon={isExpanded ? faChevronDown : faChevronRight}
                                 style={{ color: "var(--muted, #64748b)", fontSize: "12px" }}
@@ -1542,7 +1542,7 @@ function DataManagement() {
                               <span
                                 className="dm-meta-code-pill"
                                 title={f.family_code}
-                                style={{ fontWeight: 700 }}
+                                style={{ fontWeight: 700, maxWidth: "100%", display: "inline-block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                               >
                                 {f.family_code}
                               </span>
@@ -2358,10 +2358,10 @@ function DataManagement() {
                     </div>
                     <div
                       className={`dm-summary-card ${hasErrors
-                          ? "is-status-error"
-                          : canImport
-                            ? "is-status"
-                            : "is-status-muted"
+                        ? "is-status-error"
+                        : canImport
+                          ? "is-status"
+                          : "is-status-muted"
                         }`}
                     >
                       <span className="dm-summary-label">File Check</span>

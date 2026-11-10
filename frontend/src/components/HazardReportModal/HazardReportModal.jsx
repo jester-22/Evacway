@@ -12,6 +12,9 @@ import {
   faPlus,
   faLocationCrosshairs,
   faMapPin,
+  faCheck,
+  faRoute,
+  faCircleCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { createSelectedLocationElement } from "../../utils/mapLocationIndicators";
 import "./HazardReportModal.css";
@@ -31,6 +34,7 @@ function HazardReportModal({
   onSubmitted,
   onLocationChange,
   onAdjustOnMap,
+  initialSuggestedRoad = null,
 }) {
   const queryClient = useQueryClient();
   const [description, setDescription] = useState("");
@@ -41,6 +45,16 @@ function HazardReportModal({
   const [locating, setLocating] = useState(false);
   const [error, setError] = useState("");
   const [addressText, setAddressText] = useState("");
+  const [suggestedRoad, setSuggestedRoad] = useState(initialSuggestedRoad);
+  const [isRoadConfirmed, setIsRoadConfirmed] = useState(initialSuggestedRoad ? false : true);
+
+  // Sync initialSuggestedRoad if parent updates it
+  useEffect(() => {
+    if (initialSuggestedRoad) {
+      setSuggestedRoad(initialSuggestedRoad);
+      setIsRoadConfirmed(false);
+    }
+  }, [initialSuggestedRoad]);
 
   const previewContainerRef = useRef(null);
   const previewMapRef = useRef(null);
@@ -201,15 +215,34 @@ function HazardReportModal({
     setError("");
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLocating(false);
-        const newLoc = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
-        };
-        if (onLocationChange) {
-          onLocationChange(newLoc);
+      async (pos) => {
+        const rawLat = pos.coords.latitude;
+        const rawLng = pos.coords.longitude;
+        try {
+          const snapData = await api.snapCoordinate(rawLat, rawLng);
+          setLocating(false);
+          const newLoc = {
+            lat: snapData.snapped_lat,
+            lng: snapData.snapped_lng,
+            accuracy: pos.coords.accuracy,
+            road_name: snapData.nearest_road,
+          };
+          const sugg = {
+            road_name: snapData.nearest_road || "Unnamed road",
+            distance_meters: snapData.snap_distance_meters,
+            lat: snapData.snapped_lat,
+            lng: snapData.snapped_lng,
+            rawLat,
+            rawLng,
+          };
+          setSuggestedRoad(sugg);
+          setIsRoadConfirmed(false);
+          if (onLocationChange) {
+            onLocationChange(newLoc);
+          }
+        } catch {
+          setLocating(false);
+          setError("Could not find nearest road for your GPS location.");
         }
       },
       (err) => {
@@ -222,6 +255,10 @@ function HazardReportModal({
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (suggestedRoad && !isRoadConfirmed) {
+      setError("Please check if the suggested nearest road is correct and click 'Yes, this is correct' before submitting.");
+      return;
+    }
     if (!photos.length) {
       setError("Please attach at least one photo.");
       return;
@@ -278,6 +315,76 @@ function HazardReportModal({
             </div>
           )}
 
+          {/* SUGGESTED NEAREST ROAD CHECK CARD */}
+          {suggestedRoad && (
+            <div className={`hzm-road-check-card ${isRoadConfirmed ? "confirmed" : "pending"}`}>
+              <div className="hzm-road-check-header">
+                <div className="hzm-road-check-title-group">
+                  <FontAwesomeIcon
+                    icon={isRoadConfirmed ? faCircleCheck : faRoute}
+                    className={isRoadConfirmed ? "hzm-icon-confirmed" : "hzm-icon-pending"}
+                  />
+                  <span className="hzm-road-check-title">
+                    {isRoadConfirmed ? "Road Confirmed" : "Suggested Nearest Road"}
+                  </span>
+                </div>
+                {suggestedRoad.distance_meters !== undefined && (
+                  <span className="hzm-road-check-distance">
+                    ~{Math.round(suggestedRoad.distance_meters)}m from GPS
+                  </span>
+                )}
+              </div>
+
+              <div className="hzm-road-check-name">
+                <strong>{suggestedRoad.road_name || "Unnamed road"}</strong>
+              </div>
+
+              {!isRoadConfirmed ? (
+                <div className="hzm-road-check-action-box">
+                  <p className="hzm-road-check-prompt">
+                    Please check if this is the correct road for your hazard report:
+                  </p>
+                  <div className="hzm-road-check-buttons">
+                    <button
+                      type="button"
+                      className="hzm-btn-confirm-road"
+                      onClick={() => {
+                        setIsRoadConfirmed(true);
+                        setError("");
+                      }}
+                    >
+                      <FontAwesomeIcon icon={faCheck} />
+                      <span>Yes, this is correct</span>
+                    </button>
+                    {onAdjustOnMap && (
+                      <button
+                        type="button"
+                        className="hzm-btn-adjust-road"
+                        onClick={onAdjustOnMap}
+                      >
+                        <FontAwesomeIcon icon={faMapPin} />
+                        <span>Choose different road on map</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="hzm-road-check-confirmed-row">
+                  <span className="hzm-road-confirmed-badge">
+                    <FontAwesomeIcon icon={faCheck} /> You confirmed this road is correct
+                  </span>
+                  <button
+                    type="button"
+                    className="hzm-btn-recheck-road"
+                    onClick={() => setIsRoadConfirmed(false)}
+                  >
+                    Change
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* NON-INTERACTIVE MAP PREVIEW WITH THE SAME SELECTED LOCATION DOT */}
           <div className="hzm-map-preview-card">
             <div className="hzm-map-preview-header">
@@ -315,6 +422,11 @@ function HazardReportModal({
               <span className="hzm-coords-num">
                 {Number(location.lat).toFixed(5)}° N, {Number(location.lng).toFixed(5)}° E
               </span>
+              {location.road_name && (
+                <span className="hzm-coords-road">
+                  <FontAwesomeIcon icon={faRoute} /> {location.road_name}
+                </span>
+              )}
               {addressText && <span className="hzm-coords-address">{addressText}</span>}
             </div>
           </div>

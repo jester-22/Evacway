@@ -218,6 +218,29 @@ export function highlightAndOpenSavedReport(map, highlightMarkerRef, report, sho
       (Array.isArray(report?.closed_roads) && report.closed_roads.length > 0) ||
       /block|closed|obstruct/i.test(`${report?.report_type || ""} ${report?.hazard_type || ""}`);
 
+    if (isBlocked) {
+      // For blocked roads: do not spawn any white circle with red slash marker or pulsing ring.
+      // Show the blockage details popup directly on the map.
+      if (showPopup) {
+        const popup = new mapboxgl.Popup({
+          offset: [0, -28],
+          className: "ew-popup",
+          maxWidth: "340px",
+          closeButton: true,
+          closeOnClick: true,
+        })
+          .setLngLat([lng, lat])
+          .setDOMContent(createReportPopup(report))
+          .addTo(map);
+
+        if (highlightMarkerRef) {
+          highlightMarkerRef.current = popup;
+        }
+        return popup;
+      }
+      return null;
+    }
+
     // Create highlight marker container with >= 44x44px touch area
     const container = document.createElement("div");
     container.className = "hazard-highlight-marker-wrap";
@@ -259,37 +282,44 @@ export function highlightAndOpenSavedReport(map, highlightMarkerRef, report, sho
       marker.addTo(map);
     }
 
-    // Add / update 100m impact zone circle buffer
+    // Add / update 100m impact zone circle buffer only for area hazards (flood, landslide),
+    // NEVER for road blockages, which stop strictly at intersections.
     try {
       if (typeof map.isStyleLoaded === "function" && map.isStyleLoaded()) {
-        const circleGeoJSON = createGeoJSONCircle(lng, lat, 100);
         const sourceId = "hazard-report-100m-buffer";
-        if (!map.getSource(sourceId)) {
-          map.addSource(sourceId, {
-            type: "geojson",
-            data: circleGeoJSON,
-          });
-          map.addLayer({
-            id: "hazard-report-100m-fill",
-            type: "fill",
-            source: sourceId,
-            paint: {
-              "fill-color": "#ef4444",
-              "fill-opacity": 0.18,
-            },
-          });
-          map.addLayer({
-            id: "hazard-report-100m-line",
-            type: "line",
-            source: sourceId,
-            paint: {
-              "line-color": "#dc2626",
-              "line-width": 2,
-              "line-dasharray": [2, 2],
-            },
-          });
+        if (isBlocked) {
+          if (map.getLayer("hazard-report-100m-fill")) map.removeLayer("hazard-report-100m-fill");
+          if (map.getLayer("hazard-report-100m-line")) map.removeLayer("hazard-report-100m-line");
+          if (map.getSource(sourceId)) map.removeSource(sourceId);
         } else {
-          map.getSource(sourceId).setData(circleGeoJSON);
+          const circleGeoJSON = createGeoJSONCircle(lng, lat, 100);
+          if (!map.getSource(sourceId)) {
+            map.addSource(sourceId, {
+              type: "geojson",
+              data: circleGeoJSON,
+            });
+            map.addLayer({
+              id: "hazard-report-100m-fill",
+              type: "fill",
+              source: sourceId,
+              paint: {
+                "fill-color": "#ef4444",
+                "fill-opacity": 0.18,
+              },
+            });
+            map.addLayer({
+              id: "hazard-report-100m-line",
+              type: "line",
+              source: sourceId,
+              paint: {
+                "line-color": "#dc2626",
+                "line-width": 2,
+                "line-dasharray": [2, 2],
+              },
+            });
+          } else {
+            map.getSource(sourceId).setData(circleGeoJSON);
+          }
         }
       }
     } catch {

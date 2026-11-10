@@ -70,6 +70,7 @@ import DashboardMap, {
 import CenterPlacementFlow, { polygonToPoints } from "../../components/CenterPlacementFlow/CenterPlacementFlow";
 import RoomDetailsModal from "../../components/EvacuationCenter/RoomDetailsModal";
 import BuildingDetailsModal from "../../components/BuildingDetailsModal/BuildingDetailsModal";
+import { BuildingFormModal, CenterRoomModal } from "../../components/EvacuationCenter/CenterModals";
 import { displayEntityName } from "../../utils/displayEntityName";
 import { snapLngLatToPolygonEdge } from "../../utils/polygonSnap";
 import "../../components_css/AdminMap.css";
@@ -468,6 +469,28 @@ export default function AdminMap() {
   const [mobileSheetSnap, setMobileSheetSnap] = useState("half");
   const [buildingModalOpen, setBuildingModalOpen] = useState(false);
 
+  // Edit Building & Add/Edit Room Modal state
+  const [editBuildingModalOpen, setEditBuildingModalOpen] = useState(false);
+  const [editingBuilding, setEditingBuilding] = useState(null);
+  const [editingBuildingForm, setEditingBuildingForm] = useState({
+    name: "",
+    max_rooms: null,
+    floors: null,
+    status: "open",
+    notes: "",
+  });
+  const [savingBuildingModal, setSavingBuildingModal] = useState(false);
+
+  const [isAdminRoomModalOpen, setIsAdminRoomModalOpen] = useState(false);
+  const [roomModalMode, setRoomModalMode] = useState("add");
+  const [selectedRoomToEdit, setSelectedRoomToEdit] = useState(null);
+  const [adminRoomForm, setAdminRoomForm] = useState({
+    room_number: "",
+    capacity: "",
+    building_id: "",
+  });
+  const [savingAdminRoom, setSavingAdminRoom] = useState(false);
+
   // Map Rooms view tab: "buildings" | "points"
   const [mapRoomsTab, setMapRoomsTab] = useState("buildings");
 
@@ -661,9 +684,157 @@ export default function AdminMap() {
         });
       }
       showPlacementToast(`Unlinked Room ${roomNumber}`);
+      if (
+        selectedBuildingDetail &&
+        String(selectedBuildingDetail.properties?.id ?? selectedBuildingDetail.id) === String(buildingId)
+      ) {
+        api.getBuildingDetails(buildingId).then(setBuildingDetailsData).catch(() => {});
+      }
     } catch (err) {
       console.error("Failed to unlink room:", err);
       showPlacementToast("Failed to unlink room.");
+    }
+  };
+
+  const handleDeleteRoomFromMap = async (rm) => {
+    if (!window.confirm(`Are you sure you want to delete Room ${rm.room_number}?`)) return;
+    try {
+      await api.deleteRoom(rm.id);
+      await invalidateEvacuationQueries(queryClient);
+      await refetchBuildings();
+      showPlacementToast(`Room ${rm.room_number} deleted.`);
+      if (selectedBuildingDetail) {
+        const bId = selectedBuildingDetail.properties?.id ?? selectedBuildingDetail.id;
+        api.getBuildingDetails(bId).then(setBuildingDetailsData).catch(() => {});
+      }
+    } catch (err) {
+      console.error("Failed to delete room:", err);
+      showPlacementToast(err.message || "Failed to delete room.");
+    }
+  };
+
+  const handleStartEditBuilding = (b) => {
+    const props = b.properties || b;
+    setEditingBuilding(b);
+    setEditingBuildingForm({
+      name: props.name || "",
+      max_rooms: props.max_rooms != null ? Number(props.max_rooms) : null,
+      floors: props.floors != null ? Number(props.floors) : null,
+      status: props.status || "open",
+      notes: props.notes || "",
+    });
+    setEditBuildingModalOpen(true);
+  };
+
+  const handleSaveEditBuilding = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!editingBuilding || !editingBuildingForm.name?.trim()) {
+      showPlacementToast("Building name is required.");
+      return;
+    }
+    const bId = editingBuilding.properties?.id ?? editingBuilding.id;
+    setSavingBuildingModal(true);
+    try {
+      const payload = {
+        name: editingBuildingForm.name.trim(),
+        max_rooms:
+          editingBuildingForm.max_rooms !== null && editingBuildingForm.max_rooms !== ""
+            ? Number(editingBuildingForm.max_rooms)
+            : null,
+        floors:
+          editingBuildingForm.floors !== null && editingBuildingForm.floors !== ""
+            ? Number(editingBuildingForm.floors)
+            : null,
+        status: editingBuildingForm.status || "open",
+        notes: editingBuildingForm.notes?.trim() || null,
+      };
+      await api.updateBuilding(bId, payload);
+      await invalidateEvacuationQueries(queryClient);
+      await refetchBuildings();
+      showPlacementToast(`Building "${payload.name}" updated successfully.`);
+      setEditBuildingModalOpen(false);
+      setEditingBuilding(null);
+      if (
+        selectedBuildingDetail &&
+        String(selectedBuildingDetail.properties?.id ?? selectedBuildingDetail.id) === String(bId)
+      ) {
+        api.getBuildingDetails(bId).then(setBuildingDetailsData).catch(() => {});
+        setSelectedBuildingDetail((prev) => ({
+          ...prev,
+          properties: { ...prev.properties, ...payload },
+        }));
+      }
+    } catch (err) {
+      console.error("Failed to update building:", err);
+      showPlacementToast(err.message || "Failed to update building.");
+    } finally {
+      setSavingBuildingModal(false);
+    }
+  };
+
+  const handleOpenAddRoomModalForBuilding = (buildingId) => {
+    setRoomModalMode("add");
+    setSelectedRoomToEdit(null);
+    setAdminRoomForm({
+      room_number: "",
+      capacity: "",
+      building_id: String(buildingId),
+    });
+    setIsAdminRoomModalOpen(true);
+  };
+
+  const handleOpenEditRoomModalFromMap = (rm, buildingId) => {
+    setRoomModalMode("edit");
+    setSelectedRoomToEdit(rm);
+    setAdminRoomForm({
+      room_number: rm.room_number || "",
+      capacity: String(rm.capacity || ""),
+      building_id: String(buildingId),
+    });
+    setIsAdminRoomModalOpen(true);
+  };
+
+  const handleSaveAdminRoom = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!adminRoomForm.room_number?.trim()) {
+      showPlacementToast("Room number is required.");
+      return;
+    }
+    if (!adminRoomForm.capacity || Number(adminRoomForm.capacity) <= 0) {
+      showPlacementToast("Room capacity must be greater than 0.");
+      return;
+    }
+
+    setSavingAdminRoom(true);
+    try {
+      const parsedBId = adminRoomForm.building_id !== "" ? Number(adminRoomForm.building_id) : null;
+      const payload = {
+        room_number: adminRoomForm.room_number.trim(),
+        capacity: Number(adminRoomForm.capacity),
+        building_id: parsedBId,
+      };
+
+      if (roomModalMode === "add") {
+        await api.addRoom(selectedCenterId, payload);
+        showPlacementToast(`Room ${payload.room_number} added.`);
+      } else {
+        await api.updateRoom(selectedRoomToEdit.id, payload);
+        showPlacementToast(`Room ${payload.room_number} updated.`);
+      }
+
+      setIsAdminRoomModalOpen(false);
+      setSelectedRoomToEdit(null);
+      await invalidateEvacuationQueries(queryClient);
+      await refetchBuildings();
+      if (selectedBuildingDetail) {
+        const bId = selectedBuildingDetail.properties?.id ?? selectedBuildingDetail.id;
+        api.getBuildingDetails(bId).then(setBuildingDetailsData).catch(() => {});
+      }
+    } catch (err) {
+      console.error("Failed to save room:", err);
+      showPlacementToast(err.message || "Failed to save room.");
+    } finally {
+      setSavingAdminRoom(false);
     }
   };
 
@@ -2493,7 +2664,7 @@ export default function AdminMap() {
                INLINE BUILDING DETAIL VIEW
                ======================================================== */
             <div className="admin-bld-detail-view">
-              <header className="admin-bld-detail-header">
+              <header className="admin-bld-detail-header" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <button
                   type="button"
                   className="admin-bld-detail-back-btn"
@@ -2503,10 +2674,32 @@ export default function AdminMap() {
                   }}
                 >
                   <FontAwesomeIcon icon={faArrowLeft} />
-                  <span>Back to buildings</span>
+                  <span>Back</span>
                 </button>
-                <div className="admin-bld-detail-title">
+                <div className="admin-bld-detail-title" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {bDetailProps.name || "Building"}
+                </div>
+                <div style={{ display: "inline-flex", gap: "6px", marginLeft: "auto" }}>
+                  <button
+                    type="button"
+                    className="admin-guided-btn"
+                    style={{ height: 30, minHeight: 30, padding: "0 8px", fontSize: 11 }}
+                    onClick={() => handleStartEditBuilding(selectedBuildingDetail)}
+                    title="Edit building details & room limit"
+                  >
+                    <FontAwesomeIcon icon={faPen} style={{ marginRight: 4 }} />
+                    <span>Edit</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-guided-btn is-primary"
+                    style={{ height: 30, minHeight: 30, padding: "0 8px", fontSize: 11 }}
+                    onClick={() => handleOpenAddRoomModalForBuilding(bDetailId)}
+                    title="Add a new room to this building"
+                  >
+                    <FontAwesomeIcon icon={faPlus} style={{ marginRight: 4 }} />
+                    <span>Add Room</span>
+                  </button>
                 </div>
               </header>
 
@@ -2603,13 +2796,34 @@ export default function AdminMap() {
 
                   {/* Rooms & Staff Assigned Families Section */}
                   <div className="admin-bld-rooms-section">
-                    <div className="admin-bld-rooms-heading">
-                      Rooms & Occupants ({detailedRooms.length})
+                    <div className="admin-bld-rooms-heading" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span>Rooms & Occupants ({detailedRooms.length})</span>
+                      <button
+                        type="button"
+                        style={{
+                          background: "#eff6ff",
+                          border: "1px solid #bfdbfe",
+                          borderRadius: "4px",
+                          color: "#1d4ed8",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          padding: "2px 8px",
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                        onClick={() => handleOpenAddRoomModalForBuilding(bDetailId)}
+                        title="Add room to this building"
+                      >
+                        <FontAwesomeIcon icon={faPlus} />
+                        <span>Add Room</span>
+                      </button>
                     </div>
 
                     {detailedRooms.length === 0 ? (
                       <div style={{ fontSize: "13px", color: "#64748b", padding: "8px 0" }}>
-                        No rooms linked to this building yet. Use "Link / unlink rooms" from the buildings menu.
+                        No rooms linked to this building yet. Use "+ Add Room" or "Link / unlink rooms" from the buildings menu.
                       </div>
                     ) : (
                       <div className="admin-bld-rooms-list">
@@ -2618,13 +2832,65 @@ export default function AdminMap() {
                           const fams = rm.assigned_families || rm.families || [];
                           return (
                             <div key={rm.id} className="admin-bld-room-card">
-                              <div className="admin-bld-room-top">
+                              <div className="admin-bld-room-top" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
                                 <span className="admin-bld-room-num">
                                   Room {rm.room_number}
                                 </span>
                                 <span className="admin-bld-room-cap">
                                   {rm.occupied || 0} of {rm.capacity || 0} here · {rm.assigned ?? 0} assigned
                                 </span>
+                                <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                                  <button
+                                    type="button"
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      cursor: "pointer",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      fontSize: "11px",
+                                      color: "#64748b",
+                                    }}
+                                    onClick={() => handleOpenEditRoomModalFromMap(rm, bDetailId)}
+                                    title={`Edit Room ${rm.room_number}`}
+                                  >
+                                    <FontAwesomeIcon icon={faPen} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      cursor: "pointer",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      fontSize: "11px",
+                                      color: "#d97706",
+                                    }}
+                                    onClick={() => handleUnlinkRoom(bDetailId, rm.id, rm.room_number)}
+                                    title={`Remove Room ${rm.room_number} from this building (unlink)`}
+                                  >
+                                    <FontAwesomeIcon icon={faUnlink} />
+                                    <span style={{ marginLeft: "3px" }}>Unlink</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    style={{
+                                      background: "none",
+                                      border: "none",
+                                      cursor: rm.assigned > 0 || rm.occupied > 0 ? "not-allowed" : "pointer",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                      fontSize: "11px",
+                                      color: rm.assigned > 0 || rm.occupied > 0 ? "#cbd5e1" : "#dc2626",
+                                    }}
+                                    disabled={rm.assigned > 0 || rm.occupied > 0}
+                                    onClick={() => handleDeleteRoomFromMap(rm)}
+                                    title={rm.assigned > 0 || rm.occupied > 0 ? "Cannot delete: residents assigned" : `Delete Room ${rm.room_number}`}
+                                  >
+                                    <FontAwesomeIcon icon={faTrashCan} />
+                                  </button>
+                                </div>
                               </div>
 
                               {/* Staff expandable families */}
@@ -3420,12 +3686,11 @@ export default function AdminMap() {
                                     className="admin-bld-menu-item"
                                     onClick={() => {
                                       setActiveOverflowMenuId(null);
-                                      setRenamingBuilding(b);
-                                      setRenameValue(bName);
+                                      handleStartEditBuilding(b);
                                     }}
                                   >
                                     <FontAwesomeIcon icon={faPen} />
-                                    <span>Rename</span>
+                                    <span>Edit details & max rooms</span>
                                   </button>
                                   <button
                                     type="button"
@@ -5163,6 +5428,51 @@ export default function AdminMap() {
               </div>
             </div>
           )}
+          {/* Edit Building Details & Max Rooms Modal */}
+          {editBuildingModalOpen && (
+            <BuildingFormModal
+              open={editBuildingModalOpen}
+              mode="edit"
+              buildingForm={editingBuildingForm}
+              onChange={setEditingBuildingForm}
+              activeRoomCount={
+                editingBuilding
+                  ? selectedCenterRooms.filter(
+                      (r) =>
+                        String(r.building_id) ===
+                          String(editingBuilding.properties?.id ?? editingBuilding.id) &&
+                        r.is_active !== false
+                    ).length
+                  : 0
+              }
+              saving={savingBuildingModal}
+              onSubmit={handleSaveEditBuilding}
+              onClose={() => {
+                setEditBuildingModalOpen(false);
+                setEditingBuilding(null);
+              }}
+            />
+          )}
+
+          {/* Add / Edit Room Modal for Buildings */}
+          {isAdminRoomModalOpen && (
+            <CenterRoomModal
+              mode={roomModalMode}
+              selectedCenter={selectedCenter}
+              selectedRoom={selectedRoomToEdit}
+              roomForm={adminRoomForm}
+              onChange={setAdminRoomForm}
+              saving={savingAdminRoom}
+              onSubmit={handleSaveAdminRoom}
+              onClose={() => {
+                setIsAdminRoomModalOpen(false);
+                setSelectedRoomToEdit(null);
+              }}
+              buildings={centerBuildings}
+              defaultBuildingId={adminRoomForm.building_id}
+            />
+          )}
+
           {/* Standalone Room Details Modal (Desktop Centered & Mobile Bottom Sheet) */}
           <RoomDetailsModal
             isOpen={roomModalOpen}

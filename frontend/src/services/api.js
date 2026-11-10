@@ -171,6 +171,9 @@ export const api = {
   getRoadSegments: () =>
     request("/api/road-segments"),
 
+  snapCoordinate: (lat, lng) =>
+    request(`/api/routing/snap?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`),
+
 
   // -------------------------------------------------------
   // EVACUATION CENTERS
@@ -268,6 +271,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  extendEvacuationSchedule: (payload) =>
+    request("/api/evacuation-centers/schedule/extend", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  getEvacuationOperations: () => request("/api/evacuation-operations"),
 
   updateEvacueeCheckIn: (centerId, data) =>
     request(`/api/evacuation-centers/${centerId}/check-in`, {
@@ -489,6 +500,11 @@ export const api = {
   deleteRoom: (roomId) =>
     request(`/api/rooms/${roomId}`, {
       method: "DELETE",
+    }),
+
+  unlinkRoomFromBuilding: (roomId) =>
+    request(`/api/rooms/${roomId}/unlink-building`, {
+      method: "POST",
     }),
 
   updateRoomLocation: (roomId, data) =>

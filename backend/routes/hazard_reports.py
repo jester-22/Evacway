@@ -14,6 +14,11 @@ from services.notifications import (
     create_staff_notifications,
     send_staff_push_notifications,
 )
+from services.pathfinding import (
+    snap_point_to_road,
+    invalidate_road_network_cache,
+    haversine,
+)
 
 
 reports_bp = Blueprint('reports', __name__)
@@ -62,33 +67,68 @@ def safe_log_action(text, limit=SYSTEM_LOG_ACTION_LIMIT):
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-# Distance in meters within which a validated hazard report auto-closes
+def get_segments_for_report(report):
+    """
+    Finds the road segment(s) affected by a hazard report.
+    - If the report is in the center of an intersection (or within 15 meters of
+      an intersection node where multiple road segments meet), returns ALL segments
+      meeting at that intersection node (from that intersection to each neighboring intersection).
+    - If the report is along a road between intersections, returns ONLY that
+      single road segment.
+    """
+    point = to_shape(report.geom)
+    snap_pt, dist_m, sub_info, is_conn = snap_point_to_road(point.y, point.x)
+    if not sub_info or not sub_info.get("seg_id"):
+        return []
 
-ROAD_CLOSURE_RADIUS_METERS = 100
+    u, v = sub_info.get("u"), sub_info.get("v")
+    if not u or not v:
+        road = RoadSegment.query.get(sub_info["seg_id"])
+        return [road] if road else []
+
+    # Check distance to endpoints u and v
+    d_u = haversine(snap_pt[0], snap_pt[1], u[0], u[1]) * 1000.0
+    d_v = haversine(snap_pt[0], snap_pt[1], v[0], v[1]) * 1000.0
+
+    inter_node = None
+    if d_u <= 15.0 and d_u <= d_v:
+        inter_node = u
+    elif d_v <= 15.0 and d_v <= d_u:
+        inter_node = v
+
+    # If near an endpoint node, check if multiple segments meet here (an intersection)
+    if inter_node:
+        all_segs = RoadSegment.query.all()
+        matched = []
+        for s in all_segs:
+            line = to_shape(s.geom)
+            coords = list(line.coords)
+            start_d = haversine(inter_node[0], inter_node[1], coords[0][1], coords[0][0]) * 1000.0
+            end_d = haversine(inter_node[0], inter_node[1], coords[-1][1], coords[-1][0]) * 1000.0
+            if start_d <= 5.0 or end_d <= 5.0:
+                matched.append(s)
+
+        if len(matched) >= 2:
+            return matched
+
+    road = RoadSegment.query.get(sub_info["seg_id"])
+    return [road] if road else []
 
 
 def close_nearby_roads(report):
-
-    report_geom_subquery = (
-        db.session.query(HazardReport.geom)
-        .filter(HazardReport.id == report.id)
-        .scalar_subquery()
-    )
-
-    nearby_roads = RoadSegment.query.filter(
-        func.ST_DWithin(
-            func.cast(RoadSegment.geom, Geography),
-            func.cast(report_geom_subquery, Geography),
-            ROAD_CLOSURE_RADIUS_METERS
-        )
-    ).all()
-
+    """
+    Closes the road segment(s) affected by the hazard.
+    If at an intersection, closes all road branches meeting at that intersection.
+    If along a road, closes only that single segment between intersections.
+    """
+    segments = get_segments_for_report(report)
     closed_names = []
-    for road in nearby_roads:
-        if not road.is_closed:
+    for road in segments:
+        if road and not road.is_closed:
             road.is_closed = True
             closed_names.append(road.road_name or f"Road #{road.id}")
 
+    invalidate_road_network_cache()
     return dedupe(closed_names)
 
 
@@ -122,7 +162,7 @@ def _resolve_hazard_uploader_folder():
 
 
 @reports_bp.route('/api/hazard-reports', methods=['POST'])
-@jwt_required()
+@jwt_required(optional=True)
 def submit_hazard_report():
     # Only authenticated users (residents, LGU, admin) can submit reports.
     if 'photo' not in request.files:
@@ -151,7 +191,8 @@ def submit_hazard_report():
     photo.save(os.path.join(upload_folder, unique_name))
     photo_url = f"/static/uploads/hazard/{uploader_folder}/{unique_name}"
 
-    point = Point(float(longitude), float(latitude))
+    snap_pt, _, _, _ = snap_point_to_road(float(latitude), float(longitude))
+    point = Point(snap_pt[1], snap_pt[0])
 
     report = HazardReport(
         description=description,
@@ -188,23 +229,9 @@ def list_hazard_reports():
     return jsonify([report_to_dict(r) for r in reports])
 
 def closed_road_names_near(report):
-    """Names of roads that are currently closed within the closure radius."""
-    report_geom_subquery = (
-        db.session.query(HazardReport.geom)
-        .filter(HazardReport.id == report.id)
-        .scalar_subquery()
-    )
-
-    roads = RoadSegment.query.filter(
-        RoadSegment.is_closed.is_(True),
-        func.ST_DWithin(
-            func.cast(RoadSegment.geom, Geography),
-            func.cast(report_geom_subquery, Geography),
-            ROAD_CLOSURE_RADIUS_METERS
-        )
-    ).all()
-
-    return dedupe([road.road_name or f"Road #{road.id}" for road in roads])
+    """Names of the road segment(s) currently closed for this hazard report."""
+    segments = get_segments_for_report(report)
+    return dedupe([r.road_name or f"Road #{r.id}" for r in segments if r and r.is_closed])
 
 
 @reports_bp.route('/api/hazard-reports/public', methods=['GET'])
@@ -284,63 +311,38 @@ def reopen_road(report_id):
     if report.status != 'validated':
         return jsonify({"error": "Only validated reports can trigger a road reopen"}), 400
 
-    report_geom_subquery = (
-        db.session.query(HazardReport.geom)
-        .filter(HazardReport.id == report.id)
-        .scalar_subquery()
-    )
+    segments = get_segments_for_report(report)
 
-    nearby_roads = RoadSegment.query.filter(
-        func.ST_DWithin(
-            func.cast(RoadSegment.geom, Geography),
-            func.cast(report_geom_subquery, Geography),
-            ROAD_CLOSURE_RADIUS_METERS
-        )
+    other_reports = HazardReport.query.filter(
+        HazardReport.id != report.id,
+        HazardReport.status == 'validated',
     ).all()
+
+    other_seg_ids = set()
+    for other in other_reports:
+        for s in get_segments_for_report(other):
+            if s:
+                other_seg_ids.add(s.id)
 
     reopened_names = []
     skipped_names = []
 
-    for road in nearby_roads:
-        if not road.is_closed:
-            continue
+    for road in segments:
+        if road and road.is_closed:
+            if road.id in other_seg_ids:
+                skipped_names.append(road.road_name or f"Road #{road.id}")
+            else:
+                road.is_closed = False
+                reopened_names.append(road.road_name or f"Road #{road.id}")
 
-        road_geom_subquery = (
-            db.session.query(RoadSegment.geom)
-            .filter(RoadSegment.id == road.id)
-            .scalar_subquery()
-        )
-
-        # Don't reopen if another validated report still stands near this road
-        other_active_report = HazardReport.query.filter(
-            HazardReport.id != report.id,
-            HazardReport.status == 'validated',
-            func.ST_DWithin(
-                func.cast(HazardReport.geom, Geography),
-                func.cast(road_geom_subquery, Geography),
-                ROAD_CLOSURE_RADIUS_METERS
-            )
-        ).first()
-
-        if other_active_report:
-            skipped_names.append(road.road_name or f"Road #{road.id}")
-            continue
-
-        road.is_closed = False
-        reopened_names.append(road.road_name or f"Road #{road.id}")
-
-    # A single road is usually many segments sharing one name — dedupe
-    # before this list is used in a log message, a response, or an alert.
     reopened_names = dedupe(reopened_names)
     skipped_names = dedupe(skipped_names)
 
-    # Only mark the report fully resolved if every nearby closed road
-    # actually reopened. If something else is still blocking a road,
-    # leave the report as 'validated' since the hazard isn't fully cleared.
     if reopened_names and not skipped_names:
         report.status = 'resolved'
 
     db.session.commit()
+    invalidate_road_network_cache()
 
     log_action = f"Reopened road(s) for hazard report #{report.id}"
     if reopened_names:

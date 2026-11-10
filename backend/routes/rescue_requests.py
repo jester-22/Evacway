@@ -80,28 +80,40 @@ def submit_rescue_request():
     requester_name = str(data.get('requester_name') or '').strip()
     requester_contact = str(data.get('requester_contact') or '').strip()
 
-    if not requester_name:
+    if not requester_name or not requester_contact:
         try:
             verify_jwt_in_request(optional=True)
             claims = get_jwt() or {}
-            if claims.get('name'):
+            if not requester_name and claims.get('name'):
                 requester_name = str(claims.get('name')).strip()
-            else:
-                ident = get_jwt_identity()
-                if ident:
-                    account_type = claims.get('account_type', 'user')
-                    if account_type == 'resident_account':
-                        acct = ResidentAccount.query.get(int(ident))
-                        if acct and acct.resident:
-                            requester_name = acct.resident.get_full_name()
-                        elif acct and acct.email:
-                            requester_name = acct.email.split('@')[0]
-                    else:
-                        usr = User.query.get(int(ident))
-                        if usr:
+            
+            ident = get_jwt_identity()
+            if ident:
+                account_type = claims.get('account_type', 'user')
+                if account_type == 'resident_account':
+                    acct = ResidentAccount.query.get(int(ident))
+                    if acct:
+                        if not requester_name:
+                            if acct.resident:
+                                requester_name = acct.resident.get_full_name()
+                            elif acct.email:
+                                requester_name = acct.email.split('@')[0]
+                        if not requester_contact and acct.resident and getattr(acct.resident, 'contact_number', None):
+                            requester_contact = str(acct.resident.contact_number).strip()
+                else:
+                    usr = User.query.get(int(ident))
+                    if usr:
+                        if not requester_name:
                             requester_name = usr.name or (usr.email.split('@')[0] if usr.email else '')
+                        if not requester_contact and getattr(usr, 'phone', None):
+                            requester_contact = str(usr.phone).strip()
         except Exception:
             pass
+
+    if not requester_name:
+        requester_name = "Resident (Assistance Needed)"
+    if not requester_contact:
+        requester_contact = "Not provided"
 
     photo_files = [
         f for f in request.files.getlist('proof_images') if f and f.filename

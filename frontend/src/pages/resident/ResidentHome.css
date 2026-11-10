@@ -2900,6 +2900,148 @@
 }
 
 /* --------------------------------------------------
+   Blocked Route / Assistance Notice Card
+-------------------------------------------------- */
+.route-preview-card.route-blocked-card {
+  border-left: 4px solid #dc2626;
+  background: #ffffff;
+}
+
+.route-blocked-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.route-blocked-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.route-blocked-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.route-blocked-icon-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #fee2e2;
+  color: #dc2626;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.route-blocked-header-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.route-blocked-dest {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.route-blocked-status-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: #b91c1c;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.route-blocked-notice-message {
+  padding: 10px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+}
+
+.route-blocked-notice-message p {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #991b1b;
+  line-height: 1.45;
+}
+
+.route-request-assistance-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 42px;
+  border-radius: 10px;
+  border: none;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.35);
+  transition: background-color 0.15s, transform 0.1s;
+}
+
+.route-request-assistance-btn:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.route-request-assistance-btn:disabled {
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
+.route-assistance-sent-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+}
+
+.route-assistance-sent-icon {
+  color: #16a34a;
+  font-size: 18px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.route-assistance-sent-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.route-assistance-sent-text strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: #15803d;
+}
+
+.route-assistance-sent-text span {
+  font-size: 12px;
+  color: #166534;
+  line-height: 1.4;
+}
+
+/* --------------------------------------------------
    Recenter Navigation Button
 -------------------------------------------------- */
 .nav-recenter-btn {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
@@ -18,7 +19,7 @@ import {
 
 import { useHazardData } from "../../hooks/useHazardData";
 import { useEvacuationData } from "../../hooks/useEvacuationData";
-import { usePublicHazardReports, useRoadSegments, useSogodBoundary } from "../../hooks/useEvacuationQueries";
+import { usePublicHazardReports, useRoadSegments, useSogodBoundary, queryKeys } from "../../hooks/useEvacuationQueries";
 import { useRouting } from "../../hooks/useRouting";
 import { displayEntityName } from "../../utils/displayEntityName";
 import BuildingDetailsModal from "../../components/BuildingDetailsModal/BuildingDetailsModal";
@@ -1174,6 +1175,7 @@ const ResidentHome = () => {
   const isMobile = useIsMobile(1024);
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const queryClient = useQueryClient();
 
   const loginDialogRef = useRef(null);
   const signUpDialogRef = useRef(null);
@@ -1287,6 +1289,8 @@ const ResidentHome = () => {
   const [quickLocating, setQuickLocating] = useState(false);
 
   const [reportConfirmation, setReportConfirmation] = useState("");
+  const [requestingAssistance, setRequestingAssistance] = useState(false);
+  const [assistanceSent, setAssistanceSent] = useState(false);
 
   const [locationPermission, setLocationPermission] = useState("unknown");
 
@@ -3112,7 +3116,7 @@ const ResidentHome = () => {
       (marker) => marker.__isUserMarker
     );
 
-    if (!route || !Array.isArray(route.route) || route.route.length === 0) {
+    if (!route || route.no_roads_available || !Array.isArray(route.route) || route.route.length === 0) {
       return;
     }
 
@@ -3527,8 +3531,42 @@ const ResidentHome = () => {
             String(assignedCenterId) === String(myCenter.evacuation_center.id)
           );
 
+          if (result.no_roads_available || result.all_blocked) {
+            const blockedNotice = {
+              no_roads_available: true,
+              all_blocked: true,
+              evacuation_center: result.evacuation_center || myCenter?.evacuation_center || { name: "Evacuation Center" },
+              message: "No roads available. All routes to your evacuation center are blocked.",
+              route: [],
+              distance_km: null,
+              estimated_time_min: null,
+            };
+            setAssistanceSent(false);
+            routeDataRef.current = blockedNotice;
+            setRoute(blockedNotice);
+            setFindingRoute(false);
+            return;
+          }
+
           let routeToDisplay = result;
           if (result.error) {
+            const errStr = String(result.error).toLowerCase();
+            if (errStr.includes("no reachable") || errStr.includes("blocked") || errStr.includes("disconnected") || errStr.includes("no roads")) {
+              const blockedNotice = {
+                no_roads_available: true,
+                all_blocked: true,
+                evacuation_center: myCenter?.evacuation_center || { name: "Evacuation Center" },
+                message: "No roads available. All routes to your evacuation center are blocked.",
+                route: [],
+                distance_km: null,
+                estimated_time_min: null,
+              };
+              setAssistanceSent(false);
+              routeDataRef.current = blockedNotice;
+              setRoute(blockedNotice);
+              setFindingRoute(false);
+              return;
+            }
             setRouteError(result.error);
             setFindingRoute(false);
             return;
@@ -3575,7 +3613,23 @@ const ResidentHome = () => {
 
           setLocationPermission("granted");
         } catch (err) {
-          setRouteError(err.message || "Failed to find an evacuation route.");
+          const errText = String(err?.message || "").toLowerCase();
+          if (errText.includes("no reachable") || errText.includes("blocked") || errText.includes("disconnected") || errText.includes("no roads")) {
+            const blockedNotice = {
+              no_roads_available: true,
+              all_blocked: true,
+              evacuation_center: myCenter?.evacuation_center || { name: "Evacuation Center" },
+              message: "No roads available. All routes to your evacuation center are blocked.",
+              route: [],
+              distance_km: null,
+              estimated_time_min: null,
+            };
+            setAssistanceSent(false);
+            routeDataRef.current = blockedNotice;
+            setRoute(blockedNotice);
+          } else {
+            setRouteError(err.message || "Failed to find an evacuation route.");
+          }
         } finally {
           setFindingRoute(false);
         }
@@ -4045,6 +4099,8 @@ const ResidentHome = () => {
     setRouteError("");
     setArrivalToast("");
     setNavPillExpanded(false);
+    setAssistanceSent(false);
+    setRequestingAssistance(false);
 
     if (arrowAnimRef.current) {
       cancelAnimationFrame(arrowAnimRef.current);
@@ -4301,6 +4357,57 @@ const ResidentHome = () => {
     removeAccuracyCircle(mapRef.current);
     setReportConfirmation("Rescue alert sent to response staff.");
     window.setTimeout(() => setReportConfirmation(""), 5000);
+  }
+
+  async function handleRequestAssistance() {
+    if (requestingAssistance) return;
+    setRequestingAssistance(true);
+    try {
+      const lat = myLocation?.lat ?? myLocation?.latitude;
+      const lng = myLocation?.lng ?? myLocation?.longitude;
+      const centerName = displayEntityName(
+        route?.evacuation_center?.name || myCenter?.evacuation_center?.name,
+        "Evacuation Center"
+      );
+      const loggedInName = (
+        user?.name ||
+        user?.full_name ||
+        (user?.first_name ? `${user.first_name} ${user.last_name || ""}`.trim() : "") ||
+        user?.email ||
+        "Resident"
+      ).trim();
+      const contact = (user?.contact_number || user?.phone || "Not provided").trim();
+
+      const formData = new FormData();
+      formData.append(
+        "description",
+        `Emergency: No roads available to reach ${centerName}. All routes are blocked. Requesting immediate rescue assistance.`
+      );
+      formData.append("requester_name", loggedInName);
+      formData.append("requester_contact", contact);
+      formData.append(
+        "location_description",
+        `Stuck en route to ${centerName}${lat && lng ? ` (GPS: ${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)})` : ""}`
+      );
+      if (lat != null && lng != null) {
+        formData.append("latitude", String(lat));
+        formData.append("longitude", String(lng));
+      }
+
+      await api.submitRescueRequest(formData);
+      try {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.rescueRequests });
+      } catch (qErr) {
+        // ignore cache invalidation error
+      }
+      setAssistanceSent(true);
+      setReportConfirmation("Rescue assistance request sent to emergency response staff.");
+      window.setTimeout(() => setReportConfirmation(""), 5000);
+    } catch (reqError) {
+      setRouteError(reqError.message || "Failed to submit assistance request. Please try again or tap 'I need rescue'.");
+    } finally {
+      setRequestingAssistance(false);
+    }
   }
 
   function handlePinRescueOnMap() {
@@ -6075,57 +6182,113 @@ const ResidentHome = () => {
       {/* Route preview: desktop card (top) or mobile bottom sheet (above bottom dock) */}
       {route && !navigationActive && (
         <div
-          className={`route-preview-card ${isMobile ? "mobile-bottom-sheet" : ""}`}
+          className={`route-preview-card ${isMobile ? "mobile-bottom-sheet" : ""} ${route.no_roads_available ? "route-blocked-card" : ""}`}
           role="region"
-          aria-label="Route preview"
+          aria-label={route.no_roads_available ? "Roads blocked notice" : "Route preview"}
         >
           {isMobile && <div className="sheet-handle" aria-hidden="true" />}
-          <div className="route-preview-main">
-            <div className="route-preview-info">
-              <div className="route-preview-title">
-                <FontAwesomeIcon icon={faRoute} className="route-preview-title-icon" />
-                <span className="route-preview-dest">
-                  {displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
-                </span>
-                {(route.chosen_entrance?.name || route.evacuation_center?.chosen_entrance?.name) && (
-                  <span className="route-preview-entrance-tag" title="Target entrance">
-                    {route.chosen_entrance?.name || route.evacuation_center?.chosen_entrance?.name}
-                  </span>
-                )}
-                {routeIsMine && myCenter?.room?.room_number && (
-                  <span className="route-preview-room-tag">Room {myCenter.room.room_number}</span>
-                )}
+          {route.no_roads_available ? (
+            <div className="route-blocked-content">
+              <div className="route-blocked-header">
+                <div className="route-blocked-title-row">
+                  <div className="route-blocked-icon-badge" aria-hidden="true">
+                    <FontAwesomeIcon icon={faTriangleExclamation} />
+                  </div>
+                  <div className="route-blocked-header-text">
+                    <span className="route-blocked-dest">
+                      {displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
+                    </span>
+                    <span className="route-blocked-status-tag">Access Blocked</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClearRoute}
+                  className="route-preview-close"
+                  aria-label="Dismiss notice"
+                  title="Dismiss notice"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
               </div>
-              <div className="route-preview-meta">
-                <span className="route-preview-dist">
-                  {Number(route.distance_km || 0).toFixed(1)} km
-                </span>
-                <span className="route-preview-dot">·</span>
-                <span className="route-preview-time">
-                  <FontAwesomeIcon icon={faPersonWalking} />{" "}
-                  {route.estimated_time_min ??
-                    estimateTravelTimes(route.distance_km || 0).walking} min walking
-                </span>
+
+              <div className="route-blocked-notice-message">
+                <p>No roads available. All routes to your evacuation center are blocked.</p>
               </div>
+
+              {assistanceSent ? (
+                <div className="route-assistance-sent-box" role="status">
+                  <FontAwesomeIcon icon={faCircleCheck} className="route-assistance-sent-icon" />
+                  <div className="route-assistance-sent-text">
+                    <strong>Request sent</strong>
+                    <span>Emergency response staff has been notified of your location and blocked route.</span>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="route-request-assistance-btn"
+                  onClick={handleRequestAssistance}
+                  disabled={requestingAssistance}
+                >
+                  <FontAwesomeIcon
+                    icon={requestingAssistance ? faSpinner : faTriangleExclamation}
+                    spin={requestingAssistance}
+                  />
+                  <span>{requestingAssistance ? "Sending request..." : "Request assistance"}</span>
+                </button>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={handleClearRoute}
-              className="route-preview-close"
-              aria-label="Clear route"
-              title="Clear route"
-            >
-              <FontAwesomeIcon icon={faXmark} />
-            </button>
-          </div>
-          <button
-            type="button"
-            className="route-preview-start-btn"
-            onClick={handleStartWalkingNavigation}
-          >
-            <FontAwesomeIcon icon={faPersonWalking} />
-            <span>Start walking navigation</span>
-          </button>
+          ) : (
+            <>
+              <div className="route-preview-main">
+                <div className="route-preview-info">
+                  <div className="route-preview-title">
+                    <FontAwesomeIcon icon={faRoute} className="route-preview-title-icon" />
+                    <span className="route-preview-dest">
+                      {displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
+                    </span>
+                    {(route.chosen_entrance?.name || route.evacuation_center?.chosen_entrance?.name) && (
+                      <span className="route-preview-entrance-tag" title="Target entrance">
+                        {route.chosen_entrance?.name || route.evacuation_center?.chosen_entrance?.name}
+                      </span>
+                    )}
+                    {routeIsMine && myCenter?.room?.room_number && (
+                      <span className="route-preview-room-tag">Room {myCenter.room.room_number}</span>
+                    )}
+                  </div>
+                  <div className="route-preview-meta">
+                    <span className="route-preview-dist">
+                      {Number(route.distance_km || 0).toFixed(1)} km
+                    </span>
+                    <span className="route-preview-dot">·</span>
+                    <span className="route-preview-time">
+                      <FontAwesomeIcon icon={faPersonWalking} />{" "}
+                      {route.estimated_time_min ??
+                        estimateTravelTimes(route.distance_km || 0).walking} min walking
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClearRoute}
+                  className="route-preview-close"
+                  aria-label="Clear route"
+                  title="Clear route"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+              <button
+                type="button"
+                className="route-preview-start-btn"
+                onClick={handleStartWalkingNavigation}
+              >
+                <FontAwesomeIcon icon={faPersonWalking} />
+                <span>Start walking navigation</span>
+              </button>
+            </>
+          )}
         </div>
       )}
 

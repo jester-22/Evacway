@@ -250,13 +250,9 @@ def calculate_route_with_edge_snapping(start_lat, start_lng, target_lat, target_
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             path = None
 
-    # Pass 2: Fallback to full graph with huge penalty only if no alternative route exists
+    # If no route exists without going through a blocked road, do not route through blocked roads
     if path is None:
-        try:
-            path = nx.dijkstra_path(G, u_snap, t_snap, weight="weight")
-            road_km = nx.dijkstra_path_length(G, u_snap, t_snap, weight="weight")
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            return None
+        return None
 
     road_distance_m = road_km * 1000.0
     start_leg = [[start_lat, start_lng], [u_snap[0], u_snap[1]]]
@@ -394,11 +390,46 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
                 }
 
     if best_result is None:
-        target_desc = f"center '{center_id}'" if center_id else "any active evacuation center"
-        return (
-            None,
-            f"No reachable entrance found for {target_desc}. The road network may be disconnected or all entrances are obstructed.",
-        )
+        target_center = None
+        if center_id is not None:
+            target_center = EvacuationCenter.query.get(center_id)
+        elif centers:
+            target_center = centers[0]
+
+        center_info = None
+        if target_center:
+            c_lat = None
+            c_lng = None
+            if target_center.entrance_geom is not None:
+                try:
+                    mp = to_shape(target_center.entrance_geom)
+                    pt = list(mp.geoms)[0] if hasattr(mp, "geoms") else mp
+                    c_lat, c_lng = pt.y, pt.x
+                except Exception:
+                    pass
+            elif target_center.geom is not None:
+                try:
+                    poly = to_shape(target_center.geom)
+                    c_lat, c_lng = poly.centroid.y, poly.centroid.x
+                except Exception:
+                    pass
+
+            center_info = {
+                "id": target_center.id,
+                "name": target_center.name,
+                "latitude": c_lat,
+                "longitude": c_lng,
+            }
+
+        return {
+            "no_roads_available": True,
+            "all_blocked": True,
+            "evacuation_center": center_info,
+            "message": "No roads available. All routes to your evacuation center are blocked.",
+            "route": [],
+            "distance_km": None,
+            "estimated_time_min": None,
+        }, None
 
     return best_result, None
 

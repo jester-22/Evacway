@@ -1,0 +1,32 @@
+{
+  "language": { "label": "Wika", "english": "English", "filipino": "Filipino", "cebuano": "Cebuano" },
+  "nav": { "explore": "Tingnan ang mapa", "features": "Mga tampok", "howItWorks": "Paano gamitin", "sections": "Mga seksyon ng pahina", "install": "I-install", "login": "Mag-log in", "signup": "Mag-sign up" },
+  "hero": {
+    "title": "Alamin kung saan pupunta bago dumating ang sakuna.",
+    "lede": "Hinahanap ng EvacWay ang ligtas na ruta mula sa iyong kinaroroonan patungo sa evacuation center sa Sogod, Southern Leyte, at umiiwas sa mga saradong kalsada.",
+    "explore": "Tingnan ang mapa",
+    "findCenter": "Hanapin ang evacuation center ko",
+    "noAccount": "Hindi kailangan ng account."
+  },
+  "status": { "centers": "Mga evacuation center", "roads": "Mga saradong kalsada", "hazards": "Mga aktibong ulat ng panganib", "updated": "Huling update:", "loading": "Naglo-load", "unavailable": "Hindi available", "serverTime": "oras ng server", "ariaLabel": "Live na katayuan ng kalsada at evacuation center" },
+  "steps": {
+    "title": "Tatlong hakbang para sa ligtas na ruta",
+    "locate": { "title": "Ibahagi ang iyong lokasyon", "text": "Ipinapakita ng EvacWay kung nasaan ka sa mapa." },
+    "hazards": { "title": "Tingnan ang mga nakaharang", "text": "Ipinapakita sa mapa ang mga naiulat na panganib at saradong kalsada." },
+    "route": { "title": "Sundan ang ruta", "text": "Sundan ang pinakaligtas na ruta papunta sa evacuation center." }
+  },
+  "mapKey": {
+    "title": "Pagbasa sa mapa",
+    "closed": { "label": "Mga saradong kalsada", "text": "Iniiwasan ang mga ito sa mga ruta." },
+    "center": { "label": "Mga evacuation center", "text": "Mga lugar na maaari mong puntahan at ang mga detalye nito." },
+    "route": { "label": "Ligtas na ruta", "text": "Mula sa iyong lokasyon papunta sa isang center." }
+  },
+  "account": {
+    "title": "Mag-log in sa iyong EvacWay account.",
+    "text": "Maaaring humiling ng resident account ang mga residente ng Sogod. Gamitin ng LGU Personnel at mga admin ang staff sign-in.",
+    "signupNote": "Sinusuri muna ng mga kawani ng Sogod ang mga resident sign-up bago aprubahan ang access sa account."
+  },
+  "operation": { "active": "May aktibong operasyon ng paglikas" },
+  "footer": { "privacy": "Privacy Policy", "mdrrmo": "MDRRMO Sogod", "contactPending": "Idaragdag ang beripikadong contact details", "copyright": "Nakalaan ang lahat ng karapatan." },
+  "_review_required": ["hero.title", "hero.lede", "status.*", "steps.*", "mapKey.*", "operation.active", "footer.privacy"]
+}

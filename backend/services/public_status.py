@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func
 
-from models import EvacuationCenter, HazardReport, RoadSegment
+from models import db, EvacuationCenter, EvacuationOperation, HazardReport, RoadSegment
 
 
 _PENDING_HAZARD_STATUSES = {"pending"}
@@ -61,3 +61,14 @@ def get_public_status_summary(now=None):
         },
         "last_updated": server_time.astimezone(timezone.utc).isoformat(),
     }
+
+
+def get_public_active_operation_alert():
+    active_status = func.lower(func.trim(func.coalesce(EvacuationOperation.status, "")))
+    operation = (
+        db.session.query(EvacuationOperation.id)
+        .filter(active_status == "active")
+        .order_by(EvacuationOperation.open_date.desc(), EvacuationOperation.id.desc())
+        .first()
+    )
+    return {"active": operation is not None}

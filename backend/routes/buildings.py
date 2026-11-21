@@ -98,6 +98,34 @@ def get_center_buildings(center_id):
     is_staff = caller is not None and caller.get('role') in ('admin', 'lgu_personnel')
     resident_id = caller.get('resident_id') if caller and caller.get('role') == 'resident' else None
     buildings = EvacuationCenterBuilding.query.filter_by(evacuation_center_id=center_id).order_by(EvacuationCenterBuilding.id.asc()).all()
+    building_ids = [building.id for building in buildings]
+    active_rooms = (
+        EvacuationCenterRoom.query.filter(
+            EvacuationCenterRoom.building_id.in_(building_ids),
+            EvacuationCenterRoom.is_active.is_(True),
+        ).order_by(EvacuationCenterRoom.room_number.asc()).all()
+        if building_ids else []
+    )
+    rooms_by_building = defaultdict(list)
+    for room in active_rooms:
+        rooms_by_building[room.building_id].append(room)
+
+    room_ids = [room.id for room in active_rooms]
+    room_usage_by_id = EvacuationCenterRoom.bulk_capacity_usage(active_rooms)
+    occupied_by_room = {}
+    if room_ids:
+        occupied_by_room = dict(
+            db.session.query(
+                EvacuationAssignment.room_id,
+                func.count(EvacuationAssignment.id),
+            )
+            .filter(
+                EvacuationAssignment.room_id.in_(room_ids),
+                EvacuationAssignment.checked_in_at.isnot(None),
+            )
+            .group_by(EvacuationAssignment.room_id)
+            .all()
+        )
     features = []
 
     center_poly = None
@@ -154,10 +182,7 @@ def get_center_buildings(center_id):
         else:
             geom_dict = None  # Building not yet mapped
 
-        rooms = EvacuationCenterRoom.query.filter(
-            EvacuationCenterRoom.building_id == b.id,
-            EvacuationCenterRoom.is_active == True
-        ).order_by(EvacuationCenterRoom.room_number.asc()).all()
+        rooms = rooms_by_building.get(b.id, [])
         room_ids = [r.id for r in rooms]
 
         total_family_slots = sum(int(r.family_slots or 0) for r in rooms)
@@ -168,11 +193,8 @@ def get_center_buildings(center_id):
         room_stats_map = {}
         full_room_count = 0
         for room in rooms:
-            usage = room.capacity_usage()
-            occupied = EvacuationAssignment.query.filter(
-                EvacuationAssignment.room_id == room.id,
-                EvacuationAssignment.checked_in_at.isnot(None),
-            ).count()
+            usage = room_usage_by_id[room.id]
+            occupied = occupied_by_room.get(room.id, 0)
             room_stats_map[room.id] = (usage, occupied)
             total_used_slots += usage['used_slots']
             total_used_spaces += usage['used_spaces']
@@ -231,7 +253,12 @@ def get_center_buildings(center_id):
                     .all()
                 }
             rooms_summary = [
-                public_room_payload(room, room.id in my_room_ids)
+                public_room_payload(
+                    room,
+                    room.id in my_room_ids,
+                    usage=room_usage_by_id[room.id],
+                    building=b,
+                )
                 for room in rooms
             ]
 

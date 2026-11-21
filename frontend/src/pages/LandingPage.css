@@ -225,6 +225,22 @@ body:has(.ew) {
   color: var(--ew-blue-600);
 }
 
+.ew-language-control select {
+  min-height: 36px;
+  max-width: 96px;
+  padding: 0 22px 0 9px;
+  border: 1px solid var(--ew-rule);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ew-ink);
+  font: 600 0.75rem/1.2 var(--ew-font-body);
+}
+
+.ew-language-control select:focus-visible {
+  outline: 2px solid var(--ew-blue-600);
+  outline-offset: 2px;
+}
+
 /* ==========================================================================
    4. BUTTONS (Glossy Royal-Blue Pills with Soft Glow matching Reference)
    ========================================================================== */
@@ -566,6 +582,18 @@ body:has(.ew) {
   gap: 16px;
 }
 
+.ew-find-center {
+  min-height: 44px;
+  border-color: #b8c8df;
+  color: #17345b;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.ew-find-center:hover {
+  border-color: var(--ew-blue-600);
+  background: #fff;
+}
+
 /* White Pill Badge for "No account needed." matching Reference */
 .ew-note {
   display: inline-flex;
@@ -602,6 +630,25 @@ body:has(.ew) {
   background: #FFFFFF;
   border-bottom: 1px solid var(--ew-rule);
   padding: 20px 0;
+}
+
+.ew-operation-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #fdba74;
+  background: #fff7ed;
+  color: #7c2d12;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.ew-operation-alert strong {
+  font-weight: 700;
 }
 
 .ew-status-grid {
@@ -925,6 +972,12 @@ body:has(.ew) {
   color: var(--ew-text);
 }
 
+.ew-account .ew-signup-note {
+  margin-top: 8px;
+  color: #475569;
+  font-size: 0.875rem;
+}
+
 .ew-footer {
   background: var(--ew-paper);
   border-top: 1px solid var(--ew-rule);
@@ -1015,6 +1068,27 @@ body:has(.ew) {
 .ew-footer-credit {
   font-size: 0.8125rem;
   line-height: 1.5;
+  color: var(--ew-text-muted);
+}
+
+.ew-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 14px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.ew-footer-links a {
+  color: var(--ew-blue-700);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ew-footer-links span {
   color: var(--ew-text-muted);
 }
 
@@ -1286,7 +1360,15 @@ body:has(.ew) {
   }
 
   .ew-nav-right {
-    gap: 12px;
+    gap: 8px;
+  }
+
+  .ew-language-control select {
+    max-width: 82px;
+    min-height: 34px;
+    padding-left: 6px;
+    padding-right: 18px;
+    font-size: 0.6875rem;
   }
 
   .ew-btn-login-pill,
@@ -1384,6 +1466,13 @@ body:has(.ew) {
     min-height: 52px;
     border-radius: 12px;
     font-size: 1rem;
+  }
+
+  .ew-actions .ew-find-center {
+    width: 100%;
+    min-height: 48px;
+    border-radius: 12px;
+    font-size: 0.9375rem;
   }
 
   .ew-note {

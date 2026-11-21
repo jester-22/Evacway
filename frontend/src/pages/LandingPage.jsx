@@ -1,25 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faXmark } from "@fortawesome/free-solid-svg-icons";
-import { useAuth } from "../context/AuthContext"; // adjust the path to match where AuthContext lives
-import { api } from "../services/api";
-import { usePublicStatusSummary } from "../hooks/useEvacuationQueries";
+import { usePublicOperationAlert, usePublicStatusSummary } from "../hooks/useEvacuationQueries";
+import { getLandingText, landingLocaleOptions } from "../locales/landing";
 import "./LandingPage.css";
 import "./LandingPage.motion.css";
 import { LoginDialog, ResidentSignUpDialog } from "../components/AuthModals/AuthModals"; // must come after LandingPage.css
 
-const MAP_KEY = [
-  { id: "closed", label: "Closed roads", text: "Routes go around these." },
-  { id: "center", label: "Evacuation centers", text: "Where you can go, with details." },
-  { id: "route", label: "Safe route", text: "From your location to a center." },
-];
-
-const STEPS = [
-  { kind: "locate", title: "Share your location", text: "EvacWay finds where you are on the map." },
-  { kind: "hazards", title: "See what is blocked", text: "Reported dangers and closed roads show up on the map." },
-  { kind: "route", title: "Follow the route", text: "Head along the safest route to an evacuation center." },
-];
+const MAP_KEY = ["closed", "center", "route"];
+const STEPS = ["locate", "hazards", "route"];
 
 function Logo() {
   return (
@@ -601,7 +589,7 @@ function CountUpValue({ target, animate }) {
   return <>{animate ? display : target}</>;
 }
 
-function LiveStatusStrip({ prefersReducedMotion }) {
+function LiveStatusStrip({ prefersReducedMotion, t }) {
   const stripRef = useRef(null);
   const [visible, setVisible] = useState(
     () => typeof window === "undefined" || !("IntersectionObserver" in window)
@@ -635,15 +623,15 @@ function LiveStatusStrip({ prefersReducedMotion }) {
   const lastUpdated = statusQuery.data?.last_updated;
   const lastUpdatedDate = lastUpdated ? new Date(lastUpdated) : null;
   const lastUpdatedLabel = isLoading
-    ? "Loading"
+    ? t("status.loading")
     : lastUpdatedDate && !Number.isNaN(lastUpdatedDate.getTime())
       ? lastUpdatedDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-      : "Unavailable";
+      : t("status.unavailable");
 
   const shouldAnimate = visible && !prefersReducedMotion;
 
   return (
-    <section ref={stripRef} className="ew-status-strip" aria-label="Live road and shelter status">
+    <section ref={stripRef} className="ew-status-strip" aria-label={t("status.ariaLabel")}>
       <div className="ew-wrap">
         {isLoading ? (
           <div className="ew-status-grid is-loading" aria-busy="true">
@@ -654,12 +642,12 @@ function LiveStatusStrip({ prefersReducedMotion }) {
         ) : isUnavailable ? (
           <div className="ew-status-grid" role="status" aria-live="polite">
             {[
-              ["open_centers", "Evacuation centers"],
-              ["closed_roads", "Closed roads"],
-              ["active_danger_reports", "Active danger reports"],
+              ["open_centers", t("status.centers")],
+              ["closed_roads", t("status.roads")],
+              ["active_danger_reports", t("status.hazards")],
             ].map(([key, label]) => (
               <div className="ew-status-item" key={key}>
-                <strong className="ew-status-num">Unavailable</strong>
+                <strong className="ew-status-num">{t("status.unavailable")}</strong>
                 <span className="ew-status-label">{label}</span>
               </div>
             ))}
@@ -670,27 +658,39 @@ function LiveStatusStrip({ prefersReducedMotion }) {
               <strong className="ew-status-num">
                 {visible ? <CountUpValue target={counts.open_centers} animate={shouldAnimate} /> : counts.open_centers}
               </strong>
-              <span className="ew-status-label">Evacuation centers</span>
+              <span className="ew-status-label">{t("status.centers")}</span>
             </div>
             <div className="ew-status-item">
               <strong className="ew-status-num">
                 {visible ? <CountUpValue target={counts.closed_roads} animate={shouldAnimate} /> : counts.closed_roads}
               </strong>
-              <span className="ew-status-label">Closed roads</span>
+              <span className="ew-status-label">{t("status.roads")}</span>
             </div>
             <div className="ew-status-item">
               <strong className="ew-status-num">
                 {visible ? <CountUpValue target={counts.active_danger_reports} animate={shouldAnimate} /> : counts.active_danger_reports}
               </strong>
-              <span className="ew-status-label">Active danger reports</span>
+              <span className="ew-status-label">{t("status.hazards")}</span>
             </div>
           </div>
         )}
         <p className="ew-status-updated">
-          Last updated: {lastUpdatedLabel}{lastUpdatedDate && !Number.isNaN(lastUpdatedDate.getTime()) ? ` · server time` : ""}
+          {t("status.updated")} {lastUpdatedLabel}{lastUpdatedDate && !Number.isNaN(lastUpdatedDate.getTime()) ? ` · ${t("status.serverTime")}` : ""}
         </p>
       </div>
     </section>
+  );
+}
+
+function ActiveOperationBanner({ t }) {
+  const query = usePublicOperationAlert({ retry: false });
+  const operation = query.data?.operation;
+  if (!operation?.active) return null;
+
+  return (
+    <div className="ew-operation-alert" role="alert" aria-live="assertive">
+      <strong>{t("operation.active")}</strong>
+    </div>
   );
 }
 
@@ -713,6 +713,7 @@ if (typeof window !== "undefined") {
 }
 
 export default function LandingPage() {
+  const navigate = useNavigate();
   const dialogRef = useRef(null);
   const signUpDialogRef = useRef(null);
   const rootRef = useRef(null);
@@ -741,6 +742,25 @@ export default function LandingPage() {
     if (typeof window === "undefined" || isStandalone()) return null;
     return window.deferredPrompt || null;
   });
+  const [language, setLanguage] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem("evacway-landing-language");
+      return ["en", "fil", "ceb"].includes(saved) ? saved : "en";
+    } catch {
+      return "en";
+    }
+  });
+  const t = (key) => getLandingText(language, key);
+
+  const changeLanguage = (event) => {
+    const nextLanguage = event.target.value;
+    setLanguage(nextLanguage);
+    try {
+      window.localStorage.setItem("evacway-landing-language", nextLanguage);
+    } catch {
+      // Language selection still applies for this visit if storage is unavailable.
+    }
+  };
 
   const handleInstallClick = async () => {
     const promptEvent = deferredPrompt || (typeof window !== "undefined" ? window.deferredPrompt : null);
@@ -912,18 +932,28 @@ export default function LandingPage() {
         <div className="ew-header-inner">
           <Logo />
           <div className="ew-nav-right">
-            <nav className="ew-nav-links" aria-label="Page sections">
-              <Link to="/map">Explore Map</Link>
-              <a href="#ew-key-title">Features</a>
-              <a href="#ew-steps-title">How It Works</a>
+            <nav className="ew-nav-links" aria-label={t("nav.sections")}>
+              <Link to="/map">{t("nav.explore")}</Link>
+              <a href="#ew-key-title">{t("nav.features")}</a>
+              <a href="#ew-steps-title">{t("nav.howItWorks")}</a>
             </nav>
+            <label className="ew-language-control">
+              <span className="sr-only">{t("language.label")}</span>
+              <select value={language} onChange={changeLanguage} aria-label={t("language.label")}>
+                {landingLocaleOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {t(`language.${option.labelKey}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
             {deferredPrompt && (
               <button
                 type="button"
                 className="ew-btn ew-btn-outline ew-install-nav ds-btn ds-btn--ghost"
                 onClick={handleInstallClick}
               >
-                Install
+                {t("nav.install")}
               </button>
             )}
             <button
@@ -931,10 +961,10 @@ export default function LandingPage() {
               className="ew-btn ew-btn-quiet ew-btn-login-pill ds-btn ds-btn--ghost"
               onClick={openLogin}
             >
-              Log in
+              {t("nav.login")}
             </button>
             <button type="button" className="ew-btn ew-btn-outline ew-signup-nav ds-btn ds-btn--ghost" onClick={openSignUp}>
-              Sign up
+              {t("nav.signup")}
             </button>
           </div>
         </div>
@@ -962,10 +992,7 @@ export default function LandingPage() {
               <img src="/lgu-logo.png" alt="Municipality of Sogod Seal" className="ew-lgu-hero-logo" />
               <span>Municipality of Sogod, Southern Leyte</span>
             </div>
-            <h1 id="ew-hero-title">
-              Know where to go before{" "}
-              <span className="ew-water-rise">disaster</span> strikes.
-            </h1>
+            <h1 id="ew-hero-title">{t("hero.title")}</h1>
             <svg className="ew-hero-rule" width="76" height="10" viewBox="0 0 76 10" aria-hidden="true">
               <path
                 d="M2 6.5C22 4 46 6.5 74 4.5"
@@ -975,18 +1002,22 @@ export default function LandingPage() {
                 strokeLinecap="round"
               />
             </svg>
-            <p className="ew-lede">
-              EvacWay finds the safest route from where you are to an evacuation center in Sogod,
-              Southern Leyte, and steers around closed roads.
-            </p>
+            <p className="ew-lede">{t("hero.lede")}</p>
             <div className="ew-actions">
               <Link to="/map" className="ew-btn ew-btn-primary ds-btn ds-btn--primary">
-                <span>Explore Map</span>
+                <span>{t("hero.explore")}</span>
                 <svg className="ew-btn-chevron" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
                   <path d="M6 3.5L10.5 8L6 12.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </Link>
-              <span className="ew-note" aria-hidden="true">No account needed.</span>
+              <button
+                type="button"
+                className="ew-btn ew-btn-outline ew-find-center ds-btn ds-btn--ghost"
+                onClick={() => navigate("/map", { state: { openMyCenter: true } })}
+              >
+                {t("hero.findCenter")}
+              </button>
+              <span className="ew-note" aria-hidden="true">{t("hero.noAccount")}</span>
             </div>
             <MobileRouteCard />
           </div>
@@ -1000,25 +1031,26 @@ export default function LandingPage() {
       </div>
 
       <main id="ew-main" className="ew-main">
-        <LiveStatusStrip prefersReducedMotion={prefersReducedMotion} />
+        <LiveStatusStrip prefersReducedMotion={prefersReducedMotion} t={t} />
+        <ActiveOperationBanner t={t} />
 
         {/* Three steps to a safe route */}
         <section className="ew-steps ew-reveal" aria-labelledby="ew-steps-title">
           <div className="ew-wrap">
-            <h2 id="ew-steps-title">Three steps to a safe route</h2>
+            <h2 id="ew-steps-title">{t("steps.title")}</h2>
             <ol className="ew-steps-list">
-              {STEPS.map((s, i) => (
+              {STEPS.map((kind, i) => (
                 <li
-                  key={s.kind}
+                  key={kind}
                   className="ew-step ew-stagger-item"
                   style={{ "--ew-stagger": i }}
                 >
                   <div className="ew-step-icon">
-                    <StepIcon kind={s.kind} />
+                    <StepIcon kind={kind} />
                     <span className="ew-step-n">{i + 1}</span>
                   </div>
-                  <h3>{s.title}</h3>
-                  <p>{s.text}</p>
+                  <h3>{t(`steps.${kind}.title`)}</h3>
+                  <p>{t(`steps.${kind}.text`)}</p>
                 </li>
               ))}
             </ol>
@@ -1029,31 +1061,31 @@ export default function LandingPage() {
         <section className="ew-key ew-reveal" aria-labelledby="ew-key-title">
           <div className="ew-wrap">
             <div className="ew-key-sheet">
-              <h2 id="ew-key-title">Reading the map</h2>
+              <h2 id="ew-key-title">{t("mapKey.title")}</h2>
               <div className="ew-key-layout">
                 <LegendSampleMap activeKey={activeLegendKey} />
                 <div className="ew-key-grid" role="list">
-                  {MAP_KEY.map((item, i) => {
-                    const isActive = activeLegendKey === item.id;
+                  {MAP_KEY.map((id, i) => {
+                    const isActive = activeLegendKey === id;
                     return (
                       <button
-                        key={item.id}
+                        key={id}
                         type="button"
                         role="listitem"
                         className={`ew-key-item ew-stagger-item${isActive ? " is-active" : ""}`}
                         style={{ "--ew-stagger": i }}
-                        aria-pressed={tappedLegendKey === item.id}
-                        onMouseEnter={() => setHoveredLegendKey(item.id)}
+                        aria-pressed={tappedLegendKey === id}
+                        onMouseEnter={() => setHoveredLegendKey(id)}
                         onMouseLeave={() => setHoveredLegendKey(null)}
-                        onFocus={() => setFocusedLegendKey(item.id)}
+                        onFocus={() => setFocusedLegendKey(id)}
                         onBlur={() => setFocusedLegendKey(null)}
                         onClick={() =>
-                          setTappedLegendKey((prev) => (prev === item.id ? null : item.id))
+                          setTappedLegendKey((prev) => (prev === id ? null : id))
                         }
                       >
-                        <span className={`ew-sw ew-sw-${item.id}`} aria-hidden="true" />
-                        <span className="ew-key-dt">{item.label}</span>
-                        <span className="ew-key-dd">{item.text}</span>
+                        <span className={`ew-sw ew-sw-${id}`} aria-hidden="true" />
+                        <span className="ew-key-dt">{t(`mapKey.${id}.label`)}</span>
+                        <span className="ew-key-dd">{t(`mapKey.${id}.text`)}</span>
                       </button>
                     );
                   })}
@@ -1068,11 +1100,12 @@ export default function LandingPage() {
           <div className="ew-wrap">
             <div className="ew-account-inner">
               <div>
-                <h2 id="ew-account-title">Sign in to your EvacWay account.</h2>
-                <p>Residents, LGU personnel, and admins can sign in. The public map remains open to everyone.</p>
+                <h2 id="ew-account-title">{t("account.title")}</h2>
+                <p>{t("account.text")}</p>
+                <p className="ew-signup-note">{t("account.signupNote")}</p>
               </div>
               <button type="button" className="ew-btn ew-btn-outline ds-btn ds-btn--ghost" onClick={openLogin}>
-                Log in
+                {t("nav.login")}
               </button>
             </div>
           </div>
@@ -1112,6 +1145,12 @@ export default function LandingPage() {
             <p className="ew-footer-credit">
               Hazard data from HazardHunterPH. Roads from OpenStreetMap. MDRRMO Sogod, Southern Leyte.
             </p>
+            <div className="ew-footer-links">
+              <Link to="/data-privacy-notice">{t("footer.privacy")}</Link>
+              <span aria-label={`${t("footer.mdrrmo")}: ${t("footer.contactPending")}`}>
+                {t("footer.mdrrmo")} · {t("footer.contactPending")}
+              </span>
+            </div>
             <p className="ew-footer-copy">&copy; 2026 EvacWay &bull; Municipality of Sogod, Southern Leyte. All rights reserved.</p>
           </div>
         </div>

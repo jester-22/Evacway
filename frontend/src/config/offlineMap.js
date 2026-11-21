@@ -11,7 +11,7 @@ export const OFFLINE_MAP_MAX_TILES = 3000;
 export const OFFLINE_MAP_MAX_BYTES = 50 * 1024 * 1024;
 export const OPENFREEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 export const OPENFREEMAP_ALTERNATE_STYLE_URL = "https://tiles.openfreemap.org/styles/bright";
-export const MAPBOX_STREET_STYLE_URL = "mapbox://styles/mapbox/streets-v12";
+export const MAPBOX_STREET_STYLE_URL = "mapbox://styles/mapbox/light-v11";
 export const MAPBOX_SATELLITE_STYLE_URL = "mapbox://styles/mapbox/satellite-streets-v12";
 
 export function getBasemapStyleUrl(style, online, mapboxAccessToken) {

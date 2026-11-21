@@ -33,6 +33,7 @@ from services.pathfinding import (
 from services.sogod_boundary import is_inside_sogod
 from services.public_status import (
     active_hazard_status_filter,
+    get_public_active_operation_alert,
     get_public_status_summary,
     hazard_status_group,
 )
@@ -606,6 +607,13 @@ def list_public_hazard_reports():
 @reports_bp.route('/api/public-status-summary', methods=['GET'])
 def get_public_status_summary_route():
     response = jsonify(get_public_status_summary())
+    response.headers['Cache-Control'] = 'public, max-age=60'
+    return response
+
+
+@reports_bp.route('/api/public-operation-alert', methods=['GET'])
+def get_public_operation_alert_route():
+    response = jsonify({"operation": get_public_active_operation_alert()})
     response.headers['Cache-Control'] = 'public, max-age=60'
     return response
 

@@ -286,6 +286,7 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin }
         contact_number: values.contact_number.trim(),
         email: values.email.trim().toLowerCase(),
         password: values.password,
+        privacy_consent: privacyConsent,
       });
       setSubmitted(true);
     } catch (error) {
@@ -606,6 +607,7 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin }
                   checked={privacyConsent}
                   onChange={(event) => setPrivacyConsent(event.target.checked)}
                   aria-describedby="signup-privacy-consent-error"
+                  aria-invalid={!privacyConsent ? "true" : "false"}
                   required
                 />
                 <span>

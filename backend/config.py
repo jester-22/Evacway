@@ -7,6 +7,15 @@ load_dotenv(os.path.join(basedir, ".env"))
 load_dotenv()
 
 
+def _database_pool_options(environ=None):
+    values = environ if environ is not None else os.environ
+    return {
+        "pool_size": max(1, int(values.get("DATABASE_POOL_SIZE", "3"))),
+        "max_overflow": max(0, int(values.get("DATABASE_MAX_OVERFLOW", "0"))),
+        "pool_timeout": max(1, int(values.get("DATABASE_POOL_TIMEOUT", "30"))),
+    }
+
+
 class Config:
 
     _raw_db_url = os.environ.get("DATABASE_URL", "")
@@ -15,6 +24,7 @@ class Config:
 
     SQLALCHEMY_DATABASE_URI = _raw_db_url or None
     SQLALCHEMY_ENGINE_OPTIONS = {
+        **_database_pool_options(),
         "pool_pre_ping": True,
         "pool_recycle": 280,
         "connect_args": {"options": "-csearch_path=public,extensions"},

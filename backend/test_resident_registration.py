@@ -314,6 +314,19 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         )
         self.assertEqual(ResidentRegistrationRequest.query.count(), 0)
 
+        missing_payload = self._payload()
+        missing_payload.pop('privacy_consent')
+        missing = self.client.post(
+            '/api/resident-registrations',
+            json=missing_payload,
+        )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(
+            missing.get_json()['error'],
+            'Consent to the Data Privacy Notice is required.',
+        )
+        self.assertEqual(ResidentRegistrationRequest.query.count(), 0)
+
         accepted = self._submit()
         self.assertEqual(accepted.status_code, 201, accepted.get_json())
         registration = ResidentRegistrationRequest.query.one()

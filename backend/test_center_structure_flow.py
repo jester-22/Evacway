@@ -13,9 +13,12 @@ from models import (
     CenterType,
     EvacuationAssignment,
     EvacuationCenter,
+    EvacuationCenterBuilding,
+    EvacuationCenterRoom,
     EvacuationCheckInRecord,
     EvacuationOperation,
     Family,
+    NonRegisteredEvacuee,
     Resident,
     ResidentAccount,
     RosterYear,
@@ -148,6 +151,7 @@ class CenterStructureFlowTests(unittest.TestCase):
                     'created_at DATETIME)'
                 )
             )
+        db.metadata.create_all(bind=db.engine, tables=[NonRegisteredEvacuee.__table__])
         center_amenities.create(bind=db.engine)
 
         admin = User(
@@ -400,6 +404,46 @@ class CenterStructureFlowTests(unittest.TestCase):
                             self.assertEqual(body['assigned_families'], [])
                         else:
                             self.assertTrue(body['assigned_families'])
+
+    def test_buildings_endpoint_batches_room_capacity_queries(self):
+        fixture = self._create_privacy_fixture()
+        db.session.add_all([
+            EvacuationCenterRoom(
+                evacuation_center_id=fixture['center_id'],
+                building_id=fixture['building_id'],
+                room_number=f'B{number:03d}',
+                capacity=16,
+                family_slots=4,
+                people_spaces=16,
+                floor=1,
+                is_active=True,
+            )
+            for number in range(2, 82)
+        ])
+        db.session.commit()
+
+        statements = []
+
+        def count_statement(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        event.listen(db.engine, 'before_cursor_execute', count_statement)
+        try:
+            response = self.client.get(
+                f"/api/evacuation-centers/{fixture['center_id']}/buildings"
+            )
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', count_statement)
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertLessEqual(
+            len(statements),
+            12,
+            f'Expected batched room queries; got {len(statements)}',
+        )
+        rooms = response.get_json()['features'][0]['properties']['rooms']
+        self.assertEqual(len(rooms), 81)
+        self.assertTrue(all(room['available_spaces'] == 16 for room in rooms[1:]))
 
     def test_roster_endpoints_enforce_staff_access_and_sanitize_search(self):
         fixture = self._create_privacy_fixture()

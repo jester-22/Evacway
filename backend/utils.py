@@ -51,10 +51,10 @@ def get_optional_caller():
         return None
 
 
-def public_room_payload(room, is_my_room=False):
+def public_room_payload(room, is_my_room=False, usage=None, building=None):
     """Small room projection safe for unauthenticated and resident callers."""
-    usage = room.capacity_usage()
-    building = room.building
+    usage = room.capacity_usage() if usage is None else usage
+    building = room.building if building is None else building
     building_status = (building.status or 'open').strip().lower() if building else 'open'
     if not room.is_active or building_status in {'closed', 'under_repair'}:
         status = 'Closed' if building_status == 'closed' or not room.is_active else 'Under repair'

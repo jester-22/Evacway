@@ -1,0 +1,32 @@
+{
+  "language": { "label": "Pinulongan", "english": "English", "filipino": "Filipino", "cebuano": "Cebuano" },
+  "nav": { "explore": "Tan-awa ang mapa", "features": "Mga bahin", "howItWorks": "Giunsa paggamit", "sections": "Mga seksyon sa panid", "install": "I-install", "login": "Sulod", "signup": "Pag-sign up" },
+  "hero": {
+    "title": "Hibalo-i asa moadto sa dili pa moabot ang katalagman.",
+    "lede": "Mangita ang EvacWay og luwas nga ruta gikan sa imong nahimutangan paingon sa evacuation center sa Sogod, Southern Leyte, ug molikay sa siradong mga dalan.",
+    "explore": "Tan-awa ang mapa",
+    "findCenter": "Pangitaa ang akong evacuation center",
+    "noAccount": "Dili kinahanglan og account."
+  },
+  "status": { "centers": "Mga evacuation center", "roads": "Siradong mga dalan", "hazards": "Aktibong mga report sa peligro", "updated": "Kataposang update:", "loading": "Nag-load", "unavailable": "Dili magamit", "serverTime": "oras sa server", "ariaLabel": "Live nga kahimtang sa dalan ug evacuation center" },
+  "steps": {
+    "title": "Tulo ka lakang padulong sa luwas nga ruta",
+    "locate": { "title": "Ipaambit ang imong lokasyon", "text": "Ipakita sa EvacWay kung asa ka sa mapa." },
+    "hazards": { "title": "Tan-awa kung unsay gibabagan", "text": "Makita sa mapa ang mga report sa peligro ug siradong dalan." },
+    "route": { "title": "Sunda ang ruta", "text": "Sunda ang labing luwas nga ruta paingon sa evacuation center." }
+  },
+  "mapKey": {
+    "title": "Pagsabot sa mapa",
+    "closed": { "label": "Siradong mga dalan", "text": "Likayan kini sa mga ruta." },
+    "center": { "label": "Mga evacuation center", "text": "Mga lugar nga imong maadtoan ug ang mga detalye niini." },
+    "route": { "label": "Luwas nga ruta", "text": "Gikan sa imong lokasyon paingon sa center." }
+  },
+  "account": {
+    "title": "Sulod sa imong EvacWay account.",
+    "text": "Ang mga residente sa Sogod mahimong mohangyo og resident account. Ang LGU Personnel ug mga admin mogamit sa staff sign-in.",
+    "signupNote": "Susihon una sa kawani sa Sogod ang mga resident sign-up sa dili pa aprobahan ang account access."
+  },
+  "operation": { "active": "Aktibo ang operasyon sa pagbakwit" },
+  "footer": { "privacy": "Privacy Policy", "mdrrmo": "MDRRMO Sogod", "contactPending": "Idugang ang napamatud-ang contact details", "copyright": "Tanang katungod gigahin." },
+  "_review_required": ["hero.title", "hero.lede", "status.*", "steps.*", "mapKey.*", "operation.active", "footer.privacy"]
+}

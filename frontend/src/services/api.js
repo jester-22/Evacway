@@ -271,6 +271,9 @@ export const api = {
   getPublicStatusSummary: () =>
     request("/api/public-status-summary"),
 
+  getPublicOperationAlert: () =>
+    request("/api/public-operation-alert"),
+
   snapCoordinate: (lat, lng, { snapToIntersection = true } = {}) =>
     request(`/api/routing/snap?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}&snap_intersection=${snapToIntersection}`),
 

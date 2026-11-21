@@ -223,7 +223,7 @@ export function initBuildingLayers(map, onBuildingClick = null, options = {}) {
           "",
         ],
         "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-        "text-size": 11,
+        "text-size": 14,
         "text-anchor": "center",
         "text-allow-overlap": false,
       },
@@ -645,7 +645,7 @@ export function initEntranceLayers(map, onEntranceClick = null) {
       layout: {
         "text-field": ["get", "name"],
         "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-        "text-size": 11,
+        "text-size": 14,
         "text-offset": [0, 1.25],
         "text-anchor": "top",
         "text-allow-overlap": false,

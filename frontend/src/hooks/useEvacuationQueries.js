@@ -30,6 +30,7 @@ export const queryKeys = {
   roadSegments: ["road-segments"],
   publicHazardReports: ["hazard-reports", "public"],
   publicStatusSummary: ["public-status-summary"],
+  publicOperationAlert: ["public-operation-alert"],
   sogodBoundary: ["sogod-boundary"],
   dashboardFamilies: ["families", "dashboard"],
   checkInSummary: ["evacuee-check-in-list", "summary"],
@@ -190,6 +191,17 @@ export function usePublicStatusSummary(options = {}) {
   return useQuery({
     queryKey: queryKeys.publicStatusSummary,
     queryFn: api.getPublicStatusSummary,
+    staleTime: 60_000,
+    gcTime: 60_000,
+    refetchInterval: 60_000,
+    ...options,
+  });
+}
+
+export function usePublicOperationAlert(options = {}) {
+  return useQuery({
+    queryKey: queryKeys.publicOperationAlert,
+    queryFn: api.getPublicOperationAlert,
     staleTime: 60_000,
     gcTime: 60_000,
     refetchInterval: 60_000,

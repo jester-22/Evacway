@@ -7,17 +7,21 @@ function configuredPhone(value) {
 }
 
 export function createEmergencyContacts(env = {}) {
+  const configuredOrOfficial = (key, officialNumber) =>
+    configuredPhone(env[key]) || officialNumber;
+
   return {
     hotlines: [
-      {
-        label: "Municipal DRRMO",
-        number: configuredPhone(env.VITE_HOTLINE_MUNICIPAL_DRRMO),
-      },
-      {
-        label: "Sogod Emergency Operations",
-        number: configuredPhone(env.VITE_HOTLINE_EMERGENCY_OPERATIONS),
-      },
-    ].filter((item) => item.number),
+      { label: "Sogod PNP-MPS", number: configuredOrOfficial("VITE_HOTLINE_PNP_MPS", "09625543356") },
+      { label: "BFP Sogod Station", number: configuredOrOfficial("VITE_HOTLINE_BFP_1", "09055253319") },
+      { label: "BFP Sogod Station", number: configuredOrOfficial("VITE_HOTLINE_BFP_2", "09120394672") },
+      { label: "MDRRMO/SERT", number: configuredOrOfficial("VITE_HOTLINE_MDRRMO_1", "09854309736") },
+      { label: "MDRRMO/SERT", number: configuredOrOfficial("VITE_HOTLINE_MDRRMO_2", "09359413945") },
+      { label: "MDRRMO/SERT", number: configuredOrOfficial("VITE_HOTLINE_MDRRMO_LANDLINE", "(053) 5778281") },
+      { label: "PCG Sogod PUB", number: configuredOrOfficial("VITE_HOTLINE_PCG", "09703712493") },
+      { label: "MSWDO", number: configuredOrOfficial("VITE_HOTLINE_MSWDO", "09090172012") },
+      { label: "RHU", number: configuredOrOfficial("VITE_HOTLINE_RHU", "09562676141") },
+    ],
     rescueSmsNumber: configuredPhone(env.VITE_RESCUE_SMS_DESTINATION),
   };
 }

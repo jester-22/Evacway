@@ -14,6 +14,7 @@ import { api } from "../../services/api";
 import { findAssignedRoom } from "../../utils/resolveRoomBuilding";
 import { formatFloorLabel } from "../../utils/formatRoomLabel";
 import { StatusPill, ProgressBar } from "../ui";
+import PublicMapDialogShell from "../PublicMapDialogShell/PublicMapDialogShell";
 import "./BuildingDetailsModal.css";
 
 const FOCUSABLE_SELECTOR = [
@@ -34,6 +35,7 @@ export default function BuildingDetailsModal({
   onViewRoomAdmin = null,
   highlightedRoom = null,
   hideHouseholds = false,
+  usePublicMapShell = false,
 }) {
   const modalRef = useRef(null);
   const closeBtnRef = useRef(null);
@@ -43,6 +45,60 @@ export default function BuildingDetailsModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
+
+  // Keep the existing staff modal keyboard behavior; the public map shell owns
+  // focus management when this component is used from the public map.
+  useEffect(() => {
+    if (usePublicMapShell) return undefined;
+    if (isOpen) {
+      lastActiveElementRef.current = document.activeElement;
+      requestAnimationFrame(() => {
+        closeBtnRef.current?.focus();
+      });
+    } else if (lastActiveElementRef.current) {
+      try {
+        lastActiveElementRef.current.focus();
+      } catch {
+        // Ignore focus restore errors if trigger unmounted.
+      }
+      lastActiveElementRef.current = null;
+    }
+    return undefined;
+  }, [isOpen, usePublicMapShell]);
+
+  useEffect(() => {
+    if (!isOpen || usePublicMapShell) return undefined;
+    function handleKeyDown(e) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose?.();
+        return;
+      }
+      if (e.key !== "Tab" || !modalRef.current) return;
+      const focusables = Array.from(
+        modalRef.current.querySelectorAll(FOCUSABLE_SELECTOR)
+      ).filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
+      if (focusables.length === 0) {
+        e.preventDefault();
+        modalRef.current.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !modalRef.current.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !modalRef.current.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose, usePublicMapShell]);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [selectedRoomId, setSelectedRoomId] = useState(null);
   const [expandedFloor, setExpandedFloor] = useState(null);
@@ -55,71 +111,6 @@ export default function BuildingDetailsModal({
       [key]: !prev[key],
     }));
   };
-
-  // Focus management: focus close button on open, restore on close
-  useEffect(() => {
-    if (isOpen) {
-      lastActiveElementRef.current = document.activeElement;
-      requestAnimationFrame(() => {
-        if (closeBtnRef.current) {
-          closeBtnRef.current.focus();
-        } else if (modalRef.current) {
-          modalRef.current.focus();
-        }
-      });
-    } else if (lastActiveElementRef.current) {
-      try {
-        lastActiveElementRef.current.focus();
-      } catch {
-        // Ignore focus restore errors if trigger unmounted
-      }
-      lastActiveElementRef.current = null;
-    }
-  }, [isOpen]);
-
-  // Escape key & Tab focus trap inside modal
-  useEffect(() => {
-    if (!isOpen) return;
-    function handleKeyDown(e) {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose?.();
-        return;
-      }
-
-      if (e.key === "Tab" && modalRef.current) {
-        const focusables = Array.from(
-          modalRef.current.querySelectorAll(FOCUSABLE_SELECTOR)
-        ).filter(
-          (el) =>
-            el.offsetParent !== null ||
-            el.getClientRects().length > 0
-        );
-
-        if (focusables.length === 0) {
-          e.preventDefault();
-          modalRef.current.focus();
-          return;
-        }
-
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        const active = document.activeElement;
-
-        if (e.shiftKey) {
-          if (active === first || !modalRef.current.contains(active)) {
-            e.preventDefault();
-            last.focus();
-          }
-        } else if (active === last || !modalRef.current.contains(active)) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
 
   // Load building details from API
   useEffect(() => {
@@ -307,15 +298,7 @@ export default function BuildingDetailsModal({
   const hasStaffAccess =
     isStaff || data?.role === "staff" || data?.is_staff_view === true;
 
-  return (
-    <div
-      className="bldg-modal-backdrop"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          onClose?.();
-        }
-      }}
-    >
+  const dialog = (
       <div
         ref={modalRef}
         className="bldg-modal-dialog"
@@ -1009,6 +992,24 @@ export default function BuildingDetailsModal({
           </div>
         )}
       </div>
+  );
+
+  if (usePublicMapShell) {
+    return (
+      <PublicMapDialogShell onClose={onClose} labelledBy="bldg-modal-title" hasHandle>
+        {dialog}
+      </PublicMapDialogShell>
+    );
+  }
+
+  return (
+    <div
+      className="bldg-modal-backdrop"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose?.();
+      }}
+    >
+      {dialog}
     </div>
   );
 }

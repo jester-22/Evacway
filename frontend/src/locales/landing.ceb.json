@@ -27,6 +27,6 @@
     "signupNote": "Susihon una sa kawani sa Sogod ang mga resident sign-up sa dili pa aprobahan ang account access."
   },
   "operation": { "active": "Aktibo ang operasyon sa pagbakwit" },
-  "footer": { "privacy": "Privacy Policy", "mdrrmo": "MDRRMO Sogod", "contactPending": "Idugang ang napamatud-ang contact details", "copyright": "Tanang katungod gigahin." },
+  "footer": { "privacy": "Privacy Policy", "mdrrmo": "MDRRMO Sogod", "siteMap": "Mga bahin sa panid", "contact": "Impormasyon sa pagkontak", "verifiedHotline": "Napamatud-ang hotline", "copyright": "Tanang katungod gigahin." },
   "_review_required": ["hero.title", "hero.lede", "status.*", "steps.*", "mapKey.*", "operation.active", "footer.privacy"]
 }

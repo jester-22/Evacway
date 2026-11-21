@@ -16,6 +16,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
+import PublicMapDialogShell from "../PublicMapDialogShell/PublicMapDialogShell";
 import "./AuthModals.css";
 
 const NAME_REGEX = /^[a-zA-Z\u00C0-\u024FñÑ\s'.-]+$/;
@@ -120,7 +121,7 @@ function validateField(name, currentValues) {
   }
 }
 
-export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin }) {
+export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin, usePublicMapShell = false }) {
   const [values, setValues] = useState({
     first_name: "",
     middle_name: "",
@@ -151,6 +152,17 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin }
   const fieldRefs = useRef({});
 
   useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!isOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [dialogRef, isOpen]);
+
+  useEffect(() => {
     if (!isOpen) return undefined;
     let active = true;
     Promise.resolve()
@@ -174,7 +186,11 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin }
   }, [isOpen]);
 
   function close() {
-    dialogRef.current?.close();
+    const dialog = dialogRef.current;
+    if (dialog?.open) dialog.close();
+    // Drive the controlled parent state directly instead of depending only on
+    // the native dialog's asynchronous close event.
+    handleClose();
   }
 
   function handleClose() {
@@ -428,7 +444,7 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin }
     );
   }
 
-  return (
+  const dialog = (
     <dialog
       ref={dialogRef}
       className="ew-dialog ew-signup-dialog"
@@ -651,9 +667,12 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin }
       )}
     </dialog>
   );
+  return usePublicMapShell
+    ? <PublicMapDialogShell native labelledBy="ew-signup-title">{dialog}</PublicMapDialogShell>
+    : dialog;
 }
 
-export function LoginDialog({ dialogRef, onOpenSignUp, onLoginSuccess, notice = "" }) {
+export function LoginDialog({ dialogRef, onOpenSignUp, onLoginSuccess, notice = "", usePublicMapShell = false }) {
   const { loginResident } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
@@ -723,7 +742,7 @@ export function LoginDialog({ dialogRef, onOpenSignUp, onLoginSuccess, notice = 
     }
   }
 
-  return (
+  const dialog = (
     <dialog
       ref={dialogRef}
       className="ew-dialog ew-login-modal"
@@ -897,5 +916,8 @@ export function LoginDialog({ dialogRef, onOpenSignUp, onLoginSuccess, notice = 
       </form>
     </dialog>
   );
+  return usePublicMapShell
+    ? <PublicMapDialogShell native labelledBy="ew-login-title">{dialog}</PublicMapDialogShell>
+    : dialog;
 }
 

@@ -19,6 +19,7 @@ import { createSelectedLocationElement, refineGeolocation } from "../../utils/ma
 import { useAuth } from "../../context/AuthContext";
 import { needsLocationConfirmation } from "../../utils/locationConfirmation";
 import { maskContactNumber, RESCUE_NEEDS, RESCUE_VULNERABILITY_FLAGS } from "../../utils/rescueRequest.js";
+import PublicMapDialogShell from "../PublicMapDialogShell/PublicMapDialogShell";
 import "./RescueAlertModal.css";
 
 const MAX_PHOTOS = 5;
@@ -437,10 +438,7 @@ export default function RescueAlertModal({
       coordinates?.location_source === "approximate");
 
   return (
-    <div
-      className="rescue-overlay"
-      onClick={(event) => event.target === event.currentTarget && onClose()}
-    >
+    <PublicMapDialogShell onClose={onClose} labelledBy="rescue-title">
       {!user ? (
         /* Not logged in: simple message screen with hotline card */
         <div
@@ -948,6 +946,6 @@ export default function RescueAlertModal({
           </footer>
         </form>
       )}
-    </div>
+    </PublicMapDialogShell>
   );
 }

@@ -27,6 +27,6 @@
     "signupNote": "Resident sign-ups are reviewed by Sogod staff before account access is approved."
   },
   "operation": { "active": "Active evacuation operation" },
-  "footer": { "privacy": "Privacy Policy", "mdrrmo": "MDRRMO Sogod", "contactPending": "Verified contact details to be added", "copyright": "All rights reserved." },
+  "footer": { "privacy": "Privacy Policy", "mdrrmo": "MDRRMO Sogod", "siteMap": "Site map", "contact": "Contact information", "verifiedHotline": "Verified hotline", "copyright": "All rights reserved." },
   "_review_required": ["hero.title", "hero.lede", "status.*", "steps.*", "mapKey.*", "operation.active", "footer.privacy"]
 }

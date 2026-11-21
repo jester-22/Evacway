@@ -1,0 +1,187 @@
+.public-map-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+dialog.public-map-dialog-panel:not([open]) {
+  display: none;
+}
+
+.public-map-dialog-backdrop > .public-map-dialog-panel,
+dialog.public-map-dialog-panel[open] {
+  width: min(640px, calc(100vw - 48px));
+  max-width: 640px;
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xl);
+  background: #fff;
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+}
+
+dialog.public-map-dialog-panel[open] {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  margin: 0;
+  transform: translate(-50%, -50%);
+}
+
+dialog.public-map-dialog-panel::backdrop {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.public-map-dialog-handle {
+  display: none;
+}
+
+.public-map-dialog-panel > :is(header, .rescue-header, .hzm-header, .mc-header) {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.public-map-dialog-panel > :is(.rescue-body, .hzm-body, .mc-body, .center-card-scroll-body, .bldg-modal-body, .bldg-modal-scroll-body) {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.public-map-dialog-panel > :is(footer, .rescue-actions, .rescue-unauth-footer, .hzm-actions) {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+}
+
+.public-map-dialog-panel .mc-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: #fff;
+}
+
+.public-map-dialog-panel .ew-signup-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding: 12px 0 24px;
+  border-top: 1px solid var(--border);
+  background: #fff;
+}
+
+.public-map-dialog-panel .ew-signup-actions .ew-login-alt {
+  margin: 0;
+  text-align: center;
+}
+
+.public-map-dialog-panel > .ew-login {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.public-map-dialog-panel > .ew-signup {
+  padding-bottom: 0;
+}
+
+.public-map-dialog-panel :is(.mc-close, .rescue-close, .hzm-close, .bldg-modal-close-btn, .center-card-close-btn, .ew-icon-btn, .ew-login-close-btn) {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.public-map-dialog-panel :focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 767px) {
+  .public-map-dialog-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .public-map-dialog-backdrop > .public-map-dialog-panel,
+  dialog.public-map-dialog-panel[open] {
+    position: fixed;
+    inset: auto 0 0;
+    width: 100%;
+    max-width: none;
+    max-height: 85vh;
+    max-height: 85dvh;
+    margin: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-radius: 18px 18px 0 0;
+    transform: none;
+    animation: public-map-sheet-in 200ms ease-out;
+  }
+
+  .public-map-dialog-handle {
+    width: 40px;
+    height: 4px;
+    display: block;
+    flex: 0 0 4px;
+    align-self: center;
+    margin: 10px auto 8px;
+    border-radius: 999px;
+    background: #cbd5e1;
+  }
+
+  .public-map-dialog-panel [class*="body"],
+  .public-map-dialog-panel [class*="scroll-body"] {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .public-map-dialog-panel :is(button, a, input, select, textarea) {
+    scroll-margin-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .public-map-dialog-panel :is(button, a) {
+    min-height: max(44px, var(--public-map-touch-min, 0px));
+  }
+
+  dialog.public-map-dialog-panel[open] .ew-login {
+    max-height: calc(85dvh - 24px);
+  }
+
+  dialog.public-map-dialog-panel[open] > .ew-signup {
+    padding-bottom: 0;
+  }
+
+  dialog.public-map-dialog-panel[open] .ew-signup-actions {
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@keyframes public-map-sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .public-map-dialog-backdrop > .public-map-dialog-panel,
+  dialog.public-map-dialog-panel[open] {
+    animation: none;
+  }
+}

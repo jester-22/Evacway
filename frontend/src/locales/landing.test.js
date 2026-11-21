@@ -18,3 +18,11 @@ test("emergency and privacy translations are explicitly flagged for review", () 
 test("unknown locales fall back to English", () => {
   assert.equal(getLandingText("xx", "nav.signup"), "Sign up");
 });
+
+test("footer columns have labels in every landing locale", () => {
+  for (const locale of ["en", "fil", "ceb"]) {
+    assert.ok(getLandingText(locale, "footer.siteMap"));
+    assert.ok(getLandingText(locale, "footer.contact"));
+    assert.ok(getLandingText(locale, "footer.verifiedHotline"));
+  }
+});

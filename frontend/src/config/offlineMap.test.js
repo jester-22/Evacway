@@ -39,7 +39,7 @@ test("versioned OpenFreeMap URLs are proxied only inside the Sogod range", () =>
 test("online basemaps use Mapbox and offline basemaps use cached OpenFreeMap styles", () => {
   assert.equal(
     getBasemapStyleUrl("street", true, "configured-token"),
-    "mapbox://styles/mapbox/light-v11",
+    "mapbox://styles/mapbox/streets-v12",
   );
   assert.equal(
     getBasemapStyleUrl("bright", true, "configured-token"),

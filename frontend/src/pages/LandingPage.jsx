@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePublicOperationAlert, usePublicStatusSummary } from "../hooks/useEvacuationQueries";
 import { getLandingText, landingLocaleOptions } from "../locales/landing";
+import { emergencyContacts } from "../config/emergencyContacts";
 import "./LandingPage.css";
 import "./LandingPage.motion.css";
 import { LoginDialog, ResidentSignUpDialog } from "../components/AuthModals/AuthModals"; // must come after LandingPage.css
 
 const MAP_KEY = ["closed", "center", "route"];
 const STEPS = ["locate", "hazards", "route"];
+const mdrrmoHotlines = emergencyContacts.hotlines.filter((item) => item.label === "MDRRMO/SERT");
 
 function Logo() {
   return (
@@ -785,7 +787,6 @@ export default function LandingPage() {
   const openSignUp = () => {
     dialogRef.current?.close();
     window.requestAnimationFrame(() => {
-      signUpDialogRef.current?.showModal();
       setSignUpOpen(true);
     });
   };
@@ -1131,8 +1132,6 @@ export default function LandingPage() {
             <p className="ew-footer-tagline">
               Official disaster evacuation and safe route advisory system for the Municipality of Sogod, Southern Leyte.
             </p>
-          </div>
-          <div className="ew-footer-info-col">
             {deferredPrompt && (
               <button
                 type="button"
@@ -1142,16 +1141,35 @@ export default function LandingPage() {
                 Install EvacWay
               </button>
             )}
+          </div>
+          <nav className="ew-footer-site-map" aria-label={t("footer.siteMap")}>
+            <h2>{t("footer.siteMap")}</h2>
+            <Link to="/map">{t("hero.explore")}</Link>
+            <a href="#ew-key-title">{t("nav.features")}</a>
+            <a href="#ew-steps-title">{t("nav.howItWorks")}</a>
+            <Link to="/data-privacy-notice">{t("footer.privacy")}</Link>
+          </nav>
+          <div className="ew-footer-contact">
+            <h2>{t("footer.contact")}</h2>
+            <strong>{t("footer.mdrrmo")}</strong>
+            <span className="ew-footer-contact-label">{t("footer.verifiedHotline")}</span>
+            <div className="ew-footer-hotline-numbers" aria-label={`${t("footer.mdrrmo")} ${t("footer.verifiedHotline")}`}>
+              {mdrrmoHotlines.map((item) => (
+                <a
+                  key={item.number}
+                  href={`tel:${item.number.replace(/[^\d+]/g, "")}`}
+                  aria-label={`Call ${t("footer.mdrrmo")} at ${item.number}`}
+                >
+                  {item.number}
+                </a>
+              ))}
+            </div>
+          </div>
+          <div className="ew-footer-bottom">
             <p className="ew-footer-credit">
               Hazard data from HazardHunterPH. Roads from OpenStreetMap. MDRRMO Sogod, Southern Leyte.
             </p>
-            <div className="ew-footer-links">
-              <Link to="/data-privacy-notice">{t("footer.privacy")}</Link>
-              <span aria-label={`${t("footer.mdrrmo")}: ${t("footer.contactPending")}`}>
-                {t("footer.mdrrmo")} · {t("footer.contactPending")}
-              </span>
-            </div>
-            <p className="ew-footer-copy">&copy; 2026 EvacWay &bull; Municipality of Sogod, Southern Leyte. All rights reserved.</p>
+            <p className="ew-footer-copy">&copy; 2026 EvacWay &bull; Municipality of Sogod, Southern Leyte. {t("footer.copyright")}</p>
           </div>
         </div>
       </footer>

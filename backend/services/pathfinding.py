@@ -5,7 +5,7 @@ from flask import g, has_request_context
 from shapely.geometry import Point, LineString
 from shapely.strtree import STRtree
 from geoalchemy2.shape import to_shape
-from models import RoadSegment, EvacuationCenter
+from models import RoadSegment, EvacuationCenter, EvacuationCenterRoom
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +337,65 @@ def select_closest_alternative_center(candidates):
     return min(viable, key=lambda item: item[1])[0] if viable else None
 
 
+def get_centers_free_capacity(centers):
+    center_ids = [center.id for center in centers]
+    capacity_by_center = {
+        center_id: {"free_family_slots": 0, "free_people_spaces": 0}
+        for center_id in center_ids
+    }
+    if not center_ids:
+        return capacity_by_center
+
+    rooms = EvacuationCenterRoom.query.filter_by(
+        is_active=True,
+    ).filter(EvacuationCenterRoom.evacuation_center_id.in_(center_ids)).all()
+    rooms = [
+        room for room in rooms
+        if room.building is None
+        or str(room.building.status or "open").lower() not in {"closed", "under_repair"}
+    ]
+    usage = EvacuationCenterRoom.bulk_capacity_usage(rooms)
+    for room in rooms:
+        capacity_by_center[room.evacuation_center_id]["free_family_slots"] += usage[room.id]["available_slots"]
+        capacity_by_center[room.evacuation_center_id]["free_people_spaces"] += usage[room.id]["available_spaces"]
+    return capacity_by_center
+
+
+def choose_safe_route(candidates, assigned_center_id=None):
+    """Return an assigned route, nearest safe fallback, or no-safe-center state."""
+    safe_candidates = [
+        candidate for candidate in candidates
+        if candidate["evacuation_center"]["free_family_slots"] > 0
+        and candidate["evacuation_center"]["free_people_spaces"] > 0
+    ]
+    safe_candidates.sort(key=lambda candidate: candidate["walking_distance_meters"])
+
+    assigned = next(
+        (
+            candidate for candidate in candidates
+            if assigned_center_id is not None
+            and str(candidate["evacuation_center"]["id"]) == str(assigned_center_id)
+        ),
+        None,
+    )
+    if assigned is not None and assigned in safe_candidates:
+        return assigned, "assigned", None
+
+    if assigned_center_id is None:
+        return (safe_candidates[0], "nearest_safe", None) if safe_candidates else (None, "no_safe_center", None)
+
+    fallback = next(
+        (
+            candidate for candidate in safe_candidates
+            if str(candidate["evacuation_center"]["id"]) != str(assigned_center_id)
+        ),
+        None,
+    )
+    if fallback is None:
+        return None, "no_safe_center", assigned
+    return fallback, "fallback", assigned
+
+
 def _alternative_route_summary(candidate, selection_reason):
     if not candidate:
         return None
@@ -346,6 +405,8 @@ def _alternative_route_summary(candidate, selection_reason):
         "evacuation_center": {
             "id": center["id"],
             "name": center["name"],
+            "free_family_slots": center.get("free_family_slots"),
+            "free_people_spaces": center.get("free_people_spaces"),
             "latitude": center["latitude"],
             "longitude": center["longitude"],
             "chosen_entrance": entrance,
@@ -362,44 +423,17 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
     Finds the optimal evacuation center entrance based on REAL walking distance
     to its snapped road point, skipping unreachable or out-of-bounds entrances.
     """
-    centers = EvacuationCenter.query.filter_by(is_active=True).all()
-    if not centers:
-        return None, "No active evacuation centers found matching criteria."
-
+    all_active_centers = EvacuationCenter.query.filter_by(is_active=True).all()
+    centers = [
+        center for center in all_active_centers
+        if str(center.evacuation_status or "standby").strip().lower()
+        not in {"closed", "concluded"}
+    ]
+    assigned_center = EvacuationCenter.query.get(center_id) if center_id is not None else None
     route_centers = centers
-    alternative_reason = "Next shortest reachable walking distance."
-
-    if center_id is not None:
-        target_center = next(
-            (center for center in centers if center.id == center_id),
-            None,
-        )
-        if target_center is None:
-            return None, "No active evacuation centers found matching criteria."
-
-        alternative_candidates = []
-        for center in centers:
-            if center.id == target_center.id or center.entrance_geom is None:
-                continue
-            try:
-                geometry = to_shape(center.entrance_geom)
-                entrances = list(geometry.geoms) if hasattr(geometry, "geoms") else [geometry]
-                center_distance = min(
-                    haversine(user_lat, user_lng, entrance.y, entrance.x)
-                    for entrance in entrances
-                )
-            except Exception as e:
-                logger.warning(f"Error parsing entrance geometry for center {center.id}: {e}")
-                continue
-
-            alternative_candidates.append((center, center_distance))
-
-        closest_alternative = select_closest_alternative_center(alternative_candidates)
-        route_centers = [target_center]
-        if closest_alternative is not None:
-            route_centers.append(closest_alternative)
-        alternative_reason = "Closest other mapped center by straight-line distance."
+    alternative_reason = "Next closest safe center by walking distance."
     center_candidates = []
+    capacity_by_center = get_centers_free_capacity(route_centers)
 
     for center in route_centers:
         if center.entrance_geom is None:
@@ -414,6 +448,7 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
 
         all_entrances_info = []
         center_best_result = None
+        free_capacity = capacity_by_center[center.id]
 
         for idx, entrance_pt in enumerate(pts):
             entrance_lat, entrance_lng = entrance_pt.y, entrance_pt.x
@@ -453,7 +488,6 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
                 continue
 
             total_m = route_res["total_distance_meters"]
-
             if center_best_result is None or total_m < center_best_result["walking_distance_meters"]:
                 center_best_result = {
                     "evacuation_center": {
@@ -469,6 +503,7 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
                             if link.barangay is not None
                         ],
                         "capacity": center.capacity,
+                        **free_capacity,
                         "latitude": entrance_lat,
                         "longitude": entrance_lng,
                         "chosen_entrance": {
@@ -495,17 +530,25 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
         if center_best_result is not None:
             center_candidates.append(center_best_result)
 
-    best_result, alternative_result = select_route_candidates(
+    best_result, fallback_state, assigned_route = choose_safe_route(
         center_candidates,
-        preferred_center_id=center_id,
+        assigned_center_id=center_id,
+    )
+    alternative_result = next(
+        (
+            candidate for candidate in sorted(
+                center_candidates,
+                key=lambda item: item["walking_distance_meters"],
+            )
+            if candidate is not best_result
+            and candidate["evacuation_center"]["free_family_slots"] > 0
+            and candidate["evacuation_center"]["free_people_spaces"] > 0
+        ),
+        None,
     )
 
     if best_result is None:
-        target_center = None
-        if center_id is not None:
-            target_center = EvacuationCenter.query.get(center_id)
-        elif centers:
-            target_center = centers[0]
+        target_center = assigned_center or (centers[0] if centers else None)
 
         center_info = None
         if target_center:
@@ -535,8 +578,11 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
         blocked_result = {
             "no_roads_available": True,
             "all_blocked": True,
+            "no_safe_center": True,
+            "fallback_state": "no_safe_center",
             "evacuation_center": center_info,
-            "message": "No roads available. All routes to your evacuation center are blocked.",
+            "assigned_center": center_info if center_id is not None else None,
+            "message": "No safe evacuation center with available spaces can be reached.",
             "route": [],
             "distance_km": None,
             "estimated_time_min": None,
@@ -547,11 +593,22 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
             )
         return blocked_result, None
 
-    best_result["selection_reason"] = (
-        "Shortest reachable walking distance."
-        if center_id is None
-        else "Selected destination; route uses reachable open roads."
-    )
+    best_result["fallback_state"] = fallback_state
+    best_result["no_safe_center"] = False
+    if center_id is not None:
+        best_result["assigned_center"] = {
+            "id": assigned_center.id if assigned_center else center_id,
+            "name": assigned_center.name if assigned_center else None,
+        }
+    if fallback_state == "fallback":
+        best_result["selection_reason"] = (
+            "Nearest reachable center with free family slots and people spaces, "
+            "measured by walking distance."
+        )
+    elif fallback_state == "assigned":
+        best_result["selection_reason"] = "Your assigned center is reachable and has available spaces."
+    else:
+        best_result["selection_reason"] = "Nearest reachable center with free family slots and people spaces."
     best_result["alternative_center"] = _alternative_route_summary(
         alternative_result, alternative_reason
     )

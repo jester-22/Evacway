@@ -48,6 +48,18 @@ services:
     depends_on:
       - backend
 
+  cloudflared:
+    profiles:
+      - cloudflare
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN:-}
+    depends_on:
+      frontend:
+        condition: service_started
+
 volumes:
   pgdata:
   uploads:

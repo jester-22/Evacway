@@ -27,6 +27,6 @@
     "signupNote": "Sinusuri muna ng mga kawani ng Sogod ang mga resident sign-up bago aprubahan ang access sa account."
   },
   "operation": { "active": "May aktibong operasyon ng paglikas" },
-  "footer": { "privacy": "Privacy Policy", "mdrrmo": "MDRRMO Sogod", "contactPending": "Idaragdag ang beripikadong contact details", "copyright": "Nakalaan ang lahat ng karapatan." },
+  "footer": { "privacy": "Privacy Policy", "mdrrmo": "MDRRMO Sogod", "siteMap": "Mga seksyon", "contact": "Impormasyon sa pakikipag-ugnayan", "verifiedHotline": "Beripikadong hotline", "copyright": "Nakalaan ang lahat ng karapatan." },
   "_review_required": ["hero.title", "hero.lede", "status.*", "steps.*", "mapKey.*", "operation.active", "footer.privacy"]
 }

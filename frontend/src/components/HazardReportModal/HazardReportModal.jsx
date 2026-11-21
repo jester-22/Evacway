@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { api } from "../../services/api";
+import PublicMapDialogShell from "../PublicMapDialogShell/PublicMapDialogShell";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faLocationDot,
@@ -306,11 +307,11 @@ function HazardReportModal({
   }
 
   return (
-    <div className="hzm-overlay" onClick={onClose}>
+    <PublicMapDialogShell onClose={onClose} labelledBy="hzm-dialog-title">
       <form onSubmit={handleSubmit} className="hzm-modal" onClick={(e) => e.stopPropagation()}>
         <div className="hzm-header">
           <div className="hzm-header-text">
-            <h3 className="hzm-title">Report a Hazard</h3>
+            <h3 id="hzm-dialog-title" className="hzm-title">Report a Hazard</h3>
             <span className="hzm-location">
               <FontAwesomeIcon icon={faLocationDot} />
               {Number(location.lat).toFixed(5)}, {Number(location.lng).toFixed(5)}
@@ -544,7 +545,7 @@ function HazardReportModal({
           </button>
         </div>
       </form>
-    </div>
+    </PublicMapDialogShell>
   );
 }
 

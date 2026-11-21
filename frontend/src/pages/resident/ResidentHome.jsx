@@ -32,6 +32,7 @@ import { useRouting } from "../../hooks/useRouting";
 import { displayEntityName } from "../../utils/displayEntityName";
 import { formatFloorLabel } from "../../utils/formatRoomLabel";
 import BuildingDetailsModal from "../../components/BuildingDetailsModal/BuildingDetailsModal";
+import PublicMapDialogShell from "../../components/PublicMapDialogShell/PublicMapDialogShell";
 import {
   initBuildingLayers,
   removeBuildingTooltip,
@@ -120,8 +121,12 @@ function formatPublicCenterUpdateTime(value) {
     : "";
 }
 
-function CenterCapacityFacts({ centerId, rooms, className = "" }) {
-  const capacity = getFreeCenterCapacity(centerId, rooms);
+function CenterCapacityFacts({ centerId, rooms, capacityOverride, className = "" }) {
+  const calculatedCapacity = getFreeCenterCapacity(centerId, rooms);
+  const capacity = {
+    freeFamilySlots: capacityOverride?.free_family_slots ?? calculatedCapacity.freeFamilySlots,
+    freePeopleSpaces: capacityOverride?.free_people_spaces ?? calculatedCapacity.freePeopleSpaces,
+  };
   const familySlots = capacity.freeFamilySlots == null ? "Not tracked" : capacity.freeFamilySlots;
   const peopleSpaces = capacity.freePeopleSpaces == null ? "Not tracked" : capacity.freePeopleSpaces;
 
@@ -154,7 +159,7 @@ function RouteAlternativeCard({ alternative, rooms, onSelect }) {
         <span aria-hidden="true">·</span>
         {alternative.estimated_time_min ?? "—"} min walking
       </div>
-      <CenterCapacityFacts centerId={center.id} rooms={rooms} />
+      <CenterCapacityFacts centerId={center.id} rooms={rooms} capacityOverride={center} />
       <p className="route-choice-reason">
         {alternative.selection_reason || "Next shortest reachable walking distance."}
       </p>
@@ -186,6 +191,11 @@ const CENTER_MARKER_MAX_ZOOM = 16;
 const PUBLIC_MAP_QUERY_OPTIONS = {
   staleTime: 20000,
   refetchOnMount: "always",
+};
+const ROUTE_SAFETY_QUERY_OPTIONS = {
+  ...PUBLIC_MAP_QUERY_OPTIONS,
+  refetchInterval: 30000,
+  refetchIntervalInBackground: false,
 };
 
 /*
@@ -1431,7 +1441,6 @@ const ResidentHome = () => {
   const openSignUpDialog = () => {
     loginDialogRef.current?.close();
     window.requestAnimationFrame(() => {
-      signUpDialogRef.current?.showModal();
       setSignUpOpen(true);
     });
   };
@@ -1457,8 +1466,8 @@ const ResidentHome = () => {
 
   const [mapLoaded, setMapLoaded] = useState(false);
   const [styleVersion, setStyleVersion] = useState(0);
-  const hazardReportsQuery = usePublicHazardReports(PUBLIC_MAP_QUERY_OPTIONS);
-  const roadSegmentsQuery = useRoadSegments(PUBLIC_MAP_QUERY_OPTIONS);
+  const hazardReportsQuery = usePublicHazardReports(ROUTE_SAFETY_QUERY_OPTIONS);
+  const roadSegmentsQuery = useRoadSegments(ROUTE_SAFETY_QUERY_OPTIONS);
   const sogodBoundaryQuery = useSogodBoundary();
   const hazardReports = useMemo(
     () => Array.isArray(hazardReportsQuery.data)
@@ -1467,6 +1476,13 @@ const ResidentHome = () => {
     [hazardReportsQuery.data]
   );
   const roads = roadSegmentsQuery.data ?? null;
+  const routeSafetySignature = useMemo(() => JSON.stringify({
+    validatedHazards: hazardReports.map((report) => report.id).sort(),
+    closedRoads: (roads?.features || [])
+      .filter((feature) => feature.properties?.is_closed)
+      .map((feature) => feature.properties?.id)
+      .sort(),
+  }), [hazardReports, roads]);
   const sogodBoundary = sogodBoundaryQuery.data ?? null;
   const sogodBoundaryRef = useRef(null);
   useEffect(() => {
@@ -1495,15 +1511,27 @@ const ResidentHome = () => {
     findingRoute,
     setFindingRoute
   } = useRouting();
+  const routeSafetySignatureRef = useRef(null);
   const [routeDetailsOpen, setRouteDetailsOpen] = useState(false);
   const [otherCentersOpen, setOtherCentersOpen] = useState(false);
   const routeWalkMinutes = Number(
     route?.estimated_time_min
     ?? (route ? estimateTravelTimes(route.distance_km || 0).walking : 0)
   );
-  const routeAvailability = route?.evacuation_center?.id != null
+  const calculatedRouteAvailability = route?.evacuation_center?.id != null
     ? getCenterAvailability(route.evacuation_center.id, rooms, route.evacuation_center.capacity)
     : { status: "unavailable", freePeopleSpaces: null };
+  const serverFreeSlots = Number(route?.evacuation_center?.free_family_slots);
+  const serverFreePeople = Number(route?.evacuation_center?.free_people_spaces);
+  const hasServerCapacity = Number.isFinite(serverFreeSlots) && Number.isFinite(serverFreePeople);
+  const routeAvailability = hasServerCapacity
+    ? {
+      status: serverFreeSlots <= 0 || serverFreePeople <= 0
+        ? "full"
+        : calculatedRouteAvailability.status === "almost-full" ? "almost-full" : "available",
+      freePeopleSpaces: serverFreePeople,
+    }
+    : calculatedRouteAvailability;
   const configuredHotline = emergencyContacts.hotlines[0] || null;
 
   useEffect(() => {
@@ -4434,11 +4462,17 @@ const ResidentHome = () => {
                 "No roads available. All routes to your evacuation center are blocked.",
               alternative_center: result?.alternative_center || null,
               selection_reason: result?.selection_reason || null,
+              no_safe_center: Boolean(result?.no_safe_center),
+              fallback_state: result?.fallback_state || "no_safe_center",
+              assigned_center: result?.assigned_center || null,
+              _requestedCenterId: assignedCenterId,
+              _requestedOrigin: loc,
               route: [],
               distance_km: null,
               estimated_time_min: null,
             };
             setAssistanceSent(false);
+            routeSafetySignatureRef.current = routeSafetySignature;
             routeDataRef.current = blockedNotice;
             setRoute(blockedNotice);
             setFindingRoute(false);
@@ -4491,6 +4525,7 @@ const ResidentHome = () => {
           const routeToDisplay = {
             ...result,
             _requestedOrigin: loc,
+            _requestedCenterId: assignedCenterId,
             route: result.route, // ALWAYS keep the backend route geometry
             walking_steps: walkingSteps,
             final_leg: result.final_leg,
@@ -4499,6 +4534,7 @@ const ResidentHome = () => {
           };
 
           activeEntranceRef.current = routeToDisplay.chosen_entrance || null;
+          routeSafetySignatureRef.current = routeSafetySignature;
           routeDataRef.current = routeToDisplay;
           setRoute(routeToDisplay);
           activeWalkingStepRef.current = 0;
@@ -4552,6 +4588,22 @@ const ResidentHome = () => {
       }
     );
   }
+
+  useEffect(() => {
+    if (!route || !routeSafetySignature || !route._requestedOrigin) return;
+    if (routeSafetySignatureRef.current == null) {
+      routeSafetySignatureRef.current = routeSafetySignature;
+      return;
+    }
+    if (
+      routeSafetySignatureRef.current === routeSafetySignature
+      || findingRoute
+      || navigationActive
+    ) return;
+
+    routeSafetySignatureRef.current = routeSafetySignature;
+    handleFindRoute(route._requestedCenterId ?? null);
+  }, [route, routeSafetySignature, findingRoute, navigationActive, handleFindRoute]);
 
   // Listen for user map drag to pause auto-following and show recenter button
   useEffect(() => {
@@ -6617,19 +6669,6 @@ const ResidentHome = () => {
                 ))}
               </fieldset>
 
-              <div className="map-legend-content" aria-label="Map key">
-                <h4>Map key</h4>
-                <div className="map-legend-row"><span className="map-legend-dot status-available" />Available center</div>
-                <div className="map-legend-row"><span className="map-legend-dot status-almost-full" />Almost full center (90%+)</div>
-                <div className="map-legend-row"><span className="map-legend-dot status-full" />Full center</div>
-                <div className="map-legend-row"><span className="map-legend-dot status-family" />Your assigned center</div>
-                <div className="map-legend-row"><span className="map-legend-line road-closed" />Closed road</div>
-                <div className="map-legend-row"><span className="map-legend-symbol hazard-symbol" aria-hidden="true">!</span>Hazard report</div>
-                <div className="map-legend-row"><span className="map-legend-polygon flood-polygon" />Flood area</div>
-                <div className="map-legend-row"><span className="map-legend-polygon landslide-polygon" />Landslide area</div>
-                <div className="map-legend-row"><span className="map-legend-line center-boundary" />Evacuation center boundary</div>
-                <div className="map-legend-row"><span className="map-legend-line municipal-boundary" />Sogod municipal boundary (blue dashed)</div>
-              </div>
             </section>
           )}
         </div>
@@ -6639,9 +6678,6 @@ const ResidentHome = () => {
           onClick={handleSaveSogodOfflineMap}
           disabled={offlineMapDownload.status === "downloading"}
           className={`control-stack-btn offline-map-download-btn ${offlineMapDownload.status === "saved" ? "active" : ""}`}
-          title={offlineMapDownload.status === "downloading"
-            ? `Saving Sogod map: ${offlineMapDownload.completed} of ${offlineMapDownload.total} tiles`
-            : "Save the Sogod map for offline use"}
           aria-label={offlineMapDownload.status === "downloading"
             ? `Saving Sogod map, ${offlineMapDownload.completed} of ${offlineMapDownload.total} tiles`
             : "Save the Sogod map for offline use"}
@@ -6727,6 +6763,19 @@ const ResidentHome = () => {
 
             <div className={isMobile ? "sheet-body" : ""}>
               {helpIconsList}
+              <div className="map-legend-content" aria-label="Map key">
+                <h4>Map key</h4>
+                <div className="map-legend-row"><span className="map-legend-dot status-available" />Available center</div>
+                <div className="map-legend-row"><span className="map-legend-dot status-almost-full" />Almost full center (90%+)</div>
+                <div className="map-legend-row"><span className="map-legend-dot status-full" />Full center</div>
+                <div className="map-legend-row"><span className="map-legend-dot status-family" />Your assigned center</div>
+                <div className="map-legend-row"><span className="map-legend-line road-closed" />Closed road</div>
+                <div className="map-legend-row"><span className="map-legend-symbol hazard-symbol" aria-hidden="true">!</span>Hazard report</div>
+                <div className="map-legend-row"><span className="map-legend-polygon flood-polygon" />Flood area</div>
+                <div className="map-legend-row"><span className="map-legend-polygon landslide-polygon" />Landslide area</div>
+                <div className="map-legend-row"><span className="map-legend-line center-boundary" />Evacuation center boundary</div>
+                <div className="map-legend-row"><span className="map-legend-line municipal-boundary" />Sogod municipal boundary (blue dashed)</div>
+              </div>
               <button
                 type="button"
                 className="help-got-it-btn"
@@ -6740,19 +6789,9 @@ const ResidentHome = () => {
       )}
 
       {/* Evacuation Center Bottom Card (bottom sheet on phones/tablets) */}
-      {selectedCenter && isMobile && (
-        <div
-          className="popover-backdrop"
-          onClick={closeCenterDetails}
-          aria-hidden="true"
-        />
-      )}
       {selectedCenter && (
-        <div
-          className={`center-bottom-card ${isMobile ? "mobile" : ""}`}
-          role="dialog"
-          aria-label="Evacuation Center Details"
-        >
+        <PublicMapDialogShell onClose={closeCenterDetails} labelledBy="center-card-title" hasHandle>
+          <div className={`center-bottom-card ${isMobile ? "mobile" : ""}`}>
           {/* Fixed Top Section: Header, Quick Stats, My Room, Primary Action */}
           <div className={`center-card-top-fixed ${centerPanelScrolled ? "is-scrolled" : ""}`}>
             {isMobile && <div className="sheet-handle" aria-hidden="true" />}
@@ -6761,7 +6800,7 @@ const ResidentHome = () => {
             <div className="center-card-header">
               <div className="center-card-header-main">
                 <div className="center-card-name-row">
-                  <h3 className="center-card-title">{selectedCenterName}</h3>
+                  <h3 id="center-card-title" className="center-card-title">{selectedCenterName}</h3>
                   {selectedCenterIsMine ? (
                     <span className="center-status-badge mine">
                       <span className="center-status-dot" />
@@ -7074,7 +7113,8 @@ const ResidentHome = () => {
               );
             })()}
           </div>
-        </div>
+          </div>
+        </PublicMapDialogShell>
       )}
 
       {/* Bottom Action Bar: Google Earth-style round icon button row in bottom-right corner */}
@@ -7447,7 +7487,9 @@ const ResidentHome = () => {
                     <span className="route-blocked-dest">
                       {displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
                     </span>
-                    <span className="route-blocked-status-tag">Access Blocked</span>
+                    <span className="route-blocked-status-tag">
+                      {route.no_safe_center ? "No Safe Center" : "Access Blocked"}
+                    </span>
                   </div>
                 </div>
                 <button
@@ -7462,10 +7504,27 @@ const ResidentHome = () => {
               </div>
 
               <div className="route-blocked-notice-message">
-                <p>No roads available. All routes to your evacuation center are blocked.</p>
+                {route.no_safe_center ? (
+                  <>
+                    <p>No safe evacuation center with available family slots and people spaces can be reached.</p>
+                    <button
+                      type="button"
+                      className="route-request-assistance-btn"
+                      onClick={() => {
+                        setRescueCoordinates(myLocation);
+                        setRescueAlertOpen(true);
+                      }}
+                    >
+                      <FontAwesomeIcon icon={faTriangleExclamation} />
+                      <span>Request rescue</span>
+                    </button>
+                  </>
+                ) : (
+                  <p>{route.message || "No roads available. All routes to your evacuation center are blocked."}</p>
+                )}
               </div>
 
-              {route.alternative_center?.evacuation_center?.id != null && (
+              {!route.no_safe_center && route.alternative_center?.evacuation_center?.id != null && (
                 <>
                   <button
                     type="button"
@@ -7485,7 +7544,7 @@ const ResidentHome = () => {
                 </>
               )}
 
-              {assistanceSent ? (
+              {!route.no_safe_center && (assistanceSent ? (
                 <div className="route-assistance-sent-box" role="status">
                   <FontAwesomeIcon icon={faCircleCheck} className="route-assistance-sent-icon" />
                   <div className="route-assistance-sent-text">
@@ -7511,10 +7570,18 @@ const ResidentHome = () => {
                   <span>{requestingAssistance ? "Sending request..." : assistanceLocationConfirmation === myLocation && needsLocationConfirmation(myLocation) ? "Confirm and send" : "Request assistance"}</span>
                 </button>
                 </>
-              )}
+              ))}
             </div>
           ) : (
             <>
+              {route.fallback_state === "fallback" && (
+                <div className="route-fallback-banner" role="status">
+                  <strong>Your center can't be reached. Showing the nearest safe center.</strong>
+                  <span>
+                    {route.evacuation_center?.free_family_slots ?? "—"} family slots and {route.evacuation_center?.free_people_spaces ?? "—"} people spaces are free. {route.selection_reason}
+                  </span>
+                </div>
+              )}
               <div className="route-preview-main">
                 <div className="route-preview-info">
                   <div className="route-preview-title">
@@ -7606,7 +7673,11 @@ const ResidentHome = () => {
               </button>
               {routeDetailsOpen && (
                 <div className="route-preview-details">
-                  <CenterCapacityFacts centerId={route.evacuation_center?.id} rooms={rooms} />
+                  <CenterCapacityFacts
+                    centerId={route.evacuation_center?.id}
+                    rooms={rooms}
+                    capacityOverride={route.evacuation_center}
+                  />
                   <p className="route-mode-note">
                     Walking routes only. Motorcycle and tricycle routing aren’t supported.
                   </p>
@@ -7678,7 +7749,7 @@ const ResidentHome = () => {
 
       {/* My evacuation center verification */}
       {myCenterOpen && (
-        <div className="mc-overlay" onClick={closeMyCenter}>
+        <PublicMapDialogShell onClose={closeMyCenter} labelledBy="mc-title">
           <div
             className="mc-modal"
             role="dialog"
@@ -7808,12 +7879,15 @@ const ResidentHome = () => {
               </form>
             )}
           </div>
-        </div>
+        </PublicMapDialogShell>
       )}
 
       {/* Find someone: resident access only */}
       {findSomeonePrivacyPromptOpen && isLoggedInResident && (
-        <div className="mc-overlay">
+        <PublicMapDialogShell
+          onClose={() => setFindSomeonePrivacyPromptOpen(false)}
+          labelledBy="find-someone-prompt-title"
+        >
           <div
             className="mc-modal find-someone-prompt"
             role="dialog"
@@ -7822,6 +7896,14 @@ const ResidentHome = () => {
           >
             <div className="mc-header">
               <h3 id="find-someone-prompt-title">Family search preference</h3>
+              <button
+                type="button"
+                className="mc-close"
+                onClick={() => setFindSomeonePrivacyPromptOpen(false)}
+                aria-label="Close"
+              >
+                <FontAwesomeIcon icon={faXmark} />
+              </button>
             </div>
             <div className="mc-body">
               <p className="mc-hint">Let others find my family's evacuation center?</p>
@@ -7864,16 +7946,11 @@ const ResidentHome = () => {
               </div>
             </div>
           </div>
-        </div>
+        </PublicMapDialogShell>
       )}
 
       {findSomeoneOpen && isLoggedInResident && (
-        <div
-          className="mc-overlay"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) closeFindSomeone();
-          }}
-        >
+        <PublicMapDialogShell onClose={closeFindSomeone} labelledBy="fs-modal-title">
           <div
             className="mc-modal"
             role="dialog"
@@ -7983,7 +8060,7 @@ const ResidentHome = () => {
               )}
             </div>
           </div>
-        </div>
+        </PublicMapDialogShell>
       )}
 
       {/* Deep-link / notification opening a saved hazard report */}
@@ -8030,12 +8107,14 @@ const ResidentHome = () => {
         }}
         highlightedRoom={foundPersonLocation?.buildingId != null ? foundPersonLocation.room : null}
         hideHouseholds={privateBuildingView}
+        usePublicMapShell
         isStaff={false}
       />
 
       {/* Login and Resident Sign-Up Dialogs */}
       <LoginDialog
         dialogRef={loginDialogRef}
+        usePublicMapShell
         onOpenSignUp={openSignUpDialog}
         notice={authModalNotice}
         onLoginSuccess={(loggedInUser) => {
@@ -8049,6 +8128,7 @@ const ResidentHome = () => {
       />
       <ResidentSignUpDialog
         dialogRef={signUpDialogRef}
+        usePublicMapShell
         isOpen={signUpOpen}
         onClose={() => setSignUpOpen(false)}
         onOpenLogin={() => openLoginDialog()}

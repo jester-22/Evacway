@@ -1,7 +1,11 @@
 import unittest
 from types import SimpleNamespace
 
-from services.pathfinding import select_closest_alternative_center, select_route_candidates
+from services.pathfinding import (
+    choose_safe_route,
+    select_closest_alternative_center,
+    select_route_candidates,
+)
 
 
 def candidate(center_id, distance_meters):
@@ -11,7 +15,57 @@ def candidate(center_id, distance_meters):
     }
 
 
+def safe_candidate(center_id, name, distance_meters, family_slots, people_spaces):
+    return {
+        "evacuation_center": {
+            "id": center_id,
+            "name": name,
+            "free_family_slots": family_slots,
+            "free_people_spaces": people_spaces,
+        },
+        "walking_distance_meters": distance_meters,
+    }
+
+
 class RouteCandidateSelectionTests(unittest.TestCase):
+    def test_seeded_unreachable_assigned_center_uses_nearest_safe_route(self):
+        seeded_routes = [
+            safe_candidate(2, "Near Full", 300, 0, 12),
+            safe_candidate(3, "Nearest Safe", 500, 4, 18),
+            safe_candidate(4, "Farther Safe", 900, 7, 24),
+        ]
+
+        selected, state, assigned = choose_safe_route(seeded_routes, assigned_center_id=1)
+
+        self.assertEqual(state, "fallback")
+        self.assertEqual(selected["evacuation_center"]["name"], "Nearest Safe")
+        self.assertEqual(selected["evacuation_center"]["free_people_spaces"], 18)
+        self.assertIsNone(assigned)
+
+    def test_seeded_no_safe_center_returns_rescue_state(self):
+        seeded_routes = [
+            safe_candidate(1, "Assigned Full", 300, 0, 12),
+            safe_candidate(2, "Other Full", 500, 4, 0),
+        ]
+
+        selected, state, assigned = choose_safe_route(seeded_routes, assigned_center_id=1)
+
+        self.assertIsNone(selected)
+        self.assertEqual(state, "no_safe_center")
+        self.assertEqual(assigned["evacuation_center"]["name"], "Assigned Full")
+
+    def test_seeded_reachable_assigned_center_stays_selected_without_fallback(self):
+        seeded_routes = [
+            safe_candidate(1, "Assigned Safe", 700, 2, 8),
+            safe_candidate(2, "Closer Safe", 300, 3, 10),
+        ]
+
+        selected, state, assigned = choose_safe_route(seeded_routes, assigned_center_id=1)
+
+        self.assertEqual(state, "assigned")
+        self.assertEqual(selected["evacuation_center"]["name"], "Assigned Safe")
+        self.assertIsNone(assigned)
+
     def test_selected_destination_uses_nearest_other_mapped_center_by_straight_line(self):
         centers = [
             (SimpleNamespace(id=2), 1.8),

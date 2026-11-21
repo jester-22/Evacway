@@ -21,14 +21,42 @@ function sumAvailability(rooms, availableKey, totalKey, usedKey) {
 }
 
 export function getFreeCenterCapacity(centerId, rooms = []) {
-  const matchingRooms = (Array.isArray(rooms) ? rooms : []).filter((room) => (
-    String(room.evacuation_center_id) === String(centerId)
-    && room.is_active !== false
-    && !["closed", "under repair"].includes(String(room.status || "").toLowerCase())
-  ));
+  const matchingRooms = getActiveCenterRooms(centerId, rooms);
 
   return {
     freeFamilySlots: sumAvailability(matchingRooms, "available_slots", "family_slots", "used_slots"),
     freePeopleSpaces: sumAvailability(matchingRooms, "available_spaces", "people_spaces", "used_spaces"),
+  };
+}
+
+function getActiveCenterRooms(centerId, rooms) {
+  return (Array.isArray(rooms) ? rooms : []).filter((room) => (
+    String(room.evacuation_center_id) === String(centerId)
+    && room.is_active !== false
+    && !["closed", "under repair"].includes(String(room.status || "").toLowerCase())
+  ));
+}
+
+export function getCenterAvailability(centerId, rooms = [], knownPeopleCapacity = null) {
+  const matchingRooms = getActiveCenterRooms(centerId, rooms);
+  const capacity = getFreeCenterCapacity(centerId, matchingRooms);
+  if (capacity.freeFamilySlots <= 0 || capacity.freePeopleSpaces <= 0) {
+    return { status: "full", freePeopleSpaces: capacity.freePeopleSpaces };
+  }
+  if (capacity.freeFamilySlots == null || capacity.freePeopleSpaces == null) {
+    return { status: "unavailable", freePeopleSpaces: null };
+  }
+
+  const totalPeopleSpaces = numericValue(knownPeopleCapacity)
+    ?? matchingRooms.reduce((total, room) => (
+      total + (numericValue(room.people_spaces ?? room.capacity) ?? 0)
+    ), 0);
+  const usageRatio = totalPeopleSpaces > 0
+    ? (totalPeopleSpaces - capacity.freePeopleSpaces) / totalPeopleSpaces
+    : 0;
+
+  return {
+    status: usageRatio >= 0.8 ? "almost-full" : "available",
+    freePeopleSpaces: capacity.freePeopleSpaces,
   };
 }

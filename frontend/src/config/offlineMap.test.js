@@ -4,6 +4,7 @@ import {
   buildOfflineTileUrl,
   getSogodOfflineTileCoordinates,
   getBasemapStyleUrl,
+  DEFAULT_PUBLIC_MAP_STYLE,
   getOfflineMapDownloadProgress,
   isWithinSogodTileBounds,
   parseOpenFreeMapTileUrl,
@@ -55,6 +56,13 @@ test("online basemaps use Mapbox and offline basemaps use cached OpenFreeMap sty
   assert.equal(
     getBasemapStyleUrl("street", true, ""),
     "https://tiles.openfreemap.org/styles/liberty",
+  );
+});
+
+test("the default public map style is satellite when online", () => {
+  assert.equal(
+    getBasemapStyleUrl(DEFAULT_PUBLIC_MAP_STYLE, true, "configured-token"),
+    "mapbox://styles/mapbox/satellite-streets-v12",
   );
 });
 

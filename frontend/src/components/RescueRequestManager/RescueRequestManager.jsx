@@ -573,6 +573,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     null;
 
   const selectedPeopleCount =
+    selected?.people_count ??
     selected?.number_of_people ??
     selected?.people_count ??
     selected?.num_people ??
@@ -1144,6 +1145,26 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                   <p className="rq-situation-text">
                     {selected.description || "No description provided."}
                   </p>
+                  {Array.isArray(selected.selected_needs) && selected.selected_needs.length > 0 && (
+                    <div className="rq-rescue-detail-group">
+                      <strong>Selected needs</strong>
+                      <div className="rq-rescue-detail-chips">
+                        {selected.selected_needs.map((need) => (
+                          <span className="rq-rescue-detail-chip" key={need}>{need}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {Array.isArray(selected.vulnerability_flags) && selected.vulnerability_flags.length > 0 && (
+                    <div className="rq-rescue-detail-group">
+                      <strong>Needs extra assistance</strong>
+                      <div className="rq-rescue-detail-chips">
+                        {selected.vulnerability_flags.map((flag) => (
+                          <span className="rq-rescue-detail-chip" key={flag}>{flag}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </section>
 
                 {/* 2. TOP-RIGHT: REQUESTER & CONTACT */}

@@ -18,6 +18,7 @@ import { queryKeys } from "../../hooks/useEvacuationQueries";
 import { createSelectedLocationElement, refineGeolocation } from "../../utils/mapLocationIndicators";
 import { useAuth } from "../../context/AuthContext";
 import { needsLocationConfirmation } from "../../utils/locationConfirmation";
+import { maskContactNumber, RESCUE_NEEDS, RESCUE_VULNERABILITY_FLAGS } from "../../utils/rescueRequest.js";
 import "./RescueAlertModal.css";
 
 const MAX_PHOTOS = 5;
@@ -43,15 +44,20 @@ export default function RescueAlertModal({
   const savedContactNumber = user?.contact_number || user?.phone || "";
 
   const [description, setDescription] = useState("");
+  const [selectedNeeds, setSelectedNeeds] = useState([]);
+  const [vulnerabilityFlags, setVulnerabilityFlags] = useState([]);
   const [requesterName, setRequesterName] = useState(loggedInName);
   const [requesterContact, setRequesterContact] = useState(savedContactNumber);
+  const [contactEditing, setContactEditing] = useState(!savedContactNumber);
   const [proofImages, setProofImages] = useState([]);
   const [locationDescription, setLocationDescription] = useState("");
   const [coordinates, setCoordinates] = useState(initialCoordinates);
   const [addressText, setAddressText] = useState("");
   const [locationMessage, setLocationMessage] = useState("");
   const [guestLocation, setGuestLocation] = useState("");
-  const [peopleNeedingRescue, setPeopleNeedingRescue] = useState("");
+  const [peopleNeedingRescue, setPeopleNeedingRescue] = useState(
+    String(Math.max(1, Number(user?.family_member_count) || 1))
+  );
   const [guestCoordinates, setGuestCoordinates] = useState(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -62,6 +68,26 @@ export default function RescueAlertModal({
   const previewMapRef = useRef(null);
   const previewMarkerRef = useRef(null);
   const fileInputRef = useRef(null);
+  const peopleCountTouchedRef = useRef(false);
+  const contactTouchedRef = useRef(false);
+
+  useEffect(() => {
+    if (user?.role !== "resident") return undefined;
+    let active = true;
+    api.getRescueRequestFormContext()
+      .then((context) => {
+        if (!active) return;
+        if (!peopleCountTouchedRef.current && context.family_member_count) {
+          setPeopleNeedingRescue(String(context.family_member_count));
+        }
+        if (!contactTouchedRef.current) {
+          setRequesterContact(context.contact_number || "");
+          setContactEditing(!context.contact_number);
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [user?.id, user?.role]);
 
   // Close on Escape key
   useEffect(() => {
@@ -339,6 +365,10 @@ export default function RescueAlertModal({
   async function handleSubmit(event) {
     event.preventDefault();
     if (submitting || locating) return;
+    if (!description.trim() && selectedNeeds.length === 0) {
+      setError("Select a need or briefly describe the situation.");
+      return;
+    }
     const finalName = (loggedInName || user?.email || "Resident").trim();
     if (!finalName) {
       setError("Please provide your name.");
@@ -372,6 +402,9 @@ export default function RescueAlertModal({
 
       const formData = new FormData();
       formData.append("description", description.trim());
+      formData.append("selected_needs", JSON.stringify(selectedNeeds));
+      formData.append("people_count", peopleNeedingRescue);
+      formData.append("vulnerability_flags", JSON.stringify(vulnerabilityFlags));
       formData.append("requester_name", finalName);
       formData.append("requester_contact", finalContact);
       formData.append("location_description", locationDescription.trim() || "");
@@ -622,37 +655,113 @@ export default function RescueAlertModal({
                   {user.email && <span className="rescue-logged-in-email">{user.email}</span>}
                 </div>
               </div>
-              <label className="rescue-field" style={{ margin: 0 }}>
+              <div className="rescue-field" style={{ margin: 0 }}>
                 <span className="rescue-field-label">
                   <FontAwesomeIcon icon={faPhone} className="rescue-label-icon" />
-                  Enter Contact Number (Optional)
+                  Saved contact number
                 </span>
-                <input
-                  type="tel"
-                  className="rescue-text-input"
-                  value={requesterContact}
-                  onChange={(event) => setRequesterContact(event.target.value)}
-                  maxLength={20}
-                  placeholder="Enter your contact number"
-                />
-                <small className="rescue-field-hint">
-                  We’ll use your saved number if you leave this as is. Update it if it has changed.
-                </small>
-              </label>
+                {contactEditing ? (
+                  <>
+                    <input
+                      type="tel"
+                      className="rescue-text-input"
+                      value={requesterContact}
+                      onChange={(event) => {
+                        contactTouchedRef.current = true;
+                        setRequesterContact(event.target.value);
+                      }}
+                      maxLength={20}
+                      placeholder="Enter your contact number"
+                      autoComplete="tel"
+                    />
+                    {requesterContact && (
+                      <button type="button" className="rescue-inline-link" onClick={() => setContactEditing(false)}>
+                        Done
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <div className="rescue-contact-confirm">
+                    <strong>{maskContactNumber(requesterContact || savedContactNumber)}</strong>
+                    <button type="button" className="rescue-inline-link" onClick={() => {
+                      contactTouchedRef.current = true;
+                      setContactEditing(true);
+                    }}>
+                      Edit
+                    </button>
+                  </div>
+                )}
+                <small className="rescue-field-hint">Confirm the number responders should use.</small>
+              </div>
             </div>
 
             <label className="rescue-field">
-              <span className="rescue-field-label">
-                What help do you need? <em className="rescue-req">*</em>
-              </span>
+              <span className="rescue-field-label">What help do you need?</span>
+              <div className="rescue-choice-grid" role="group" aria-label="Choose all needs that apply">
+                {RESCUE_NEEDS.map((need) => {
+                  const selected = selectedNeeds.includes(need);
+                  return (
+                    <button
+                      type="button"
+                      key={need}
+                      className={`rescue-choice ${selected ? "is-selected" : ""}`}
+                      aria-pressed={selected}
+                      onClick={() => setSelectedNeeds((current) => (
+                        selected
+                          ? current.filter((item) => item !== need)
+                          : [...current, need]
+                      ))}
+                    >
+                      {need}
+                    </button>
+                  );
+                })}
+              </div>
+              <small className="rescue-field-hint">Choose any that apply. You can add a short description below.</small>
               <textarea
                 className="rescue-textarea"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 maxLength={2000}
-                required
                 rows={3}
-                placeholder="Describe the emergency, water level, injuries, or anyone who needs immediate assistance."
+                placeholder="Optional details responders should know"
+              />
+            </label>
+
+            <div className="rescue-field">
+              <span className="rescue-field-label">Anyone needing extra assistance?</span>
+              <div className="rescue-vulnerability-grid">
+                {RESCUE_VULNERABILITY_FLAGS.map((flag) => (
+                  <label className="rescue-check-option" key={flag}>
+                    <input
+                      type="checkbox"
+                      checked={vulnerabilityFlags.includes(flag)}
+                      onChange={(event) => setVulnerabilityFlags((current) => (
+                        event.target.checked
+                          ? [...current, flag]
+                          : current.filter((item) => item !== flag)
+                      ))}
+                    />
+                    <span>{flag}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <label className="rescue-field">
+              <span className="rescue-field-label">How many people?</span>
+              <input
+                type="number"
+                className="rescue-text-input"
+                value={peopleNeedingRescue}
+                min="1"
+                max="999"
+                step="1"
+                inputMode="numeric"
+                onChange={(event) => {
+                  peopleCountTouchedRef.current = true;
+                  setPeopleNeedingRescue(event.target.value);
+                }}
               />
             </label>
 
@@ -796,21 +905,29 @@ export default function RescueAlertModal({
                 </small>
               )}
 
-              <input
-                type="text"
-                className="rescue-text-input"
-                value={locationDescription}
-                onChange={(event) => setLocationDescription(event.target.value)}
-                maxLength={255}
-                required={!hasCoords || (isApproximate && !isManualPin)}
-                placeholder={
-                  !hasCoords
-                    ? "Landmark, street, or barangay (required if no GPS)"
-                    : isApproximate && !isManualPin
-                      ? "Landmark, street, or house details (required for approximate GPS)"
-                      : "Optional landmark, house color, or floor level"
-                }
-              />
+              <label className="rescue-field">
+                <span className="rescue-field-label">Landmark or location details{hasCoords ? " (optional)" : ""}</span>
+                {isApproximate && !isManualPin && (
+                  <small className="rescue-field-hint">
+                    GPS accuracy is approximate. A nearby landmark can help responders find you.
+                  </small>
+                )}
+                <input
+                  type="text"
+                  className="rescue-text-input"
+                  value={locationDescription}
+                  onChange={(event) => setLocationDescription(event.target.value)}
+                  maxLength={255}
+                  required={!hasCoords}
+                  placeholder={
+                    !hasCoords
+                      ? "Street, landmark, or barangay (needed without GPS)"
+                      : isApproximate && !isManualPin
+                        ? "Add a nearby landmark (optional)"
+                        : "Optional landmark or nearby place"
+                  }
+                />
+              </label>
             </div>
           </div>
 

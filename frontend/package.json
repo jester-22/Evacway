@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test src/utils/polygonSnap.test.js src/utils/centerBuildings.test.js src/utils/routeCard.test.js src/utils/publicMapLayers.test.js src/config/emergencyContacts.test.js src/config/offlineMap.test.js src/locales/landing.test.js",
+    "test": "node --test src/utils/polygonSnap.test.js src/utils/centerBuildings.test.js src/utils/routeCard.test.js src/utils/routeArrowAnimation.test.js src/utils/rescueRequest.test.js src/utils/publicMapLayers.test.js src/utils/mapBuildingLayers.test.js src/config/emergencyContacts.test.js src/config/offlineMap.test.js src/locales/landing.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

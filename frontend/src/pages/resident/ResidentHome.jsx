@@ -10,8 +10,9 @@ import RescueAlertModal from "../../components/RescueAlertModal/RescueAlertModal
 import { EVAC_SHELTER_ICON_HTML, EvacShelterIcon } from "../../components/DashboardMap/evacShelterIcon";
 import { getCenterCoordinates } from "../../utils/mapCenterCoordinates";
 import { getMappedBuildingsForCenter } from "../../utils/centerBuildings";
-import { getFreeCenterCapacity } from "../../utils/routeCard";
+import { getCenterAvailability, getFreeCenterCapacity } from "../../utils/routeCard";
 import { applyPublicMapLayerVisibility, simplifyPublicBaseMap } from "../../utils/publicMapLayers";
+import { shouldUpdateRouteArrowAnimation } from "../../utils/routeArrowAnimation.js";
 import { resolveRoomBuilding } from "../../utils/resolveRoomBuilding";
 import { needsLocationConfirmation } from "../../utils/locationConfirmation";
 import { createReportPopup } from "../../components/mapReports/mapReports";
@@ -93,8 +94,11 @@ import {
   OFFLINE_MAP_MAX_BYTES,
   OPENFREEMAP_ALTERNATE_STYLE_URL,
   OPENFREEMAP_STYLE_URL,
+  DEFAULT_PUBLIC_MAP_STYLE,
   parseOpenFreeMapTileUrl,
 } from "../../config/offlineMap";
+import { LONG_WALK_THRESHOLD_MINUTES } from "../../config/routeCard";
+import { emergencyContacts } from "../../config/emergencyContacts";
 
 const MAPBOX_ACCESS_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
@@ -125,11 +129,11 @@ function CenterCapacityFacts({ centerId, rooms, className = "" }) {
     <div className={`route-capacity-facts ${className}`.trim()} aria-label="Available center capacity">
       <div>
         <strong>{familySlots}</strong>
-        <span>free family slots</span>
+        <span>Family slots</span>
       </div>
       <div>
         <strong>{peopleSpaces}</strong>
-        <span>free people spaces</span>
+        <span>People spaces</span>
       </div>
     </div>
   );
@@ -1485,20 +1489,34 @@ const ResidentHome = () => {
   const {
     route,
     setRoute,
-    routeIsMine,
     setRouteIsMine,
     routeError,
     setRouteError,
     findingRoute,
     setFindingRoute
   } = useRouting();
+  const [routeDetailsOpen, setRouteDetailsOpen] = useState(false);
+  const [otherCentersOpen, setOtherCentersOpen] = useState(false);
+  const routeWalkMinutes = Number(
+    route?.estimated_time_min
+    ?? (route ? estimateTravelTimes(route.distance_km || 0).walking : 0)
+  );
+  const routeAvailability = route?.evacuation_center?.id != null
+    ? getCenterAvailability(route.evacuation_center.id, rooms, route.evacuation_center.capacity)
+    : { status: "unavailable", freePeopleSpaces: null };
+  const configuredHotline = emergencyContacts.hotlines[0] || null;
+
+  useEffect(() => {
+    setRouteDetailsOpen(false);
+    setOtherCentersOpen(false);
+  }, [route?.evacuation_center?.id, route?.alternative_center?.evacuation_center?.id]);
 
   // --------------------------------------------------
   // Map style
   // Street is the default
   // --------------------------------------------------
 
-  const [mapStyle, setMapStyle] = useState("street");
+  const [mapStyle, setMapStyle] = useState(DEFAULT_PUBLIC_MAP_STYLE);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [offlineMapDownload, setOfflineMapDownload] = useState({
     status: "idle",
@@ -1551,10 +1569,12 @@ const ResidentHome = () => {
   const [assistanceSent, setAssistanceSent] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const profileDropdownRef = useRef(null);
-  const [findSomeoneOptOut, setFindSomeoneOptOut] = useState(false);
+  const [findSomeoneSearchable, setFindSomeoneSearchable] = useState(false);
   const [findSomeonePrivacyLoading, setFindSomeonePrivacyLoading] = useState(false);
   const [findSomeonePrivacySaving, setFindSomeonePrivacySaving] = useState(false);
   const [findSomeonePrivacyError, setFindSomeonePrivacyError] = useState("");
+  const [findSomeonePrivacyPromptOpen, setFindSomeonePrivacyPromptOpen] = useState(false);
+  const [findSomeonePromptChoice, setFindSomeonePromptChoice] = useState(false);
 
   useEffect(() => {
     if (!profileDropdownOpen) return;
@@ -1583,13 +1603,33 @@ const ResidentHome = () => {
   }, [profileDropdownOpen]);
 
   useEffect(() => {
+    if (!isLoggedInResident) {
+      setFindSomeonePrivacyPromptOpen(false);
+      setFindSomeoneSearchable(false);
+      return undefined;
+    }
+    let active = true;
+    api.getFindSomeonePrivacy()
+      .then((result) => {
+        if (!active) return;
+        setFindSomeoneSearchable(Boolean(result.searchable));
+        if (result.prompt_pending) {
+          setFindSomeonePromptChoice(false);
+          setFindSomeonePrivacyPromptOpen(true);
+        }
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [isLoggedInResident]);
+
+  useEffect(() => {
     if (!profileDropdownOpen || !isLoggedInResident) return undefined;
     let active = true;
     setFindSomeonePrivacyLoading(true);
     setFindSomeonePrivacyError("");
     api.getFindSomeonePrivacy()
       .then((result) => {
-        if (active) setFindSomeoneOptOut(Boolean(result.find_someone_opt_out));
+        if (active) setFindSomeoneSearchable(Boolean(result.searchable));
       })
       .catch((error) => {
         if (active) setFindSomeonePrivacyError(error.message || "Could not load this setting.");
@@ -1602,16 +1642,30 @@ const ResidentHome = () => {
 
   async function handleFindSomeonePrivacyChange(event) {
     const nextValue = event.target.checked;
-    const previousValue = findSomeoneOptOut;
-    setFindSomeoneOptOut(nextValue);
+    const previousValue = findSomeoneSearchable;
+    setFindSomeoneSearchable(nextValue);
     setFindSomeonePrivacySaving(true);
     setFindSomeonePrivacyError("");
     try {
       const result = await api.updateFindSomeonePrivacy(nextValue);
-      setFindSomeoneOptOut(Boolean(result.find_someone_opt_out));
+      setFindSomeoneSearchable(Boolean(result.searchable));
     } catch (error) {
-      setFindSomeoneOptOut(previousValue);
+      setFindSomeoneSearchable(previousValue);
       setFindSomeonePrivacyError(error.message || "Could not update this setting.");
+    } finally {
+      setFindSomeonePrivacySaving(false);
+    }
+  }
+
+  async function saveFindSomeonePromptChoice() {
+    setFindSomeonePrivacySaving(true);
+    setFindSomeonePrivacyError("");
+    try {
+      const result = await api.updateFindSomeonePrivacy(findSomeonePromptChoice);
+      setFindSomeoneSearchable(Boolean(result.searchable));
+      setFindSomeonePrivacyPromptOpen(false);
+    } catch (error) {
+      setFindSomeonePrivacyError(error.message || "Could not save this setting.");
     } finally {
       setFindSomeonePrivacySaving(false);
     }
@@ -1642,7 +1696,7 @@ const ResidentHome = () => {
   const liveUserLocationRef = useRef(null);
   const userMarkerElementRef = useRef(null);
   const [arrivalToast, setArrivalToast] = useState("");
-  const [navPillExpanded, setNavPillExpanded] = useState(false);
+  const [, setNavPillExpanded] = useState(false);
   const arrowAnimRef = useRef(null);
   const activeEntranceRef = useRef(null);
   const navigationRemainingMetersRef = useRef(null);
@@ -1685,6 +1739,10 @@ const ResidentHome = () => {
   // "Find someone" state
   const [findSomeoneOpen, setFindSomeoneOpen] = useState(false);
   const [findSomeoneName, setFindSomeoneName] = useState("");
+  const [findSomeoneBarangayId, setFindSomeoneBarangayId] = useState("");
+  const [findSomeoneAdditionalDetail, setFindSomeoneAdditionalDetail] = useState("");
+  const [findSomeoneBarangays, setFindSomeoneBarangays] = useState([]);
+  const [findSomeoneBarangaysLoading, setFindSomeoneBarangaysLoading] = useState(false);
   const [findSomeoneLoading, setFindSomeoneLoading] = useState(false);
   const [findSomeoneResults, setFindSomeoneResults] = useState([]);
   const [findSomeoneHint, setFindSomeoneHint] = useState("");
@@ -4093,33 +4151,6 @@ const ResidentHome = () => {
         });
       }
 
-      // Wave animation moving along the route: pulses between 0.3 and 1.0, cycle 1.5s
-      const prefersReducedMotion =
-        typeof window !== "undefined" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-      if (!prefersReducedMotion) {
-        let lastTime = 0;
-        const cycleMs = 1500;
-        const animateArrows = () => {
-          const now = Date.now();
-          if (!document.hidden && now - lastTime >= 33) {
-            lastTime = now;
-            const progress = (now % cycleMs) / cycleMs;
-            for (let k = 0; k < 4; k++) {
-              const p = (progress - k / 4 + 1.0) % 1.0;
-              const opacity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(p * 2 * Math.PI));
-              const layerName = `evacuation-route-arrows-${k}`;
-              if (map.getLayer(layerName)) {
-                map.setPaintProperty(layerName, "icon-opacity", opacity);
-              }
-            }
-          }
-          arrowAnimRef.current = requestAnimationFrame(animateArrows);
-        };
-        arrowAnimRef.current = requestAnimationFrame(animateArrows);
-      }
-
       if (map.getLayer("resident-hazard-reports-layer-compact")) {
         try {
           map.moveLayer("resident-hazard-reports-layer-compact");
@@ -4225,6 +4256,45 @@ const ResidentHome = () => {
       }
     };
   }, [route, mapLoaded, mapStyle, styleVersion]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!navigationActive || !map || !mapLoaded || !route) return undefined;
+
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReducedMotion) return undefined;
+
+    let lastUpdate = null;
+    const animateArrows = (frameTime) => {
+      if (!navigationActiveRef.current || !map.isStyleLoaded()) {
+        arrowAnimRef.current = null;
+        return;
+      }
+
+      if (!document.hidden && shouldUpdateRouteArrowAnimation(frameTime, lastUpdate)) {
+        lastUpdate = frameTime;
+        const progress = (Date.now() % 1500) / 1500;
+        for (let k = 0; k < 4; k++) {
+          const phase = (progress - k / 4 + 1) % 1;
+          const opacity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(phase * 2 * Math.PI));
+          const layerName = `evacuation-route-arrows-${k}`;
+          if (map.getLayer(layerName)) {
+            map.setPaintProperty(layerName, "icon-opacity", opacity);
+          }
+        }
+      }
+
+      arrowAnimRef.current = requestAnimationFrame(animateArrows);
+    };
+
+    arrowAnimRef.current = requestAnimationFrame(animateArrows);
+    return () => {
+      if (arrowAnimRef.current) cancelAnimationFrame(arrowAnimRef.current);
+      arrowAnimRef.current = null;
+    };
+  }, [navigationActive, mapLoaded, route, mapStyle, styleVersion]);
 
   // --------------------------------------------------
   // Enable browser location
@@ -5437,10 +5507,24 @@ const ResidentHome = () => {
   // "Find someone" handlers
   // --------------------------------------------------
 
+  function openFindSomeone() {
+    clearFoundPersonLocation();
+    setFindSomeoneOpen(true);
+    setFindSomeoneBarangayId("");
+    setFindSomeoneAdditionalDetail("");
+    setFindSomeoneBarangaysLoading(true);
+    api.getPublicBarangays()
+      .then((barangays) => setFindSomeoneBarangays(Array.isArray(barangays) ? barangays : []))
+      .catch(() => setFindSomeoneBarangays([]))
+      .finally(() => setFindSomeoneBarangaysLoading(false));
+  }
+
   // Search for a resident's evacuation center. The server returns center names only.
   const closeFindSomeone = () => {
     setFindSomeoneOpen(false);
     setFindSomeoneName("");
+    setFindSomeoneBarangayId("");
+    setFindSomeoneAdditionalDetail("");
     setFindSomeoneHint("");
     setFindSomeoneResults([]);
     setFindSomeoneSearched(false);
@@ -5454,14 +5538,22 @@ const ResidentHome = () => {
       setFindSomeoneHint("Enter the person's full name.");
       return;
     }
+    if (!findSomeoneBarangayId) {
+      setFindSomeoneHint("Choose a barangay.");
+      return;
+    }
 
     setFindSomeoneHint("");
     setFindSomeoneLoading(true);
     setFindSomeoneSearched(true);
     setFindSomeoneResults([]);
     try {
-      const result = await api.findSomeoneCenter(query);
-      setFindSomeoneResults((result.matches || []).slice(0, 5));
+      const result = await api.findSomeoneCenter(
+        query,
+        findSomeoneBarangayId,
+        findSomeoneAdditionalDetail.trim(),
+      );
+      setFindSomeoneResults(result.center_name ? [{ center_name: result.center_name }] : []);
     } catch (error) {
       setFindSomeoneResults([]);
       setFindSomeoneHint(error.status === 429 ? error.message : "No match found.");
@@ -6157,11 +6249,11 @@ const ResidentHome = () => {
                       <label>
                         <input
                           type="checkbox"
-                          checked={findSomeoneOptOut}
+                          checked={findSomeoneSearchable}
                           disabled={findSomeonePrivacyLoading || findSomeonePrivacySaving}
                           onChange={handleFindSomeonePrivacyChange}
                         />
-                        <span>Hide my family from Find someone</span>
+                        <span>Let others find my family's evacuation center?</span>
                       </label>
                       {findSomeonePrivacyError && (
                         <span className="profile-dropdown-privacy-error" role="status">
@@ -7154,10 +7246,7 @@ const ResidentHome = () => {
         {isLoggedInResident && (
         <button
           type="button"
-          onClick={() => {
-            clearFoundPersonLocation();
-            setFindSomeoneOpen(true);
-          }}
+          onClick={openFindSomeone}
           className="action-btn-circle action-btn-secondary"
           title="Find someone"
           aria-label="Find someone"
@@ -7286,42 +7375,7 @@ const ResidentHome = () => {
 
       {/* Active walking navigation: compact pill on mobile (expands on tap) or top bar */}
       {navigationActive && (
-        isMobile && !navPillExpanded ? (
-          <div
-            className="nav-compact-pill"
-            role="button"
-            tabIndex={0}
-            onClick={() => setNavPillExpanded(true)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setNavPillExpanded(true);
-              }
-            }}
-            aria-expanded="false"
-            aria-label="Walking navigation guidance. Tap to expand details."
-          >
-            <div className="nav-pill-icon" aria-hidden="true">
-              <FontAwesomeIcon
-                icon={faArrowUp}
-                style={{
-                  transform: `rotate(${getManeuverRotation(currentWalkingManeuver?.modifier)}deg)`,
-                }}
-              />
-            </div>
-            <span className="nav-pill-distance">
-              {lostSignal
-                ? "Searching for location..."
-                : currentWalkingManeuver?.distance != null
-                  ? `${Math.round(currentWalkingManeuver.distance)} m`
-                  : navigationRemainingMeters != null
-                    ? `${Math.round(navigationRemainingMeters)} m`
-                    : "Next turn"}
-            </span>
-            <FontAwesomeIcon icon={faChevronDown} className="nav-pill-chevron" aria-hidden="true" />
-          </div>
-        ) : (
-          <div className="nav-active-top-bar" role="region" aria-label="Walking navigation">
+        <div className="nav-active-top-bar route-nav-compact" role="region" aria-label="Walking navigation">
             <div className="nav-bar-icon-wrap" aria-hidden="true">
               <FontAwesomeIcon
                 icon={faArrowUp}
@@ -7363,35 +7417,22 @@ const ResidentHome = () => {
                 )}
               </div>
             </div>
-            {isMobile && (
-              <button
-                type="button"
-                className="nav-bar-collapse-btn"
-                onClick={() => setNavPillExpanded(false)}
-                aria-label="Collapse navigation details"
-                title="Collapse"
-              >
-                <FontAwesomeIcon icon={faChevronUp} />
-              </button>
-            )}
             <button
               type="button"
               className="nav-bar-stop-btn"
               onClick={() => stopWalkingNavigation()}
-              aria-label="Stop navigation"
-              title="Stop navigation"
+              aria-label="End navigation"
+              title="End navigation"
             >
-              <FontAwesomeIcon icon={faXmark} />
-              <span>Stop</span>
+              End
             </button>
           </div>
-        )
       )}
 
       {/* Route preview stays below the header, clear of the map controls and bottom dock. */}
       {route && !navigationActive && (
         <div
-          className={`route-preview-card ${isMobile ? "mobile-top-card" : ""} ${route.no_roads_available ? "route-blocked-card" : ""}`}
+          className={`route-preview-card ${route.no_roads_available ? "route-blocked-card" : "route-card-compact"} ${isMobile ? (route.no_roads_available ? "mobile-top-card" : "mobile-bottom-sheet") : ""} ${routeDetailsOpen && !route.no_roads_available ? "is-expanded" : ""}`}
           role="region"
           aria-label={route.no_roads_available ? "Roads blocked notice" : "Route preview"}
         >
@@ -7413,8 +7454,8 @@ const ResidentHome = () => {
                   type="button"
                   onClick={handleClearRoute}
                   className="route-preview-close"
-                  aria-label="Dismiss notice"
-                  title="Dismiss notice"
+                  aria-label="Close"
+                  title="Close"
                 >
                   <FontAwesomeIcon icon={faXmark} />
                 </button>
@@ -7424,11 +7465,25 @@ const ResidentHome = () => {
                 <p>No roads available. All routes to your evacuation center are blocked.</p>
               </div>
 
-              <RouteAlternativeCard
-                alternative={route.alternative_center}
-                rooms={rooms}
-                onSelect={() => handleFindRoute(route.alternative_center?.evacuation_center?.id)}
-              />
+              {route.alternative_center?.evacuation_center?.id != null && (
+                <>
+                  <button
+                    type="button"
+                    className="route-other-centers-toggle"
+                    onClick={() => setOtherCentersOpen((open) => !open)}
+                    aria-expanded={otherCentersOpen}
+                  >
+                    {otherCentersOpen ? "Hide other centers" : "Other centers"}
+                  </button>
+                  {otherCentersOpen && (
+                    <RouteAlternativeCard
+                      alternative={route.alternative_center}
+                      rooms={rooms}
+                      onSelect={() => handleFindRoute(route.alternative_center?.evacuation_center?.id)}
+                    />
+                  )}
+                </>
+              )}
 
               {assistanceSent ? (
                 <div className="route-assistance-sent-box" role="status">
@@ -7472,44 +7527,72 @@ const ResidentHome = () => {
                         {route.chosen_entrance?.name || route.evacuation_center?.chosen_entrance?.name}
                       </span>
                     )}
-                    {routeIsMine && myCenter?.room?.room_number && (
-                      <span className="route-preview-room-tag">Room {myCenter.room.room_number}</span>
-                    )}
                   </div>
-                  <div className="route-preview-meta">
-                    <span className="route-preview-dist">
-                      {Number(route.distance_km || 0).toFixed(1)} km
-                    </span>
-                    <span className="route-preview-dot">·</span>
-                    <span className="route-preview-time">
-                      <FontAwesomeIcon icon={faPersonWalking} />{" "}
-                      {route.estimated_time_min ??
-                        estimateTravelTimes(route.distance_km || 0).walking} min walking
-                    </span>
-                  </div>
+                  <p className="route-preview-meta route-preview-compact-meta">
+                    {Number(route.distance_km || 0).toFixed(1)} km · {routeWalkMinutes} min walking
+                  </p>
                 </div>
                 <button
                   type="button"
                   onClick={handleClearRoute}
                   className="route-preview-close"
-                  aria-label="Clear route"
-                  title="Clear route"
+                  aria-label="Close"
+                  title="Close"
                 >
                   <FontAwesomeIcon icon={faXmark} />
                 </button>
               </div>
-              <CenterCapacityFacts centerId={route.evacuation_center?.id} rooms={rooms} />
-              <p className="route-choice-reason">
-                {route.selection_reason || "Shortest reachable walking distance."}
-              </p>
-              <p className="route-mode-note">
-                Walking routes only. Motorcycle and tricycle routing aren’t supported.
-              </p>
-              <RouteAlternativeCard
-                alternative={route.alternative_center}
-                rooms={rooms}
-                onSelect={() => handleFindRoute(route.alternative_center?.evacuation_center?.id)}
-              />
+              <div className="route-availability-row">
+                <div className={`route-availability-pill route-availability-${routeAvailability.status}`} role="status">
+                  {routeAvailability.status === "full"
+                    ? "Full"
+                    : routeAvailability.status === "almost-full"
+                      ? "Almost full"
+                      : routeAvailability.status === "available"
+                        ? `Available · ${routeAvailability.freePeopleSpaces} spaces left`
+                        : "Availability unavailable"}
+                </div>
+                <button
+                  type="button"
+                  className="route-details-toggle"
+                  onClick={() => setRouteDetailsOpen((open) => !open)}
+                  aria-expanded={routeDetailsOpen}
+                >
+                  <span>Details</span>
+                  <FontAwesomeIcon icon={routeDetailsOpen ? faChevronUp : faChevronDown} aria-hidden="true" />
+                </button>
+              </div>
+              {routeWalkMinutes > LONG_WALK_THRESHOLD_MINUTES && (
+                <div className="route-long-walk" role="note">
+                  <div className="route-long-walk-copy">
+                    <span>Walking routes only.</span>
+                    <strong>This is a long walk</strong>
+                  </div>
+                  <div className="route-long-walk-actions">
+                    {configuredHotline?.number && (
+                      <a
+                        className="route-safety-action"
+                        href={`tel:${configuredHotline.number.replace(/[^\d+]/g, "")}`}
+                      >
+                        Call hotline
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      className="route-safety-action"
+                      onClick={() => {
+                        setRescueCoordinates(myLocation);
+                        setRescueAlertOpen(true);
+                      }}
+                    >
+                      Request rescue
+                    </button>
+                  </div>
+                </div>
+              )}
+              {routeWalkMinutes <= LONG_WALK_THRESHOLD_MINUTES && (
+                <p className="route-mode-note route-mode-note-compact">Walking routes only.</p>
+              )}
               {navigationLocationConfirmation?.location === myLocation && navigationLocationConfirmation?.route === route && needsLocationConfirmation(myLocation) && (
                 <p className="route-location-confirmation" role="status">Check your starting point on the map, then confirm to start.</p>
               )}
@@ -7521,6 +7604,36 @@ const ResidentHome = () => {
                 <FontAwesomeIcon icon={faPersonWalking} />
                 <span>{navigationLocationConfirmation?.location === myLocation && navigationLocationConfirmation?.route === route && needsLocationConfirmation(myLocation) ? "Confirm and start" : "Start walking navigation"}</span>
               </button>
+              {routeDetailsOpen && (
+                <div className="route-preview-details">
+                  <CenterCapacityFacts centerId={route.evacuation_center?.id} rooms={rooms} />
+                  <p className="route-mode-note">
+                    Walking routes only. Motorcycle and tricycle routing aren’t supported.
+                  </p>
+                  <p className="route-choice-reason">
+                    {route.selection_reason || "Shortest reachable walking distance."}
+                  </p>
+                  {route.alternative_center?.evacuation_center?.id != null && (
+                    <>
+                      <button
+                        type="button"
+                        className="route-other-centers-toggle"
+                        onClick={() => setOtherCentersOpen((open) => !open)}
+                        aria-expanded={otherCentersOpen}
+                      >
+                        {otherCentersOpen ? "Hide other centers" : "Other centers"}
+                      </button>
+                      {otherCentersOpen && (
+                        <RouteAlternativeCard
+                          alternative={route.alternative_center}
+                          rooms={rooms}
+                          onSelect={() => handleFindRoute(route.alternative_center?.evacuation_center?.id)}
+                        />
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -7699,6 +7812,61 @@ const ResidentHome = () => {
       )}
 
       {/* Find someone: resident access only */}
+      {findSomeonePrivacyPromptOpen && isLoggedInResident && (
+        <div className="mc-overlay">
+          <div
+            className="mc-modal find-someone-prompt"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="find-someone-prompt-title"
+          >
+            <div className="mc-header">
+              <h3 id="find-someone-prompt-title">Family search preference</h3>
+            </div>
+            <div className="mc-body">
+              <p className="mc-hint">Let others find my family's evacuation center?</p>
+              <fieldset className="find-someone-prompt-options">
+                <legend>Choose Yes or No. No is selected by default.</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="family-searchable-first-login"
+                    checked={findSomeonePromptChoice}
+                    onChange={() => setFindSomeonePromptChoice(true)}
+                  />
+                  <span>Yes</span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="family-searchable-first-login"
+                    checked={!findSomeonePromptChoice}
+                    onChange={() => setFindSomeonePromptChoice(false)}
+                  />
+                  <span>No</span>
+                </label>
+              </fieldset>
+              <p className="mc-hint find-someone-prompt-note">
+                If you choose Yes, other signed-in residents can search with the family member's full name and barangay.
+              </p>
+              {findSomeonePrivacyError && (
+                <div className="mc-error" role="alert">{findSomeonePrivacyError}</div>
+              )}
+              <div className="mc-actions">
+                <button
+                  type="button"
+                  className="mc-btn mc-btn-primary"
+                  disabled={findSomeonePrivacySaving}
+                  onClick={saveFindSomeonePromptChoice}
+                >
+                  {findSomeonePrivacySaving ? "Saving..." : "Save choice"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {findSomeoneOpen && isLoggedInResident && (
         <div
           className="mc-overlay"
@@ -7722,7 +7890,7 @@ const ResidentHome = () => {
 
             <div className="mc-body">
               <p className="mc-hint">
-                Enter a person's full name to see the evacuation center they were assigned to.
+                Enter the full name and barangay. Only the evacuation center is shown.
               </p>
               <form onSubmit={handleFindSomeoneSubmit}>
                 <label className="mc-label" htmlFor="fs-name">Full name</label>
@@ -7738,6 +7906,37 @@ const ResidentHome = () => {
                   placeholder="Full name"
                   autoComplete="off"
                   autoFocus
+                />
+                <label className="mc-label" htmlFor="fs-barangay">Barangay</label>
+                <select
+                  id="fs-barangay"
+                  className="mc-input"
+                  value={findSomeoneBarangayId}
+                  disabled={findSomeoneBarangaysLoading}
+                  onChange={(event) => {
+                    setFindSomeoneBarangayId(event.target.value);
+                    if (findSomeoneHint) setFindSomeoneHint("");
+                  }}
+                  required
+                >
+                  <option value="">{findSomeoneBarangaysLoading ? "Loading barangays..." : "Select a barangay"}</option>
+                  {findSomeoneBarangays.map((barangay) => (
+                    <option key={barangay.id} value={barangay.id}>{barangay.name}</option>
+                  ))}
+                </select>
+                <label className="mc-label" htmlFor="fs-additional-detail">Purok or additional detail (optional)</label>
+                <input
+                  id="fs-additional-detail"
+                  type="text"
+                  className="mc-input"
+                  value={findSomeoneAdditionalDetail}
+                  onChange={(event) => {
+                    setFindSomeoneAdditionalDetail(event.target.value);
+                    if (findSomeoneHint) setFindSomeoneHint("");
+                  }}
+                  placeholder="For example, Purok 4"
+                  autoComplete="off"
+                  maxLength={100}
                 />
                 {findSomeoneHint && (
                   <div className="mc-error" role="status" style={{ marginTop: "8px" }}>
@@ -7759,7 +7958,7 @@ const ResidentHome = () => {
                 findSomeoneResults.length > 0 ? (
                   <div className="find-someone-results">
                     <div className="find-someone-count">
-                      Matching evacuation centers ({findSomeoneResults.length})
+                      Evacuation center
                     </div>
                     {findSomeoneResults.map((item, index) => (
                       <div key={`${item.center_name}-${index}`} className="find-someone-card">
@@ -7777,7 +7976,9 @@ const ResidentHome = () => {
                     ))}
                   </div>
                 ) : (
-                  <div className="find-someone-empty">No match found.</div>
+                  <div className="find-someone-empty">
+                    No match found. Check the full name and barangay, or add a purok detail and try again.
+                  </div>
                 )
               )}
             </div>

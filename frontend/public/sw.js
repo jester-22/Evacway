@@ -1,6 +1,6 @@
 const PRECACHE_URLS = [];
 const SHELL_CACHE = "evacway-app-shell-v2";
-const CENTERS_CACHE = "evacway-public-centers-v1";
+const CENTERS_CACHE = "evacway-public-centers-v2";
 const MAP_TILES_CACHE = "evacway-public-map-tiles-v1";
 const MAP_ASSETS_CACHE = "evacway-openfreemap-assets-v1";
 const MAP_TILE_PATH = /^\/api\/public\/offline-map\/tiles\/(\d+)\/(\d+)\/(\d+)$/;

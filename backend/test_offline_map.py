@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from flask import Flask
-from shapely.geometry import Point
+from shapely.geometry import MultiPoint, Point
 
 from models import EvacuationCenter
 import routes.offline_map as offline_map_routes
@@ -67,14 +67,19 @@ class OfflineMapTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 404)
         self.assertEqual(get.call_count, 2)
 
-    @patch("routes.evacuation_centers.to_shape", return_value=Point(124.99, 10.39))
-    def test_public_offline_center_list_contains_only_public_map_fields(self, _to_shape):
+    @patch("routes.evacuation_centers.to_shape")
+    def test_public_offline_center_list_contains_safe_entrances(self, to_shape):
+        to_shape.side_effect = [
+            Point(124.99, 10.39),
+            MultiPoint([(124.991, 10.391), (124.992, 10.392)]),
+        ]
         center = SimpleNamespace(
             id=7,
             name="Sogod Evacuation Center",
             geom=object(),
             is_active=True,
             evacuation_status="Open",
+            entrance_geom=object(),
             contact_number="private phone",
             owner_name="private owner",
         )
@@ -98,8 +103,15 @@ class OfflineMapTests(unittest.TestCase):
         self.assertEqual(response.headers.get("Cache-Control"), "public, max-age=0, must-revalidate")
         self.assertEqual(len(payload["features"]), 1)
         feature = payload["features"][0]
-        self.assertEqual(set(feature["properties"]), {"id", "name", "is_active", "evacuation_status"})
+        self.assertEqual(
+            set(feature["properties"]),
+            {"id", "name", "is_active", "evacuation_status", "entrances"},
+        )
         self.assertEqual(feature["properties"]["name"], "Sogod Evacuation Center")
+        self.assertEqual(feature["properties"]["entrances"], [
+            {"name": "Entrance 1", "lat": 10.391, "lng": 124.991},
+            {"name": "Entrance 2", "lat": 10.392, "lng": 124.992},
+        ])
         self.assertNotIn("contact_number", feature["properties"])
         self.assertNotIn("owner_name", feature["properties"])
         self.assertTrue(payload["last_updated"])

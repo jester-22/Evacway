@@ -25,6 +25,8 @@ export const BUILDING_MIN_ZOOM = 14;
 export const ENTRANCES_SOURCE_ID = "evacway-entrances-source";
 export const ENTRANCES_CIRCLE_LAYER = "evacway-entrances-circle";
 export const ENTRANCES_SYMBOL_LAYER = "evacway-entrances-symbol";
+export const ENTRANCES_MIN_ZOOM = BUILDING_MIN_ZOOM;
+export const ENTRANCE_LABEL_MIN_ZOOM = BUILDING_MIN_ZOOM + 1;
 
 /**
  * Remove any active building hover/tap tooltip and clear hover feature-state.
@@ -604,7 +606,7 @@ export function initEntranceLayers(map, onEntranceClick = null) {
       id: ENTRANCES_CIRCLE_LAYER,
       type: "circle",
       source: ENTRANCES_SOURCE_ID,
-      minzoom: 15,
+      minzoom: ENTRANCES_MIN_ZOOM,
       paint: {
         "circle-radius": [
           "case",
@@ -641,7 +643,7 @@ export function initEntranceLayers(map, onEntranceClick = null) {
       id: ENTRANCES_SYMBOL_LAYER,
       type: "symbol",
       source: ENTRANCES_SOURCE_ID,
-      minzoom: 16,
+      minzoom: ENTRANCE_LABEL_MIN_ZOOM,
       layout: {
         "text-field": ["get", "name"],
         "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],

@@ -897,6 +897,7 @@ class ResidentLookupLog(BaseModel):
     client_ip = db.Column(db.String(64), nullable=True)
     query_name_masked = db.Column(db.String(150), nullable=True)
     query_barangay_masked = db.Column(db.String(100), nullable=True)
+    query_extra_masked = db.Column(db.String(150), nullable=True)
     query_birthdate_masked = db.Column(db.String(16), nullable=True)
     found = db.Column(db.Boolean, nullable=False)
     timestamp = db.Column(db.DateTime, nullable=False, default=philippines_now, index=True)
@@ -957,6 +958,9 @@ class RescueRequest(BaseModel):
     requester_name = db.Column(db.String(100), nullable=False, default='')
     requester_contact = db.Column(db.String(20), nullable=False, default='')
     proof_images = db.Column(db.Text, nullable=True)
+    selected_needs = db.Column(db.Text, nullable=True)
+    people_count = db.Column(db.Integer, nullable=True)
+    vulnerability_flags = db.Column(db.Text, nullable=True)
     accuracy = db.Column(db.Float, nullable=True)
     is_manual_pin = db.Column(db.Boolean, default=False)
     location_source = db.Column(db.String(50), nullable=True, default='gps')
@@ -1115,6 +1119,13 @@ class Family(BaseModel):
     )
 
     find_someone_opt_out = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False,
+        server_default=db.false(),
+    )
+
+    searchable = db.Column(
         db.Boolean,
         nullable=False,
         default=False,
@@ -1469,6 +1480,12 @@ class ResidentAccount(BaseModel):
     login_failed_attempts = db.Column(db.Integer, nullable=False, default=0, server_default='0')
     login_failure_window_started_at = db.Column(db.DateTime, nullable=True)
     login_locked_until = db.Column(db.DateTime, nullable=True)
+    find_someone_prompt_seen = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False,
+        server_default=db.false(),
+    )
 
     resident = db.relationship(
         'Resident',

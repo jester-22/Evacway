@@ -24,6 +24,7 @@ from models import (
     CenterBarangay,
     SystemLog,
     ResidentLookupLog,
+    ResidentAccount,
     User,
     RosterYear,
 )
@@ -78,13 +79,16 @@ def _mask_lookup_value(value):
     return ' '.join(word[:1] + '*' * max(len(word) - 1, 1) for word in words)[:150]
 
 
-def _record_resident_lookup(scope, caller, name=None, barangay=None, birthdate=None, found=False):
+def _record_resident_lookup(
+    scope, caller, name=None, barangay=None, birthdate=None, found=False, extra=None
+):
     db.session.add(ResidentLookupLog(
         lookup_type=scope,
         resident_account_id=caller.get('account_id') if caller else None,
         client_ip=_lookup_rate_keys(scope, caller)[0].split(':ip:', 1)[-1],
         query_name_masked=_mask_lookup_value(name),
         query_barangay_masked=(_mask_lookup_value(barangay) or '')[:100] or None,
+        query_extra_masked=(_mask_lookup_value(extra) or '')[:150] or None,
         query_birthdate_masked='****-**-**' if birthdate else None,
         found=bool(found),
     ))
@@ -2389,20 +2393,42 @@ def find_evacuation_center_for_resident():
 
     payload = request.get_json(silent=True) or {}
     full_name = str(payload.get('full_name') or '').strip()
+    barangay_value = payload.get('barangay_id')
+    additional_detail = str(payload.get('additional_detail') or '').strip()
     if _is_lookup_rate_limited('find_someone', caller):
-        _record_resident_lookup('find_someone', caller, full_name, found=False)
+        _record_resident_lookup(
+            'find_someone', caller, full_name, barangay_value,
+            found=False, extra=additional_detail,
+        )
         return _lookup_rate_limit_response()
     if caller is None:
-        _record_resident_lookup('find_someone', None, full_name, found=False)
+        _record_resident_lookup(
+            'find_someone', None, full_name, barangay_value,
+            found=False, extra=additional_detail,
+        )
         return jsonify({'error': 'Authentication required.'}), 401
     if caller.get('role') != 'resident':
-        _record_resident_lookup('find_someone', caller, full_name, found=False)
+        _record_resident_lookup(
+            'find_someone', caller, full_name, barangay_value,
+            found=False, extra=additional_detail,
+        )
         return jsonify({'error': 'Resident access required.'}), 403
 
     normalized_name = normalize_name(full_name)
-    center_names = {}
-    if normalized_name:
-        families = Family.query.filter_by(find_someone_opt_out=False).all()
+    try:
+        barangay_id = int(barangay_value)
+    except (TypeError, ValueError):
+        barangay_id = None
+
+    center = None
+    if (
+        normalized_name
+        and len(normalized_name.split()) >= 2
+        and barangay_id is not None
+        and barangay_id > 0
+    ):
+        families = Family.query.filter_by(searchable=True, barangay_id=barangay_id).all()
+        matching_families = []
         for family in families:
             residents = Resident.query.filter_by(family_id=family.id).all()
             if not any(
@@ -2410,14 +2436,27 @@ def find_evacuation_center_for_resident():
                 for resident in residents
             ):
                 continue
-            _, center = _resident_family_assignment(family.id)
-            if center:
-                center_names[center.id] = center.name
+            if additional_detail and normalize_name(additional_detail) not in normalize_name(family.address or ''):
+                continue
+            matching_families.append(family)
 
-    found = bool(center_names)
-    _record_resident_lookup('find_someone', caller, full_name, found=found)
+        if len(matching_families) == 1:
+            _, center = _resident_family_assignment(matching_families[0].id)
+
+    found = bool(center)
+    barangay_log_value = barangay_value
+    if barangay_id is not None and barangay_id > 0:
+        barangay = db.session.get(Barangay, barangay_id)
+        if barangay:
+            barangay_log_value = barangay.name
+    _record_resident_lookup(
+        'find_someone', caller, full_name, barangay_log_value,
+        found=found, extra=additional_detail,
+    )
     _apply_lookup_miss_delay('find_someone', caller, found)
-    return jsonify({'matches': [{'center_name': name} for name in center_names.values()]}), 200
+    if not center:
+        return _no_center_match_response()
+    return jsonify({'center_name': center.name}), 200
 
 
 @residents_bp.route('/api/residents/profile/find-someone', methods=['GET', 'PATCH'])
@@ -2430,19 +2469,25 @@ def resident_find_someone_privacy():
 
     resident = db.session.get(Resident, caller['resident_id'])
     family = db.session.get(Family, resident.family_id) if resident and resident.family_id else None
-    if not family:
+    account = db.session.get(ResidentAccount, caller.get('account_id')) if caller.get('account_id') else None
+    if not family or not account or account.resident_id != resident.id:
         return jsonify({'error': 'Family profile not found.'}), 404
 
     if request.method == 'GET':
-        return jsonify({'find_someone_opt_out': bool(family.find_someone_opt_out)}), 200
+        return jsonify({
+            'searchable': bool(family.searchable),
+            'prompt_pending': not bool(account.find_someone_prompt_seen),
+        }), 200
 
     payload = request.get_json(silent=True) or {}
-    value = payload.get('find_someone_opt_out')
+    value = payload.get('searchable')
     if not isinstance(value, bool):
-        return jsonify({'error': 'Choose whether your family can appear in Find someone.'}), 400
-    family.find_someone_opt_out = value
+        return jsonify({'error': 'Choose Yes or No for family center search.'}), 400
+    family.searchable = value
+    account.find_someone_prompt_seen = True
+    family.find_someone_opt_out = not value
     db.session.commit()
-    return jsonify({'find_someone_opt_out': bool(family.find_someone_opt_out)}), 200
+    return jsonify({'searchable': bool(family.searchable), 'prompt_pending': False}), 200
 
 
 # =========================================================

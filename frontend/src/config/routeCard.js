@@ -1,0 +1,1 @@
+export const LONG_WALK_THRESHOLD_MINUTES = 60;

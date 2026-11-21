@@ -244,6 +244,8 @@ export const api = {
       body: payload,
     }),
 
+  getRescueRequestFormContext: () => request("/api/rescue-requests/form-context"),
+
   getRescueRequests: () => request("/api/rescue-requests"),
 
   updateRescueRequest: (id, status) =>
@@ -559,18 +561,22 @@ export const api = {
 
   getMyEvacuationCenter: () => request("/api/residents/my-center"),
 
-  findSomeoneCenter: (fullName) =>
+  findSomeoneCenter: (fullName, barangayId, additionalDetail = "") =>
     request("/api/residents/find-center", {
       method: "POST",
-      body: JSON.stringify({ full_name: fullName }),
+      body: JSON.stringify({
+        full_name: fullName,
+        barangay_id: barangayId,
+        additional_detail: additionalDetail,
+      }),
     }),
 
   getFindSomeonePrivacy: () => request("/api/residents/profile/find-someone"),
 
-  updateFindSomeonePrivacy: (findSomeoneOptOut) =>
+  updateFindSomeonePrivacy: (searchable) =>
     request("/api/residents/profile/find-someone", {
       method: "PATCH",
-      body: JSON.stringify({ find_someone_opt_out: findSomeoneOptOut }),
+      body: JSON.stringify({ searchable }),
     }),
 
   // -------------------------------------------------------

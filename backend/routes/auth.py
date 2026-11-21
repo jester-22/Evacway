@@ -370,6 +370,16 @@ def _login(expected_type):
                 "name": resident_account.resident.get_full_name() if resident_account.resident else "Resident",
                 "email": resident_account.email,
                 "resident_id": resident_account.resident_id,
+                "family_member_count": (
+                    max(int(resident_account.resident.family.member_count or 1), 1)
+                    if resident_account.resident and resident_account.resident.family
+                    else 1
+                ),
+                "contact_number": (
+                    resident_account.resident.contact_number
+                    if resident_account.resident
+                    else None
+                ),
                 "role": "resident",
                 "is_active": True,
                 "last_login_at": resident_account.last_login_at.isoformat() if resident_account.last_login_at else None,

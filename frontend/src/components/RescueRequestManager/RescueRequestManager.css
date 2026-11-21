@@ -985,6 +985,32 @@
   word-break: break-word;
 }
 
+.rq-rescue-detail-group {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.rq-rescue-detail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rq-rescue-detail-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--surface-soft, #f8fafc);
+  font-weight: 600;
+}
+
 /* 2. Requester & contact */
 .rq-call-btn {
   height: 34px;

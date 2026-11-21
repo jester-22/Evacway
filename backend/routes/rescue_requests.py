@@ -7,7 +7,7 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from werkzeug.utils import secure_filename
 
-from models import RescueRequest, SystemLog, db, ResidentAccount, User
+from models import RescueRequest, SystemLog, db, Resident, ResidentAccount, User
 from services.sogod_boundary import is_inside_sogod
 from services.notifications import (
     create_staff_notifications,
@@ -20,6 +20,36 @@ rescue_bp = Blueprint('rescue', __name__)
 RESCUE_STATUSES = {'pending', 'acknowledged', 'responding', 'resolved'}
 MAX_PROOF_IMAGES = 5
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+ALLOWED_RESCUE_NEEDS = {
+    'Trapped', 'Injured', 'Flooding', 'Medical emergency', 'Need evacuation',
+}
+ALLOWED_VULNERABILITY_FLAGS = {'PWD', 'Senior', 'Child', 'Pregnant'}
+
+
+def _parse_json_choices(value, allowed_values, field_label):
+    if value in (None, ''):
+        return [], None
+    try:
+        choices = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return None, f'{field_label} must be a list of supported choices.'
+    if not isinstance(choices, list):
+        return None, f'{field_label} must be a list of supported choices.'
+    if any(not isinstance(choice, str) or choice not in allowed_values for choice in choices):
+        return None, f'{field_label} contains an unsupported choice.'
+    return list(dict.fromkeys(choices)), None
+
+
+def _parse_people_count(value, default_value):
+    if value in (None, ''):
+        return max(int(default_value or 1), 1), None
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None, 'How many people must be a whole number from 1 to 999.'
+    if count < 1 or count > 999 or str(value).strip() != str(count):
+        return None, 'How many people must be a whole number from 1 to 999.'
+    return count, None
 
 
 def _allowed_image(filename):
@@ -67,6 +97,9 @@ def _rescue_to_dict(rescue):
         'requester_name': rescue.requester_name,
         'requester_contact': rescue.requester_contact,
         'proof_images': proof_images,
+        'selected_needs': json.loads(rescue.selected_needs) if rescue.selected_needs else [],
+        'people_count': rescue.people_count,
+        'vulnerability_flags': json.loads(rescue.vulnerability_flags) if rescue.vulnerability_flags else [],
         'created_at': rescue.created_at.isoformat() if rescue.created_at else None,
         'updated_at': rescue.updated_at.isoformat() if rescue.updated_at else None,
     }
@@ -84,6 +117,12 @@ def submit_rescue_request():
     location_description = str(data.get('location_description') or '').strip() or None
     requester_name = str(data.get('requester_name') or '').strip()
     requester_contact = str(data.get('requester_contact') or '').strip()
+    selected_needs, needs_error = _parse_json_choices(
+        data.get('selected_needs'), ALLOWED_RESCUE_NEEDS, 'Selected needs'
+    )
+    vulnerability_flags, vulnerability_error = _parse_json_choices(
+        data.get('vulnerability_flags'), ALLOWED_VULNERABILITY_FLAGS, 'Vulnerability flags'
+    )
 
     claims = get_jwt() or {}
     ident = get_jwt_identity()
@@ -91,6 +130,7 @@ def submit_rescue_request():
 
     saved_name = claims.get('name') or ''
     saved_contact = ''
+    saved_family_count = 1
 
     if ident:
         try:
@@ -102,6 +142,9 @@ def submit_rescue_request():
                         saved_name = acct.resident.get_full_name()
                         if getattr(acct.resident, 'contact_number', None):
                             saved_contact = str(acct.resident.contact_number).strip()
+                        family = getattr(acct.resident, 'family', None)
+                        if family and family.member_count:
+                            saved_family_count = max(int(family.member_count), 1)
                     elif acct.email and not saved_name:
                         saved_name = acct.email.split('@')[0]
             else:
@@ -125,14 +168,25 @@ def submit_rescue_request():
         f for f in request.files.getlist('proof_images') if f and f.filename
     ] if is_multipart else []
 
-    if not description or len(description) > 2000:
-        return jsonify({'error': 'Describe the emergency (up to 2000 characters).'}), 400
+    if needs_error:
+        return jsonify({'error': needs_error}), 400
+    if vulnerability_error:
+        return jsonify({'error': vulnerability_error}), 400
+    if not description and not selected_needs:
+        return jsonify({'error': 'Choose a need or briefly describe the emergency.'}), 400
+    if len(description) > 2000:
+        return jsonify({'error': 'Description must be 2000 characters or fewer.'}), 400
     if location_description and len(location_description) > 255:
         return jsonify({'error': 'Location details must be 255 characters or fewer.'}), 400
     if requester_name and len(requester_name) > 100:
         return jsonify({'error': 'Please provide your name (up to 100 characters).'}), 400
     if requester_contact and len(requester_contact) > 20:
         return jsonify({'error': 'Contact number must be 20 characters or fewer.'}), 400
+    people_count, people_count_error = _parse_people_count(
+        data.get('people_count'), saved_family_count
+    )
+    if people_count_error:
+        return jsonify({'error': people_count_error}), 400
     if len(photo_files) > MAX_PROOF_IMAGES:
         return jsonify({'error': f'You may attach up to {MAX_PROOF_IMAGES} photos.'}), 400
     for photo in photo_files:
@@ -223,6 +277,9 @@ def submit_rescue_request():
         requester_name=requester_name,
         requester_contact=requester_contact,
         proof_images=json.dumps(proof_image_urls) if proof_image_urls else None,
+        selected_needs=json.dumps(selected_needs),
+        people_count=people_count,
+        vulnerability_flags=json.dumps(vulnerability_flags),
     )
     db.session.add(rescue)
     db.session.flush()
@@ -237,6 +294,27 @@ def submit_rescue_request():
     db.session.commit()
     send_staff_push_notifications(notifications)
     return jsonify({'rescue_request': _rescue_to_dict(rescue)}), 201
+
+
+@rescue_bp.route('/api/rescue-requests/form-context', methods=['GET'])
+@jwt_required()
+def get_rescue_form_context():
+    claims = get_jwt() or {}
+    if claims.get('role') != 'resident' or claims.get('account_type') != 'resident_account':
+        return jsonify({'error': 'Resident access required.'}), 403
+
+    try:
+        resident_id = int(claims.get('resident_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Resident account is unavailable.'}), 404
+    resident = db.session.get(Resident, resident_id)
+    if not resident:
+        return jsonify({'error': 'Resident account is unavailable.'}), 404
+    family = resident.family
+    return jsonify({
+        'family_member_count': max(int(family.member_count or 1), 1) if family else 1,
+        'contact_number': resident.contact_number,
+    }), 200
 
 
 @rescue_bp.route('/api/rescue-requests', methods=['GET'])

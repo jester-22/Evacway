@@ -1083,6 +1083,22 @@ def get_public_offline_centers():
             geometry = mapping(to_shape(center.geom))
         except (TypeError, ValueError):
             continue
+        entrances = []
+        if center.entrance_geom is not None:
+            try:
+                entrance_shape = to_shape(center.entrance_geom)
+                points = list(entrance_shape.geoms) if hasattr(entrance_shape, "geoms") else [entrance_shape]
+                entrances = [
+                    {
+                        "name": f"Entrance {index}",
+                        "lat": point.y,
+                        "lng": point.x,
+                    }
+                    for index, point in enumerate(points, start=1)
+                    if hasattr(point, "x") and hasattr(point, "y")
+                ]
+            except (TypeError, ValueError):
+                entrances = []
         features.append({
             "type": "Feature",
             "id": center.id,
@@ -1092,6 +1108,7 @@ def get_public_offline_centers():
                 "name": center.name,
                 "is_active": True,
                 "evacuation_status": (center.evacuation_status or "standby").lower(),
+                "entrances": entrances,
             },
         })
 

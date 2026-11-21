@@ -13,6 +13,7 @@ export const OPENFREEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liber
 export const OPENFREEMAP_ALTERNATE_STYLE_URL = "https://tiles.openfreemap.org/styles/bright";
 export const MAPBOX_STREET_STYLE_URL = "mapbox://styles/mapbox/light-v11";
 export const MAPBOX_SATELLITE_STYLE_URL = "mapbox://styles/mapbox/satellite-streets-v12";
+export const DEFAULT_PUBLIC_MAP_STYLE = "bright";
 
 export function getBasemapStyleUrl(style, online, mapboxAccessToken) {
   if (online && mapboxAccessToken) {

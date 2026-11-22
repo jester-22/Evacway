@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
@@ -20,6 +21,15 @@ import PublicMapDialogShell from "../PublicMapDialogShell/PublicMapDialogShell";
 import "./AuthModals.css";
 
 const NAME_REGEX = /^[a-zA-Z\u00C0-\u024FñÑ\s'.-]+$/;
+
+function getLocalYesterdayIso() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 const FIELD_ORDER = [
   "first_name",
@@ -66,8 +76,8 @@ function validateField(name, currentValues) {
       const dateObj = new Date(val + "T00:00:00");
       if (isNaN(dateObj.getTime())) return "Enter a valid date.";
       const today = new Date();
-      today.setHours(23, 59, 59, 999);
-      if (dateObj > today) return "Birthdate cannot be in the future.";
+      today.setHours(0, 0, 0, 0);
+      if (dateObj >= today) return "Birthdate must be a past date.";
       const minDate = new Date();
       minDate.setFullYear(minDate.getFullYear() - 120);
       minDate.setHours(0, 0, 0, 0);
@@ -427,7 +437,7 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin, 
             onBlur={() => handleBlur(name)}
             ref={(el) => { fieldRefs.current[name] = el; }}
             autoComplete={options.autoComplete}
-            max={type === "date" ? new Date().toISOString().slice(0, 10) : undefined}
+            max={type === "date" ? getLocalYesterdayIso() : undefined}
             aria-invalid={isInvalid ? "true" : "false"}
             aria-describedby={describedBy}
             required={isRequired}
@@ -916,8 +926,9 @@ export function LoginDialog({ dialogRef, onOpenSignUp, onLoginSuccess, notice = 
       </form>
     </dialog>
   );
-  return usePublicMapShell
+  const content = usePublicMapShell
     ? <PublicMapDialogShell native labelledBy="ew-login-title">{dialog}</PublicMapDialogShell>
     : dialog;
+  return typeof document !== "undefined" ? createPortal(content, document.body) : content;
 }
 

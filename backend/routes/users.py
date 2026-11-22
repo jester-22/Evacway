@@ -6,13 +6,17 @@ import smtplib
 import socket
 
 from flask import Blueprint, current_app, request, jsonify
-from models import db, User, ResidentAccount, SystemLog
+from models import db, User, ResidentAccount, SystemLog, to_utc_iso
 from werkzeug.security import check_password_hash, generate_password_hash
 from flask_jwt_extended import get_jwt_identity
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from services.mailer import MailConfigurationError, send_password_setup_email
-from services.password_setup import create_password_setup_token
+from services.password_setup import (
+    create_password_setup_token,
+    generate_unusable_password_hash,
+    send_account_setup_link,
+)
 from utils import role_required
 
 users_bp = Blueprint('users', __name__)
@@ -249,7 +253,7 @@ def create_user():
     new_user = User(
         name=data['name'].strip(),
         email=email,
-        password_hash=generate_password_hash(secrets.token_urlsafe(48)),
+        password_hash=generate_unusable_password_hash(),
         contact_number=data.get('contact_number'),
         role=data['role'],
         is_active=True
@@ -265,22 +269,16 @@ def create_user():
     db.session.add(SystemLog(user_id=admin_id, action=f"Created {data['role']} account: {data['email']}"))
     db.session.commit()
 
-    email_sent = False
-    try:
-        token = create_password_setup_token(new_user)
-        send_password_setup_email(new_user, token, purpose="setup")
-        email_sent = True
-    except Exception:
-        current_app.logger.exception("Could not send account setup email to %s", email)
+    email_sent, message = send_account_setup_link(
+        new_user,
+        token_creator=create_password_setup_token,
+        email_sender=send_password_setup_email,
+    )
 
     return jsonify({
         "user": new_user.to_dict(),
         "email_sent": email_sent,
-        "message": (
-            f"Account created. A password setup link was sent to {email}."
-            if email_sent
-            else "Account created, but the setup email could not be sent. Check SMTP settings and use Reset password to retry."
-        ),
+        "message": message,
     }), 201
 
 
@@ -354,10 +352,6 @@ def get_logs():
             "user_name": users_by_id.get(log.user_id).name if users_by_id.get(log.user_id) else None,
             "user_role": users_by_id.get(log.user_id).role if users_by_id.get(log.user_id) else None,
             "action": log.action,
-            "timestamp": (
-                log.timestamp.strftime("%Y-%m-%dT%H:%M:%S+08:00")
-                if log.timestamp
-                else None
-            )
+            "timestamp": to_utc_iso(log.timestamp)
         } for log in logs
     ])

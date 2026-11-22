@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { formatManilaDate } from "../../utils/dateTime";
 import {
   AlertCircle,
   AlertTriangle,
@@ -604,15 +605,7 @@ export default function EvacueeCheckIn() {
 
   const formatOpDate = (dateStr) => {
     if (!dateStr) return "";
-    try {
-      return new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatManilaDate(dateStr, {}, dateStr);
   };
 
   const formatOpDateRange = (openDate, cutoffDate) => {
@@ -1101,13 +1094,7 @@ export default function EvacueeCheckIn() {
                   <span>
                     Started:{" "}
                     {effectiveSchedule?.evacuation_open_date
-                      ? new Date(
-                          effectiveSchedule.evacuation_open_date + "T00:00:00"
-                        ).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })
+                      ? formatManilaDate(effectiveSchedule.evacuation_open_date, {}, "Today")
                       : "Today"}
                   </span>
                   <span className="ea-op-dot" aria-hidden="true">•</span>

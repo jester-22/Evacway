@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
+import { formatManilaDateTime } from "../../utils/dateTime";
 
 const SAVED_DATA_TIME_KEY = "evacway_saved_public_data_at";
 
 function formatSavedTime(value) {
-  const date = value ? new Date(value) : null;
-  return date && !Number.isNaN(date.getTime())
-    ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
-    : "the last time you were online";
+  return formatManilaDateTime(
+    value,
+    { dateStyle: "medium", timeStyle: "short" },
+    "the last time you were online"
+  );
 }
 
 export default function NetworkStatus() {

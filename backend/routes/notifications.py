@@ -7,6 +7,7 @@ from models import (
     RescueRequest,
     StaffNotification,
     db,
+    to_utc_iso,
 )
 from utils import role_required
 
@@ -28,7 +29,7 @@ def _notification_to_dict(notification, coordinates):
         'message': notification.message,
         'is_emergency': notification.is_emergency,
         'is_read': notification.is_read,
-        'created_at': notification.created_at.isoformat() if notification.created_at else None,
+        'created_at': to_utc_iso(notification.created_at),
         'latitude': coordinates[0] if coordinates else None,
         'longitude': coordinates[1] if coordinates else None,
     }

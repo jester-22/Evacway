@@ -19,6 +19,27 @@
   z-index: 9999;
 }
 
+.ew-dialog[open] {
+  animation: ew-dialog-fade-scale 150ms ease-out;
+}
+
+@keyframes ew-dialog-fade-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ew-dialog[open] {
+    animation: none;
+  }
+}
+
 .ew-dialog::backdrop {
   background: rgba(15, 23, 42, 0.55);
   backdrop-filter: blur(6px);
@@ -108,7 +129,7 @@
   background: transparent;
   color: #64748b;
   cursor: pointer;
-  transition: all 150ms ease;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .ew-icon-btn:hover {
@@ -159,7 +180,7 @@
   font-weight: 600;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 160ms ease;
+  transition: opacity 160ms ease, transform 160ms ease;
 }
 
 .ew-tab-icon {
@@ -348,7 +369,7 @@
   color: #64748b;
   cursor: pointer;
   border-radius: 6px;
-  transition: all 150ms ease;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .ew-eye-toggle:hover {
@@ -373,7 +394,7 @@
   border-radius: 10px;
   cursor: pointer;
   box-shadow: var(--shadow-xs);
-  transition: all 150ms ease;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .ew-submit-btn:hover:not(:disabled) {
@@ -462,7 +483,7 @@
   justify-content: center;
   font-weight: 600;
   cursor: pointer;
-  transition: all 150ms ease;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .ew-btn-primary {
@@ -718,7 +739,7 @@
   color: #64748b;
   cursor: pointer;
   border-radius: 6px;
-  transition: all 150ms ease;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .ew-signup .ew-eye-toggle:hover {

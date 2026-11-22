@@ -11,6 +11,7 @@ import {
 } from "../../hooks/useEvacuationQueries";
 import { displayEntityName } from "../../utils/displayEntityName";
 import { formatRoomLabel } from "../../utils/formatRoomLabel";
+import { formatManilaDateTime } from "../../utils/dateTime";
 import { resolveCenterStructureMode, useEscapeKey } from "./utils";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { getOccupancyStatus } from "./evacuationStatus";
@@ -1508,7 +1509,7 @@ export default function EvacuationCenterManager({
             </div>
             <div className="ecm-print-date">
               Date Generated:{" "}
-              {new Date().toLocaleString("en-PH", { dateStyle: "medium", timeStyle: "short" })}
+              {formatManilaDateTime(new Date(), { dateStyle: "medium", timeStyle: "short" })}
             </div>
           </div>
 

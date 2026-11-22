@@ -15,21 +15,30 @@ from werkzeug.security import generate_password_hash
 from models import (
     db,
     Barangay,
+    EvacuationAssignment,
+    EvacuationCenter,
+    EvacuationCenterRoom,
     Family,
     Resident,
     ResidentRegistrationRequest,
+    RegistrationLinkOverrideLog,
     ResidentAccount,
     StaffNotification,
     SystemLog,
     User,
     philippines_now,
+    utc_now,
 )
 from services.mailer import (
     send_password_setup_email,
     send_resident_registration_email,
 )
 from services.notifications import create_staff_notifications, send_staff_push_notifications
-from services.password_setup import create_password_setup_token
+from services.password_setup import (
+    create_password_setup_token,
+    generate_unusable_password_hash,
+    send_account_setup_link,
+)
 from services.registration_notifications import send_registration_decision_notifications
 from utils import role_required
 
@@ -84,9 +93,13 @@ def _middle_names_match(left, right):
 
 
 def _names_match(request_record, resident):
+    req_first = _normalize_text(request_record.first_name)
+    req_last = _normalize_text(request_record.last_name)
     return (
-        _normalize_text(request_record.first_name) == _normalize_text(resident.first_name)
-        and _normalize_text(request_record.last_name) == _normalize_text(resident.last_name)
+        bool(req_first)
+        and bool(req_last)
+        and req_first == _normalize_text(resident.first_name)
+        and req_last == _normalize_text(resident.last_name)
         and _middle_names_match(request_record.middle_name, resident.middle_name)
     )
 
@@ -113,9 +126,24 @@ def _parse_name_fields(data):
     return first_name, middle_name, last_name
 
 
+def _parse_past_birthdate(raw_value):
+    birthdate_value = str(raw_value or '').strip()
+    if not birthdate_value:
+        return None, 'Birthdate is required.'
+    try:
+        birthdate = date.fromisoformat(birthdate_value)
+    except ValueError:
+        return None, 'Birthdate must be a valid date in YYYY-MM-DD format.'
+    if birthdate >= philippines_now().date():
+        return None, 'Birthdate must be a past date.'
+    if birthdate.year < 1900:
+        return None, 'Birthdate must be in or after 1900.'
+    return birthdate, None
+
+
 def _validate_registration(data):
     first_name, middle_name, last_name = _parse_name_fields(data)
-    birthdate_value = str(data.get('birthdate') or data.get('date_of_birth') or '').strip()
+    birthdate_value = data.get('birthdate') or data.get('date_of_birth')
     barangay = str(data.get('barangay') or '').strip()
     address = str(data.get('address') or '').strip()
     contact_number = str(data.get('contact_number') or '').strip()
@@ -128,14 +156,9 @@ def _validate_registration(data):
         return None, 'Each name field must be 100 characters or fewer.'
     if len(_full_name(first_name, middle_name, last_name)) > 100:
         return None, 'Full name must be 100 characters or fewer.'
-    if not birthdate_value:
-        return None, 'Birthdate is required.'
-    try:
-        birthdate = date.fromisoformat(birthdate_value)
-    except ValueError:
-        return None, 'Birthdate must be a valid date in YYYY-MM-DD format.'
-    if birthdate > date.today():
-        return None, 'Birthdate cannot be in the future.'
+    birthdate, birthdate_error = _parse_past_birthdate(birthdate_value)
+    if birthdate_error:
+        return None, birthdate_error
     if not barangay or len(barangay) > 100:
         return None, 'Barangay is required and must be 100 characters or fewer.'
     if not address or len(address) > 255:
@@ -213,7 +236,10 @@ def _match_fields(registration, resident):
     return {
         'name': _names_match(registration, resident),
         'birthdate': resident_birthdate == registration.birthdate.isoformat(),
-        'barangay': _normalize_text(fam_barangay) == _normalize_text(registration.barangay),
+        'barangay': (
+            bool(_normalize_text(fam_barangay))
+            and _normalize_text(fam_barangay) == _normalize_text(registration.barangay)
+        ),
         'address': bool(
             fam_address
             and _normalize_text(fam_address) == _normalize_text(registration.address)
@@ -365,7 +391,7 @@ def submit_resident_registration():
         email=fields['email'],
         password_hash=generate_password_hash(fields['password']),
         privacy_consent=True,
-        privacy_consent_at=philippines_now(),
+        privacy_consent_at=utc_now(),
         privacy_notice_version=current_app.config.get('DATA_PRIVACY_NOTICE_VERSION', '1'),
         status='pending',
     )
@@ -523,14 +549,9 @@ def update_resident_registration(request_id):
         return jsonify({'error': 'Each name field must be 100 characters or fewer.'}), 400
     if len(_full_name(first_name, middle_name, last_name)) > 100:
         return jsonify({'error': 'Full name must be 100 characters or fewer.'}), 400
-    if not birthdate_value:
-        return jsonify({'error': 'Birthdate is required.'}), 400
-    try:
-        birthdate = date.fromisoformat(birthdate_value)
-    except ValueError:
-        return jsonify({'error': 'Birthdate must be a valid date in YYYY-MM-DD format.'}), 400
-    if birthdate > date.today():
-        return jsonify({'error': 'Birthdate cannot be in the future.'}), 400
+    birthdate, birthdate_error = _parse_past_birthdate(birthdate_value)
+    if birthdate_error:
+        return jsonify({'error': birthdate_error}), 400
     if not barangay or len(barangay) > 100:
         return jsonify({'error': 'Barangay is required and must be 100 characters or fewer.'}), 400
     if len(address) > 255:
@@ -628,6 +649,40 @@ def approve_resident_registration(request_id):
     if ResidentAccount.query.filter_by(resident_id=resident.id).first():
         return jsonify({'error': 'This resident record is already linked to an account.'}), 409
 
+    reviewer_id = int(get_jwt_identity())
+    reviewer = db.session.get(User, reviewer_id)
+    override_reason = str(data.get('override_reason') or '').strip()
+    is_override = False
+
+    match_flags = _match_fields(registration, resident)
+    mismatched_required = []
+    if not match_flags['name']:
+        mismatched_required.append('name')
+    if not match_flags['barangay']:
+        mismatched_required.append('barangay')
+    if mismatched_required:
+        if len(mismatched_required) == 2:
+            detail = 'name and barangay do not match'
+        else:
+            detail = f'{mismatched_required[0]} does not match'
+        if not reviewer or reviewer.role != 'admin':
+            return jsonify({
+                'error': (
+                    'Cannot link this registration to the selected roster record because '
+                    f'{detail}. Only an admin can override a mismatch.'
+                )
+            }), 403
+        if not override_reason:
+            return jsonify({
+                'error': (
+                    'Cannot link this registration to the selected roster record because '
+                    f'{detail}. Both name and barangay must match, or provide an override reason.'
+                )
+            }), 400
+        if len(override_reason) > 2000:
+            return jsonify({'error': 'Override reason must be 2000 characters or fewer.'}), 400
+        is_override = True
+
     duplicate = _duplicate_registration(
         registration.email,
         _normalize_contact(registration.contact_number),
@@ -636,11 +691,11 @@ def approve_resident_registration(request_id):
     if duplicate:
         return jsonify({'error': duplicate}), 409
 
-    reviewer_id = int(get_jwt_identity())
+    now = utc_now()
     registration.status = 'approved'
     registration.matched_resident_id = resident.id
     registration.reviewed_by = reviewer_id
-    registration.reviewed_at = philippines_now()
+    registration.reviewed_at = now
     registration.rejection_reason = None
     account = ResidentAccount(
         resident_id=resident.id,
@@ -649,13 +704,29 @@ def approve_resident_registration(request_id):
         is_active=True,
     )
     db.session.add(account)
+    override_log = None
+    if is_override:
+        override_log = RegistrationLinkOverrideLog(
+            admin_id=reviewer_id,
+            request_id=registration.id,
+            roster_id=resident.id,
+            reason=override_reason,
+            timestamp=now,
+        )
+        db.session.add(override_log)
     StaffNotification.query.filter_by(
         resource_type='resident_registration',
         resource_id=registration.id,
     ).delete(synchronize_session=False)
+    action_text = (
+        f'Approved resident registration #{registration.id} '
+        f'(admin override link to roster #{resident.id}: {override_reason})'
+        if is_override
+        else f'Approved resident registration #{registration.id}'
+    )[:255]
     db.session.add(SystemLog(
         user_id=reviewer_id,
-        action=f'Approved resident registration #{registration.id}',
+        action=action_text,
     ))
     try:
         db.session.commit()
@@ -670,11 +741,114 @@ def approve_resident_registration(request_id):
     req_payload = registration.to_dict()
     req_payload['has_account'] = True
     req_payload['account_email'] = account.email
-    return jsonify({
+    response_body = {
         'message': 'Resident account approved.' if email_sent else 'Resident account approved, but the email was not sent.',
         'request': req_payload,
         'account': account.to_dict(),
         'email_sent': email_sent,
+    }
+    if override_log is not None:
+        response_body['override_log'] = override_log.to_dict()
+    return jsonify(response_body), 200
+
+
+@registrations_bp.route('/api/resident-registrations/<int:request_id>/unlink', methods=['POST'])
+@role_required('admin')
+def unlink_resident_registration(request_id):
+    registration = db.session.get(ResidentRegistrationRequest, request_id)
+    if not registration:
+        return jsonify({'error': 'Registration request not found.'}), 404
+
+    linked_account = _resolve_registration_account(registration)
+    previous_resident_id = registration.matched_resident_id or (
+        linked_account.resident_id if linked_account else None
+    )
+    if not previous_resident_id and not linked_account:
+        return jsonify({'error': 'This registration is not linked to a roster record.'}), 409
+
+    # Inspect any center/room assignment inherited from the linked roster resident
+    inherited_assignment = None
+    if previous_resident_id:
+        assignment = (
+            EvacuationAssignment.query
+            .filter_by(resident_id=previous_resident_id)
+            .order_by(EvacuationAssignment.id.asc())
+            .first()
+        )
+        if assignment:
+            room = (
+                db.session.get(EvacuationCenterRoom, assignment.room_id)
+                if assignment.room_id
+                else None
+            )
+            center_id = room.evacuation_center_id if room else assignment.evacuation_center_id
+            center = db.session.get(EvacuationCenter, center_id) if center_id else None
+            inherited_assignment = {
+                'evacuation_center_id': center.id if center else center_id,
+                'center_name': center.name if center else None,
+                'room_id': room.id if room else assignment.room_id,
+                'room_number': room.room_number if room else None,
+            }
+
+    # Remove the linked account(s) so the account no longer inherits the roster family's center/room
+    accounts_to_delete = {}
+    if previous_resident_id:
+        for acct in ResidentAccount.query.filter_by(resident_id=previous_resident_id).all():
+            accounts_to_delete[acct.id] = acct
+    email_norm = str(registration.email or '').strip().lower()
+    if email_norm:
+        for acct in ResidentAccount.query.filter(func.lower(ResidentAccount.email) == email_norm).all():
+            accounts_to_delete[acct.id] = acct
+
+    for acct in accounts_to_delete.values():
+        if acct.password_hash:
+            registration.password_hash = acct.password_hash
+        db.session.delete(acct)
+
+    if previous_resident_id:
+        for usr in User.query.filter_by(resident_id=previous_resident_id, role='resident').all():
+            usr.resident_id = None
+            usr.is_active = False
+
+    registration.matched_resident_id = None
+    registration.status = 'pending'
+    registration.reviewed_by = None
+    registration.reviewed_at = None
+    registration.rejection_reason = None
+
+    admin_id = int(get_jwt_identity())
+    assignment_summary = ''
+    if inherited_assignment and (inherited_assignment['center_name'] or inherited_assignment['room_number']):
+        parts = [
+            inherited_assignment['center_name'],
+            f"Room {inherited_assignment['room_number']}" if inherited_assignment['room_number'] else None,
+        ]
+        assignment_summary = f" (cleared inherited assignment: {', '.join(p for p in parts if p)})"
+    action_text = (
+        f'Unlinked resident registration #{registration.id}'
+        + (f' from roster #{previous_resident_id}' if previous_resident_id else '')
+        + assignment_summary
+    )[:255]
+    db.session.add(SystemLog(
+        user_id=admin_id,
+        action=action_text,
+    ))
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Could not unlink this registration due to a database conflict.'}), 409
+
+    payload = registration.to_dict()
+    payload['has_account'] = False
+    payload['account_email'] = None
+    return jsonify({
+        'message': 'Registration unlinked from roster record and inherited shelter assignment removed.',
+        'request': payload,
+        'matches': _resident_match_result(registration),
+        'unlinked_resident_id': previous_resident_id,
+        'cleared_inherited_assignment': inherited_assignment,
     }), 200
 
 
@@ -699,7 +873,7 @@ def reject_resident_registration(request_id):
     reviewer_id = int(get_jwt_identity())
     registration.status = 'rejected'
     registration.reviewed_by = reviewer_id
-    registration.reviewed_at = philippines_now()
+    registration.reviewed_at = utc_now()
     registration.rejection_reason = reason
     StaffNotification.query.filter_by(
         resource_type='resident_registration',
@@ -822,12 +996,9 @@ def manual_create_resident_account():
     reviewer_id = int(get_jwt_identity())
     resident_id = data.get('resident_id')
     email = str(data.get('email') or '').strip().lower()
-    password = str(data.get('password') or '').strip()
 
     if not email or not _EMAIL_RE.fullmatch(email):
         return jsonify({'error': 'A valid email address is required.'}), 400
-    if not password or len(password) < 6:
-        return jsonify({'error': 'Password must be at least 6 characters.'}), 400
 
     # Duplicate check for email across both User and ResidentAccount
     duplicate_email = (
@@ -874,14 +1045,9 @@ def manual_create_resident_account():
                 if brgy:
                     barangay_id = brgy.id
 
-        birthdate_obj = None
-        if birthdate_str:
-            try:
-                birthdate_obj = date.fromisoformat(birthdate_str)
-            except ValueError:
-                pass
-        if not birthdate_obj:
-            birthdate_obj = date(1990, 1, 1)
+        birthdate_obj, birthdate_error = _parse_past_birthdate(birthdate_str)
+        if birthdate_error:
+            return jsonify({'error': birthdate_error}), 400
 
         resident = Resident(
             first_name=first_name,
@@ -896,8 +1062,21 @@ def manual_create_resident_account():
         db.session.add(resident)
         db.session.flush()
 
-    # Create ResidentAccount
-    pwd_hash = generate_password_hash(password)
+    # Validate birthdate before creating the account and registration record
+    raw_birthdate = str(data.get('birthdate') or data.get('date_of_birth') or '').strip()
+    if raw_birthdate:
+        birth_dt, birth_err = _parse_past_birthdate(raw_birthdate)
+        if birth_err:
+            return jsonify({'error': birth_err}), 400
+    elif resident.date_of_birth:
+        if resident.date_of_birth >= philippines_now().date() or resident.date_of_birth.year < 1900:
+            return jsonify({'error': 'Resident birthdate must be a past date.'}), 400
+        birth_dt = resident.date_of_birth
+    else:
+        return jsonify({'error': 'Birthdate is required and must be a past date.'}), 400
+
+    # Create ResidentAccount with an unusable random password until setup link is completed
+    pwd_hash = generate_unusable_password_hash()
     account = ResidentAccount(
         resident_id=resident.id,
         email=email,
@@ -915,8 +1094,6 @@ def manual_create_resident_account():
         if b_row:
             barangay_name = b_row.name
 
-    birth_dt = resident.date_of_birth or date(1990, 1, 1)
-
     # Create matching approved ResidentRegistrationRequest for complete recordkeeping
     reg_request = ResidentRegistrationRequest(
         first_name=resident.first_name,
@@ -931,7 +1108,7 @@ def manual_create_resident_account():
         status='approved',
         matched_resident_id=resident.id,
         reviewed_by=reviewer_id,
-        reviewed_at=philippines_now(),
+        reviewed_at=utc_now(),
     )
     db.session.add(reg_request)
 
@@ -947,13 +1124,14 @@ def manual_create_resident_account():
         db.session.rollback()
         return jsonify({'error': 'Database conflict: email or resident record already exists.'}), 409
 
-    send_email = data.get('send_email', True)
-    email_sent = False
-    if send_email:
-        email_sent = _send_decision_email(reg_request)
+    email_sent, message = send_account_setup_link(
+        account,
+        token_creator=create_password_setup_token,
+        email_sender=send_password_setup_email,
+    )
 
     return jsonify({
-        'message': f'Resident account for {full_nm} created successfully.',
+        'message': message,
         'account': account.to_dict(),
         'resident': resident.to_dict(),
         'registration': reg_request.to_dict(),

@@ -9,6 +9,7 @@ import {
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { BASE_URL } from "../../services/api";
+import { formatManilaDate, formatManilaTime, parseTimestamp } from "../../utils/dateTime";
 
 const VALIDATED_STATUS = "validated";
 
@@ -674,18 +675,11 @@ export function createReportPopup(report, options = {}) {
   const submittedAt =
     report?.submitted_at || report?.created_at || report?.validated_at;
   if (submittedAt) {
-    const date = new Date(submittedAt);
-    if (!Number.isNaN(date.getTime())) {
+    const date = parseTimestamp(submittedAt);
+    if (date) {
       const timeElem = document.createElement("div");
       timeElem.className = "map-report-time";
-      timeElem.textContent = `Reported ${date.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })} at ${date.toLocaleTimeString(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-      })}`;
+      timeElem.textContent = `Reported ${formatManilaDate(date)} at ${formatManilaTime(date)}`;
       body.appendChild(timeElem);
     }
   }
@@ -920,18 +914,11 @@ export function createRescuePopup(rescue, options = {}) {
 
   // Requested timestamp
   if (rescue?.created_at) {
-    const date = new Date(rescue.created_at);
-    if (!Number.isNaN(date.getTime())) {
+    const date = parseTimestamp(rescue.created_at);
+    if (date) {
       const timeElem = document.createElement("div");
       timeElem.className = "map-report-time";
-      timeElem.textContent = `Requested ${date.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })} at ${date.toLocaleTimeString(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-      })}`;
+      timeElem.textContent = `Requested ${formatManilaDate(date)} at ${formatManilaTime(date)}`;
       body.appendChild(timeElem);
     }
   }

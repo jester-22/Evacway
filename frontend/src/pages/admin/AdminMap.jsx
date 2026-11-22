@@ -5436,7 +5436,7 @@ export default function AdminMap() {
 
               <button
                 type="button"
-                className="admin-map-fab admin-map-fab--secondary"
+                className={`admin-map-fab admin-map-fab--danger${pendingHazardReports.length > 0 ? " has-alerts" : ""}`}
                 onClick={() => navigate(`${basePath}?tab=reports`)}
                 aria-label={`Hazard Reports${pendingHazardReports.length > 0 ? ` (${pendingHazardReports.length} pending review)` : ""}`}
               >

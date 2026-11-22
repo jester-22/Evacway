@@ -29,7 +29,9 @@ function offlinePrecachePlugin() {
         || file === 'manifest.webmanifest'
         || file === 'evacway-app.png'
         || file === 'evacway-logo-text.png'
+        || file === 'evacway-logo-text-dark.png'
         || file === 'lgu-logo.png'
+        || file === 'mdrrmo-logo.png'
         || file === 'sogod_boundary.geojson'
         || file.startsWith('assets/')
       ))

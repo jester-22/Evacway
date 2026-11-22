@@ -18,7 +18,8 @@ from models import (
     ResidentAccount,
     ResidentRegistrationRequest,
     SystemLog,
-    philippines_now,
+    utc_now,
+    to_utc_iso,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 from flask_jwt_extended import create_access_token, decode_token, get_jwt_identity
@@ -176,7 +177,7 @@ def _resolve_mfa_flow_token(token, expected_flow):
 
 
 def _pending_totp_secret(user):
-    now = philippines_now()
+    now = utc_now()
     secret = None
     if (
         user.totp_pending_secret_encrypted
@@ -235,7 +236,7 @@ def _begin_staff_second_factor(user):
 
 
 def _mfa_failure_or_limit(user=None):
-    if user and user.login_locked_until and user.login_locked_until > philippines_now():
+    if user and user.login_locked_until and user.login_locked_until > utc_now():
         return _generic_login_failure()
     if _login_rate_limited('staff', user.email if user else '', include_email=user is not None):
         return jsonify({"error": "Too many attempts. Please wait a moment and try again."}), 429
@@ -249,7 +250,7 @@ def _clear_login_failures(account):
 
 
 def _record_login_failure(account, login_type):
-    now = philippines_now()
+    now = utc_now()
     window = timedelta(minutes=int(current_app.config.get('LOGIN_FAILURE_WINDOW_MINUTES', 15)))
     lock_duration = timedelta(minutes=int(current_app.config.get('LOGIN_LOCK_MINUTES', 15)))
     max_failures = int(current_app.config.get('LOGIN_MAX_FAILED_ATTEMPTS', 5))
@@ -316,7 +317,7 @@ def _login(expected_type):
             func.lower(ResidentRegistrationRequest.email) == email,
             ResidentRegistrationRequest.status.in_(('pending', 'rejected')),
         ).order_by(ResidentRegistrationRequest.created_at.desc()).first()
-    now = philippines_now()
+    now = utc_now()
     if account and account.login_locked_until and account.login_locked_until > now:
         check_password_hash(account.password_hash, password)
         return _generic_login_failure()
@@ -382,7 +383,7 @@ def _login(expected_type):
                 ),
                 "role": "resident",
                 "is_active": True,
-                "last_login_at": resident_account.last_login_at.isoformat() if resident_account.last_login_at else None,
+                "last_login_at": to_utc_iso(resident_account.last_login_at),
             }
         else:
             if _staff_totp_required(user):
@@ -429,7 +430,7 @@ def _mfa_rate_and_lock_response(user):
 
 
 def _mfa_success(user, event):
-    now = philippines_now()
+    now = utc_now()
     _clear_login_failures(user)
     user.last_login_at = now
     db.session.add(SystemLog(user_id=user.id, action=event, timestamp=now))
@@ -452,7 +453,7 @@ def confirm_staff_totp_enrollment():
     blocked = _mfa_rate_and_lock_response(user)
     if blocked:
         return blocked
-    if not user.totp_pending_secret_encrypted or not user.totp_setup_expires_at or user.totp_setup_expires_at <= philippines_now():
+    if not user.totp_pending_secret_encrypted or not user.totp_setup_expires_at or user.totp_setup_expires_at <= utc_now():
         return _generic_login_failure()
     try:
         secret = _decrypt_totp_secret(user.totp_pending_secret_encrypted)
@@ -471,7 +472,7 @@ def confirm_staff_totp_enrollment():
     user.totp_last_used_step = step
     user.totp_backup_codes_hashes = hashes
     user.mfa_version = int(user.mfa_version or 0) + 1
-    now = philippines_now()
+    now = utc_now()
     _clear_login_failures(user)
     user.last_login_at = now
     db.session.add(SystemLog(user_id=user.id, action='Staff two-factor authentication enabled', timestamp=now))
@@ -528,7 +529,7 @@ def request_staff_totp_recovery():
     blocked = _mfa_rate_and_lock_response(user)
     if blocked:
         return blocked
-    now = philippines_now()
+    now = utc_now()
     AdminMfaRecoveryRequest.query.filter(
         AdminMfaRecoveryRequest.user_id == user.id,
         AdminMfaRecoveryRequest.status == 'pending',
@@ -554,7 +555,7 @@ def request_staff_totp_recovery():
 @auth_bp.route('/api/admin/mfa-recovery-requests', methods=['GET'])
 @role_required('admin')
 def list_admin_mfa_recovery_requests():
-    now = philippines_now()
+    now = utc_now()
     requests_pending = AdminMfaRecoveryRequest.query.filter(
         AdminMfaRecoveryRequest.status == 'pending',
         AdminMfaRecoveryRequest.expires_at > now,
@@ -568,7 +569,7 @@ def list_admin_mfa_recovery_requests():
                 'user_id': target.id,
                 'name': target.name,
                 'email': target.email,
-                'requested_at': row.requested_at.isoformat() if row.requested_at else None,
+                'requested_at': to_utc_iso(row.requested_at),
             })
     return jsonify({'requests': payload}), 200
 
@@ -578,7 +579,7 @@ def list_admin_mfa_recovery_requests():
 def approve_admin_mfa_recovery_request(request_id):
     approver_id = int(get_jwt_identity())
     recovery = AdminMfaRecoveryRequest.query.filter_by(id=request_id).with_for_update().first()
-    now = philippines_now()
+    now = utc_now()
     if not recovery or recovery.status != 'pending' or recovery.expires_at <= now or recovery.user_id == approver_id:
         return jsonify({'error': 'Recovery request is unavailable.'}), 404
     target = db.session.get(User, recovery.user_id)

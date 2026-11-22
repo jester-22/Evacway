@@ -47,6 +47,7 @@ function HazardReportModal({
   const [locating, setLocating] = useState(false);
   const [error, setError] = useState("");
   const [addressText, setAddressText] = useState("");
+  const [barangayText, setBarangayText] = useState("");
   const [suggestedRoad, setSuggestedRoad] = useState(initialSuggestedRoad);
   const [isRoadConfirmed, setIsRoadConfirmed] = useState(initialSuggestedRoad ? false : true);
 
@@ -95,6 +96,7 @@ function HazardReportModal({
   useEffect(() => {
     if (!location?.lat || !location?.lng) {
       setAddressText("");
+      setBarangayText("");
       return undefined;
     }
 
@@ -113,11 +115,22 @@ function HazardReportModal({
       .then((data) => {
         if (cancelled) return;
         const feature = data.features?.[0];
-        const name = feature?.properties?.name || feature?.properties?.place_formatted || "";
+        const properties = feature?.properties;
+        const context = properties?.context || {};
+        const name = properties?.name || properties?.place_formatted || "";
+        const resolvedBarangay =
+          context.neighborhood?.name ||
+          context.locality?.name ||
+          context.place?.name ||
+          "";
         setAddressText(name);
+        setBarangayText(resolvedBarangay);
       })
       .catch(() => {
-        if (!cancelled) setAddressText("");
+        if (!cancelled) {
+          setAddressText("");
+          setBarangayText("");
+        }
       });
 
     return () => {
@@ -286,6 +299,9 @@ function HazardReportModal({
     formData.append("report_type", reportType);
     formData.append("latitude", location.lat);
     formData.append("longitude", location.lng);
+    if (barangayText) {
+      formData.append("barangay_name", barangayText);
+    }
 
     photos.forEach((file) => {
       formData.append("photos", file);

@@ -81,8 +81,11 @@ class HazardReporterTests(unittest.TestCase):
                     'description TEXT NOT NULL, '
                     'photo_url VARCHAR(255) NOT NULL, '
                     'report_type VARCHAR(50), '
+                    'barangay_name VARCHAR(100), '
                     "status VARCHAR(20) DEFAULT 'pending', "
                     'response_notes TEXT, '
+                    'rejection_reason TEXT, '
+                    'duplicate_of INTEGER REFERENCES hazard_reports(id) ON DELETE SET NULL, '
                     'validated_by INTEGER REFERENCES users(id), '
                     'reported_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, '
                     'reported_by_resident_account_id INTEGER REFERENCES resident_accounts(id) ON DELETE SET NULL, '
@@ -287,6 +290,328 @@ class HazardReporterTests(unittest.TestCase):
         item = admin_list.get_json()[0]
         self.assertIsNone(item['reporter_username'])
         self.assertTrue(item['reporter_deleted'])
+
+    def test_status_transition_rules_and_terminal_resolved_state(self):
+        with patch('routes.hazard_reports.is_inside_sogod', return_value=True):
+            r = self._submit_report(token=self.resident_token, description='Flooded street')
+        self.assertEqual(r.status_code, 201)
+        report_id = r.get_json()['id']
+        headers = {'Authorization': f'Bearer {self.admin_token}'}
+
+        # Pending -> Resolved is NOT allowed directly
+        resp = self.client.patch(
+            f'/api/hazard-reports/{report_id}/validate',
+            json={'status': 'resolved'},
+            headers=headers,
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('Cannot change a pending incident to resolved', resp.get_json()['error'])
+
+        # Pending -> Validated IS allowed
+        with patch('routes.hazard_reports.close_nearby_roads', return_value=[]):
+            resp = self.client.patch(
+                f'/api/hazard-reports/{report_id}/validate',
+                json={'status': 'validated', 'response_notes': 'Confirmed on site'},
+                headers=headers,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()['status'], 'validated')
+
+        # Validated -> Rejected is NOT allowed
+        resp = self.client.patch(
+            f'/api/hazard-reports/{report_id}/validate',
+            json={'status': 'rejected', 'rejection_reason': 'Duplicate'},
+            headers=headers,
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('Cannot change a validated incident to rejected', resp.get_json()['error'])
+
+        # Validated -> Validated is NOT allowed
+        resp = self.client.patch(
+            f'/api/hazard-reports/{report_id}/validate',
+            json={'status': 'validated'},
+            headers=headers,
+        )
+        self.assertEqual(resp.status_code, 400)
+
+        # Validated -> Resolved IS allowed
+        with patch('routes.hazard_reports.reopen_roads_for_report', return_value=([], [])):
+            resp = self.client.patch(
+                f'/api/hazard-reports/{report_id}/validate',
+                json={'status': 'resolved'},
+                headers=headers,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()['status'], 'resolved')
+
+        # Nothing is allowed after Resolved
+        for target_status in ('validated', 'rejected', 'resolved'):
+            payload = {'status': target_status}
+            if target_status == 'rejected':
+                payload['rejection_reason'] = 'Too late'
+            resp = self.client.patch(
+                f'/api/hazard-reports/{report_id}/validate',
+                json=payload,
+                headers=headers,
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn('No further status changes are allowed after resolved', resp.get_json()['error'])
+
+        # Reopen-road endpoint also refuses resolved reports
+        reopen_resp = self.client.post(
+            f'/api/hazard-reports/{report_id}/reopen-road',
+            headers=headers,
+        )
+        self.assertEqual(reopen_resp.status_code, 400)
+
+    def test_reject_requires_reason_and_blocks_further_transitions(self):
+        with patch('routes.hazard_reports.is_inside_sogod', return_value=True):
+            r = self._submit_report(token=self.resident_token, description='Unverified photo')
+        self.assertEqual(r.status_code, 201)
+        report_id = r.get_json()['id']
+        headers = {'Authorization': f'Bearer {self.admin_token}'}
+
+        # Reject without reason -> 400
+        resp = self.client.patch(
+            f'/api/hazard-reports/{report_id}/validate',
+            json={'status': 'rejected'},
+            headers=headers,
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('reason is required', resp.get_json()['error'].lower())
+
+        # Reject with blank/whitespace reason -> 400
+        resp = self.client.patch(
+            f'/api/hazard-reports/{report_id}/validate',
+            json={'status': 'rejected', 'rejection_reason': '   '},
+            headers=headers,
+        )
+        self.assertEqual(resp.status_code, 400)
+
+        # Reject with valid reason -> 200 and persisted
+        with patch('routes.hazard_reports.reopen_roads_for_report', return_value=([], [])):
+            resp = self.client.patch(
+                f'/api/hazard-reports/{report_id}/validate',
+                json={'status': 'rejected', 'rejection_reason': 'Duplicate of report #12'},
+                headers=headers,
+            )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(data['status'], 'rejected')
+        self.assertEqual(data['rejection_reason'], 'Duplicate of report #12')
+
+        # Stored in DB and returned on GET /api/hazard-reports
+        row = HazardReport.query.get(report_id)
+        self.assertEqual(row.rejection_reason, 'Duplicate of report #12')
+        list_resp = self.client.get('/api/hazard-reports', headers=headers)
+        self.assertEqual(list_resp.status_code, 200)
+        self.assertEqual(list_resp.get_json()[0]['rejection_reason'], 'Duplicate of report #12')
+
+        # Nothing is allowed after Rejected
+        for target_status in ('validated', 'resolved', 'rejected'):
+            payload = {'status': target_status}
+            if target_status == 'rejected':
+                payload['rejection_reason'] = 'Again'
+            resp = self.client.patch(
+                f'/api/hazard-reports/{report_id}/validate',
+                json=payload,
+                headers=headers,
+            )
+            self.assertEqual(resp.status_code, 400)
+            self.assertIn('No further status changes are allowed after rejected', resp.get_json()['error'])
+
+    def test_validated_road_closure_needs_recheck_flag(self):
+        from datetime import datetime, timedelta
+        from routes.hazard_reports import ROAD_CLOSURE_RECHECK_HOURS
+
+        headers = {'Authorization': f'Bearer {self.admin_token}'}
+        with patch('routes.hazard_reports.is_inside_sogod', return_value=True):
+            r_closed = self._submit_report(token=self.resident_token, description='Landslide blocking main highway')
+            r_open = self._submit_report(token=self.resident_token, description='Minor puddle off road')
+        self.assertEqual(r_closed.status_code, 201)
+        self.assertEqual(r_open.status_code, 201)
+        closed_id = r_closed.get_json()['id']
+        open_id = r_open.get_json()['id']
+
+        with patch('routes.hazard_reports.close_nearby_roads', return_value=['Main Highway']):
+            self.assertEqual(
+                self.client.patch(
+                    f'/api/hazard-reports/{closed_id}/validate',
+                    json={'status': 'validated'},
+                    headers=headers,
+                ).status_code,
+                200,
+            )
+        with patch('routes.hazard_reports.close_nearby_roads', return_value=[]):
+            self.assertEqual(
+                self.client.patch(
+                    f'/api/hazard-reports/{open_id}/validate',
+                    json={'status': 'validated'},
+                    headers=headers,
+                ).status_code,
+                200,
+            )
+
+        # Record a closed road segment tied to closed_id
+        with db.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO road_segments (road_name, road_type, is_closed, closed_by_report_id) "
+                    "VALUES ('Main Highway', 'primary', 1, :rid)"
+                ),
+                {'rid': closed_id},
+            )
+
+        # Freshly validated (< 24h) -> needs_recheck is False
+        list_resp = self.client.get('/api/hazard-reports', headers=headers)
+        by_id = {item['id']: item for item in list_resp.get_json()}
+        self.assertTrue(by_id[closed_id]['blocks_road'])
+        self.assertFalse(by_id[closed_id]['needs_recheck'])
+        self.assertEqual(by_id[closed_id]['recheck_threshold_hours'], ROAD_CLOSURE_RECHECK_HOURS)
+        self.assertFalse(by_id[open_id]['needs_recheck'])
+
+        # Backdate both reports past ROAD_CLOSURE_RECHECK_HOURS
+        from models import utc_now
+        old_time = utc_now() - timedelta(hours=ROAD_CLOSURE_RECHECK_HOURS + 1)
+        db.session.get(HazardReport, closed_id).validated_at = old_time
+        db.session.get(HazardReport, open_id).validated_at = old_time
+        db.session.commit()
+
+        list_resp = self.client.get('/api/hazard-reports', headers=headers)
+        by_id = {item['id']: item for item in list_resp.get_json()}
+        self.assertTrue(by_id[closed_id]['needs_recheck'])
+        # Validated report that does NOT close any road stays False
+        self.assertFalse(by_id[open_id]['needs_recheck'])
+
+        # Resolving clears needs_recheck
+        with patch('routes.hazard_reports.reopen_roads_for_report', return_value=(['Main Highway'], [])):
+            res_resp = self.client.patch(
+                f'/api/hazard-reports/{closed_id}/validate',
+                json={'status': 'resolved'},
+                headers=headers,
+            )
+        self.assertEqual(res_resp.status_code, 200)
+        self.assertFalse(res_resp.get_json()['needs_recheck'])
+
+    def test_duplicate_of_link_validation_and_persistence(self):
+        headers = {'Authorization': f'Bearer {self.admin_token}'}
+        with patch('routes.hazard_reports.is_inside_sogod', return_value=True):
+            r_orig = self._submit_report(token=self.resident_token, description='Original landslide')
+            r_dup = self._submit_report(token=self.resident_token, description='Duplicate landslide report')
+        self.assertEqual(r_orig.status_code, 201)
+        self.assertEqual(r_dup.status_code, 201)
+        orig_id = r_orig.get_json()['id']
+        dup_id = r_dup.get_json()['id']
+
+        # Self-link is rejected
+        resp = self.client.patch(
+            f'/api/hazard-reports/{dup_id}/duplicate',
+            json={'duplicate_of': dup_id},
+            headers=headers,
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('duplicate of itself', resp.get_json()['error'].lower())
+
+        # Non-existent target is rejected
+        resp = self.client.patch(
+            f'/api/hazard-reports/{dup_id}/duplicate',
+            json={'duplicate_of': 999999},
+            headers=headers,
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('not found', resp.get_json()['error'].lower())
+
+        # Rejecting with duplicate_of links the report cleanly
+        with patch('routes.hazard_reports.reopen_roads_for_report', return_value=([], [])):
+            resp = self.client.patch(
+                f'/api/hazard-reports/{dup_id}/validate',
+                json={
+                    'status': 'rejected',
+                    'rejection_reason': f'Duplicate of #{orig_id}',
+                    'duplicate_of': orig_id,
+                },
+                headers=headers,
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()['duplicate_of'], orig_id)
+
+        # Persisted in DB and returned on GET /api/hazard-reports
+        self.assertEqual(db.session.get(HazardReport, dup_id).duplicate_of, orig_id)
+        list_resp = self.client.get('/api/hazard-reports', headers=headers)
+        by_id = {item['id']: item for item in list_resp.get_json()}
+        self.assertEqual(by_id[dup_id]['duplicate_of'], orig_id)
+
+        # Clearing duplicate_of via /duplicate works
+        clear_resp = self.client.patch(
+            f'/api/hazard-reports/{dup_id}/duplicate',
+            json={'duplicate_of': None},
+            headers=headers,
+        )
+        self.assertEqual(clear_resp.status_code, 200)
+        self.assertIsNone(clear_resp.get_json()['duplicate_of'])
+        self.assertIsNone(db.session.get(HazardReport, dup_id).duplicate_of)
+
+    def test_timestamps_stored_utc_and_returned_iso_z(self):
+        from datetime import datetime
+        headers = {'Authorization': f'Bearer {self.admin_token}'}
+        with patch('routes.hazard_reports.is_inside_sogod', return_value=True):
+            r = self._submit_report(token=self.resident_token, description='UTC timestamp check')
+        self.assertEqual(r.status_code, 201)
+        created = r.get_json()
+        self.assertTrue(created['submitted_at'].endswith('Z'), created['submitted_at'])
+
+        with patch('routes.hazard_reports.close_nearby_roads', return_value=[]):
+            val = self.client.patch(
+                f"/api/hazard-reports/{created['id']}/validate",
+                json={'status': 'validated'},
+                headers=headers,
+            )
+        self.assertEqual(val.status_code, 200)
+        validated = val.get_json()
+        self.assertTrue(validated['submitted_at'].endswith('Z'), validated['submitted_at'])
+        self.assertTrue(validated['validated_at'].endswith('Z'), validated['validated_at'])
+
+        submitted_dt = datetime.fromisoformat(validated['submitted_at'].replace('Z', '+00:00'))
+        validated_dt = datetime.fromisoformat(validated['validated_at'].replace('Z', '+00:00'))
+        self.assertGreaterEqual(validated_dt, submitted_dt)
+        self.assertLess((validated_dt - submitted_dt).total_seconds(), 60)
+
+    def test_barangay_name_stored_and_returned_as_single_source_of_truth(self):
+        headers = {'Authorization': f'Bearer {self.admin_token}'}
+        data = {
+            'description': 'Road crack near Rizal',
+            'report_type': 'road blockage',
+            'latitude': '10.386',
+            'longitude': '124.98',
+            'barangay_name': '  Rizal  ',
+            'photos': (io.BytesIO(b'fake-jpeg-bytes'), 'hazard.jpg'),
+        }
+        with (
+            patch('routes.hazard_reports.is_inside_sogod', return_value=True),
+            patch('routes.hazard_reports.snap_point_to_road', return_value=((10.386, 124.98), None, None, None)),
+            patch('routes.hazard_reports.create_staff_notifications', return_value=[]),
+            patch('routes.hazard_reports.send_staff_push_notifications'),
+        ):
+            r = self.client.post(
+                '/api/hazard-reports',
+                data=data,
+                content_type='multipart/form-data',
+                headers={'Authorization': f'Bearer {self.resident_token}'},
+            )
+        self.assertEqual(r.status_code, 201)
+        created = r.get_json()
+        self.assertEqual(created['barangay_name'], 'Rizal')
+
+        list_resp = self.client.get('/api/hazard-reports', headers=headers)
+        self.assertEqual(list_resp.status_code, 200)
+        listed = next(item for item in list_resp.get_json() if item['id'] == created['id'])
+        self.assertEqual(listed['barangay_name'], 'Rizal')
+
+        # Missing barangay_name returns None (never hardcoded "Barangay Poblacion")
+        with patch('routes.hazard_reports.is_inside_sogod', return_value=True):
+            r2 = self._submit_report(token=self.resident_token, description='No barangay supplied')
+        self.assertEqual(r2.status_code, 201)
+        self.assertIsNone(r2.get_json()['barangay_name'])
 
 
 if __name__ == '__main__':

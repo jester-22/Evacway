@@ -203,7 +203,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* PER-CARD SKELETON & INLINE STATES */
+/* PER-CARD SKELETON & INLINE STATES (matches Evacuation Centers .ds-skeleton shimmer) */
 .dashboard-arrival-skeleton {
   display: flex;
   flex-direction: column;
@@ -213,8 +213,12 @@
 .dashboard-skel-line,
 .dashboard-skel-bar {
   border-radius: var(--radius-sm);
-  background-color: var(--neutral-soft);
-  animation: dashboard-pulse 1.4s ease-in-out infinite;
+}
+
+.dashboard-skel-legend-pill {
+  width: 76px;
+  height: 24px;
+  border-radius: var(--radius-pill);
 }
 
 .dashboard-skel-line {
@@ -309,8 +313,6 @@
 .dashboard-stat-skeleton__footer {
   display: block;
   border-radius: var(--radius-sm);
-  background-color: var(--neutral-soft);
-  animation: dashboard-pulse 1.4s ease-in-out infinite;
 }
 
 .dashboard-stat-skeleton__icon {
@@ -321,17 +323,20 @@
 
 .dashboard-stat-skeleton__label {
   width: 96px;
-  height: 14px;
+  height: 12px;
+  border-radius: var(--radius-xs);
 }
 
 .dashboard-stat-skeleton__value {
-  width: 64px;
-  height: 30px;
+  width: 52px;
+  height: 28px;
 }
 
 .dashboard-stat-skeleton__footer {
-  width: 152px;
-  height: 13px;
+  width: 128px;
+  max-width: 100%;
+  height: 12px;
+  border-radius: var(--radius-xs);
 }
 
 /* =========================================================

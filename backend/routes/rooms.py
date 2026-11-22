@@ -14,7 +14,8 @@ from models import (
     EvacuationAssignment,
     Family,
     Resident,
-    SystemLog
+    SystemLog,
+    to_utc_iso,
 )
 
 from flask_jwt_extended import get_jwt_identity
@@ -44,8 +45,8 @@ def _positive_room_limit(data, key, default, label, legacy_key=None, minimum=1):
     return parsed
 
 
-def _room_capacity_payload(room):
-    usage = room.capacity_usage()
+def _room_capacity_payload(room, usage=None):
+    usage = room.capacity_usage() if usage is None else usage
     return {
         'family_slots': int(room.family_slots or 0),
         'people_spaces': int(room.people_spaces or 0),
@@ -75,7 +76,9 @@ def get_rooms(center_id):
     resident_id = caller.get('resident_id') if caller and caller.get('role') == 'resident' else None
     include_inactive = is_staff and request.args.get('include_inactive') == 'true'
 
-    query = EvacuationCenterRoom.query.filter_by(
+    query = EvacuationCenterRoom.query.options(
+        joinedload(EvacuationCenterRoom.building)
+    ).filter_by(
         evacuation_center_id=center_id
     )
 
@@ -86,23 +89,62 @@ def get_rooms(center_id):
         EvacuationCenterRoom.room_number.asc()
     ).all()
 
+    room_ids = [room.id for room in rooms]
+    usage_by_room = EvacuationCenterRoom.bulk_capacity_usage(rooms)
+
+    if not is_staff:
+        my_room_ids = set()
+        if resident_id and room_ids:
+            my_room_ids = {
+                room_id for (room_id,) in db.session.query(EvacuationAssignment.room_id)
+                .filter(
+                    EvacuationAssignment.resident_id == resident_id,
+                    EvacuationAssignment.room_id.in_(room_ids),
+                )
+                .all()
+            }
+        result = [
+            public_room_payload(
+                room,
+                room.id in my_room_ids,
+                usage=usage_by_room.get(room.id),
+                building=room.building,
+            )
+            for room in rooms
+        ]
+        return jsonify(result)
+
+    occupied_by_room = (
+        dict(
+            db.session.query(
+                EvacuationAssignment.room_id,
+                func.count(EvacuationAssignment.id),
+            )
+            .filter(
+                EvacuationAssignment.room_id.in_(room_ids),
+                EvacuationAssignment.checked_in_at.isnot(None),
+            )
+            .group_by(EvacuationAssignment.room_id)
+            .all()
+        )
+        if room_ids
+        else {}
+    )
+
     result = []
 
     for room in rooms:
-        usage = room.capacity_usage()
+        usage = usage_by_room.get(room.id) or room.capacity_usage()
         assigned = usage['used_spaces']
-        occupied = EvacuationAssignment.query.filter(
-            EvacuationAssignment.room_id == room.id,
-            EvacuationAssignment.checked_in_at.isnot(None)
-        ).count()
+        occupied = int(occupied_by_room.get(room.id, 0) or 0)
 
-        room_data = room.to_dict()
+        room_data = room.to_dict(usage=usage)
         room_data["occupied"] = occupied
         room_data["assigned"] = assigned
         # Capacity is consumed by assigned residents, whether or not they have
         # checked in yet. Keep `occupied` as arrivals and expose remaining
         # assignment capacity separately.
-        room_data.update(_room_capacity_payload(room))
+        room_data.update(_room_capacity_payload(room, usage=usage))
         room_data["available"] = usage['available_spaces']
         room_data["unassigned"] = usage['available_spaces']
         is_assigned = assigned > 0
@@ -114,22 +156,6 @@ def get_rooms(center_id):
         room_data["longitude"] = None
 
         result.append(room_data)
-
-    if not is_staff:
-        my_room_ids = set()
-        if resident_id:
-            my_room_ids = {
-                room_id for (room_id,) in db.session.query(EvacuationAssignment.room_id)
-                .filter(
-                    EvacuationAssignment.resident_id == resident_id,
-                    EvacuationAssignment.room_id.in_([room.id for room in rooms]),
-                )
-                .all()
-            } if rooms else set()
-        result = [
-            public_room_payload(room, room.id in my_room_ids)
-            for room in rooms
-        ]
 
     return jsonify(result)
 
@@ -790,7 +816,7 @@ def get_room_families(room_id):
             "special_needs": member_flags,
             "remarks": resident.remarks,
             "is_checked_in": assignment.checked_in_at is not None,
-            "checked_in_at": assignment.checked_in_at.isoformat() if assignment.checked_in_at else None,
+            "checked_in_at": to_utc_iso(assignment.checked_in_at),
             "checkin_status": "Checked in" if assignment.checked_in_at is not None else "Not yet arrived",
         })
 

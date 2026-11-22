@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { usePublicOperationAlert, usePublicStatusSummary } from "../hooks/useEvacuationQueries";
 import { getLandingText, landingLocaleOptions } from "../locales/landing";
 import { emergencyContacts } from "../config/emergencyContacts";
+import { formatManilaTime } from "../utils/dateTime";
 import "./LandingPage.css";
 import "./LandingPage.motion.css";
 import { LoginDialog, ResidentSignUpDialog } from "../components/AuthModals/AuthModals"; // must come after LandingPage.css
@@ -13,12 +14,16 @@ const mdrrmoHotlines = emergencyContacts.hotlines.filter((item) => item.label ==
 
 function Logo() {
   return (
-    <Link to="/" className="ew-logo" aria-label="EvacWay - Municipality of Sogod">
+    <Link
+      to="/"
+      className="ew-logo"
+      aria-label="EvacWay - Municipal Disaster Risk Reduction and Management Office"
+    >
       <img src="/evacway-logo-text.png" alt="EvacWay" className="ew-logo-image" />
       <span className="ew-brand-divider" aria-hidden="true" />
       <div className="ew-lgu-partner">
-        <img src="/lgu-logo.png" alt="LGU Sogod Seal" className="ew-lgu-logo" />
-        <span className="ew-lgu-name">Municipality of Sogod</span>
+        <img src="/mdrrmo-logo.png" alt="MDRRMO Sogod Logo" className="ew-lgu-logo ew-mdrrmo-logo" />
+        <span className="ew-lgu-name">Municipal Disaster Risk Reduction and Management Office</span>
       </div>
     </Link>
   );
@@ -556,10 +561,12 @@ function LegendSampleMap({ activeKey }) {
         </g>
 
         {/* Evacuation center */}
-        <g className={symClass("center")} transform="translate(218 42)">
-          <circle r="18" fill="rgba(16, 185, 129, 0.22)" />
-          <circle r="12" className="m-center" />
-          <path className="m-house" d="M-4.5 1L0 -3.5L4.5 1M-3 0V4H3V0" />
+        <g transform="translate(218 42)">
+          <g className={symClass("center")}>
+            <circle r="18" fill="rgba(16, 185, 129, 0.22)" />
+            <circle r="12" className="m-center" />
+            <path className="m-house" d="M-4.5 1L0 -3.5L4.5 1M-3 0V4H3V0" />
+          </g>
         </g>
       </svg>
     </div>
@@ -623,12 +630,10 @@ function LiveStatusStrip({ prefersReducedMotion, t }) {
   );
   const isUnavailable = statusQuery.isError || (!isLoading && !countsAreValid);
   const lastUpdated = statusQuery.data?.last_updated;
-  const lastUpdatedDate = lastUpdated ? new Date(lastUpdated) : null;
+  const lastUpdatedTime = lastUpdated ? formatManilaTime(lastUpdated) : "";
   const lastUpdatedLabel = isLoading
     ? t("status.loading")
-    : lastUpdatedDate && !Number.isNaN(lastUpdatedDate.getTime())
-      ? lastUpdatedDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-      : t("status.unavailable");
+    : lastUpdatedTime || t("status.unavailable");
 
   const shouldAnimate = visible && !prefersReducedMotion;
 
@@ -990,8 +995,8 @@ export default function LandingPage() {
         <section className="ew-hero" aria-labelledby="ew-hero-title">
           <div className="ew-hero-copy">
             <div className="ew-lgu-hero-pill">
-              <img src="/lgu-logo.png" alt="Municipality of Sogod Seal" className="ew-lgu-hero-logo" />
-              <span>Municipality of Sogod, Southern Leyte</span>
+              <img src="/mdrrmo-logo.png" alt="MDRRMO Sogod Logo" className="ew-lgu-hero-logo ew-mdrrmo-logo" />
+              <span>Municipal Disaster Risk Reduction and Management Office</span>
             </div>
             <h1 id="ew-hero-title">{t("hero.title")}</h1>
             <svg className="ew-hero-rule" width="76" height="10" viewBox="0 0 76 10" aria-hidden="true">
@@ -1118,14 +1123,24 @@ export default function LandingPage() {
           <div className="ew-footer-brand-col">
             <div className="ew-footer-logos">
               <Link to="/" className="ew-logo" aria-label="EvacWay home">
-                <img src="/evacway-logo-text.png" alt="EvacWay" className="ew-logo-image" />
+                <img src="/evacway-logo-text-dark.png" alt="EvacWay" className="ew-logo-image" />
               </Link>
               <span className="ew-footer-divider" aria-hidden="true" />
-              <div className="ew-footer-lgu">
-                <img src="/lgu-logo.png" alt="Municipality of Sogod Seal" className="ew-footer-lgu-logo" />
-                <div className="ew-footer-lgu-info">
-                  <span className="ew-footer-lgu-title">Municipality of Sogod</span>
-                  <span className="ew-footer-lgu-sub">Province of Southern Leyte</span>
+              <div className="ew-footer-partners">
+                <div className="ew-footer-lgu">
+                  <img src="/lgu-logo.png" alt="Municipality of Sogod Seal" className="ew-footer-lgu-logo" />
+                  <div className="ew-footer-lgu-info">
+                    <span className="ew-footer-lgu-title">Municipality of Sogod</span>
+                    <span className="ew-footer-lgu-sub">Province of Southern Leyte</span>
+                  </div>
+                </div>
+                <span className="ew-footer-divider ew-footer-partner-divider" aria-hidden="true" />
+                <div className="ew-footer-lgu">
+                  <img src="/mdrrmo-logo.png" alt="MDRRMO Sogod Logo" className="ew-footer-lgu-logo ew-mdrrmo-logo-footer" />
+                  <div className="ew-footer-lgu-info">
+                    <span className="ew-footer-lgu-title">MDRRMO Sogod</span>
+                    <span className="ew-footer-lgu-sub">Municipal Disaster Risk Reduction &amp; Management Office</span>
+                  </div>
                 </div>
               </div>
             </div>

@@ -4,7 +4,9 @@ import secrets
 
 from flask import current_app
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from werkzeug.security import generate_password_hash
 from models import ResidentAccount
+from services.mailer import send_password_setup_email
 
 
 PASSWORD_SETUP_SALT = "evacway-password-setup"
@@ -54,3 +56,31 @@ def read_password_setup_token(token):
         return None, "This password link is invalid. Request a new one."
 
     return payload, None
+
+
+def generate_unusable_password_hash():
+    """Generate a random unguessable password hash until the user completes setup."""
+    return generate_password_hash(secrets.token_urlsafe(48))
+
+
+def send_account_setup_link(
+    user_or_account,
+    token_creator=create_password_setup_token,
+    email_sender=send_password_setup_email,
+):
+    """Send a secure password-setup link for a newly created staff or resident account."""
+    email = user_or_account.email
+    email_sent = False
+    try:
+        token = token_creator(user_or_account)
+        email_sender(user_or_account, token, purpose="setup")
+        email_sent = True
+    except Exception:
+        current_app.logger.exception("Could not send account setup email to %s", email)
+
+    message = (
+        f"Account created. A password setup link was sent to {email}."
+        if email_sent
+        else "Account created, but the setup email could not be sent. Check SMTP settings and use Reset password to retry."
+    )
+    return email_sent, message

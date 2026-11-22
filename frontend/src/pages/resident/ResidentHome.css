@@ -4182,11 +4182,25 @@
   opacity: 0.94;
 }
 
+@media (max-width: 768px) {
+  .nav-blocked-road-warning {
+    top: calc(var(--top-h, 52px) + 74px);
+    left: 10px;
+    right: auto;
+    transform: none;
+    width: min(360px, calc(100% - 86px));
+    max-width: 360px;
+  }
+}
+
 @media (max-width: 600px) {
   .nav-blocked-road-warning {
-    top: calc(var(--top-h, 52px) + 72px);
-    width: calc(100vw - 16px);
-    max-width: none;
+    top: calc(var(--top-h, 52px) + 74px);
+    left: 10px;
+    right: auto;
+    transform: none;
+    width: min(320px, calc(100% - 86px));
+    max-width: 320px;
   }
 }
 
@@ -4914,14 +4928,24 @@
     white-space: normal;
   }
 
-  .nav-active-top-bar {
-    top: calc(58px + env(safe-area-inset-top, 0px));
-    width: calc(100% - 24px);
-    max-width: none;
+  .nav-active-top-bar,
+  .nav-active-top-bar.route-nav-compact {
+    top: calc(var(--top-h, 52px) + 10px);
+    left: 10px;
+    right: auto;
+    transform: none;
+    width: min(360px, calc(100% - 86px));
+    max-width: 360px;
     height: auto;
-    min-height: 60px;
+    min-height: 56px;
     max-height: none;
     padding: 8px 10px;
+  }
+
+  .nav-active-top-bar.route-nav-compact .nav-bar-content {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
   }
 
   .nav-bar-instruction,
@@ -4934,18 +4958,18 @@
   /* Leave the right-hand controls and bottom actions unobstructed. */
   .route-preview-card.mobile-top-card {
     position: absolute;
-    top: calc(var(--top-h, 52px) + 12px);
+    top: calc(var(--top-h, 52px) + 10px);
     bottom: auto;
-    left: 12px;
+    left: 10px;
     right: auto;
-    width: calc(100% - 72px);
-    max-width: none;
+    width: min(320px, calc(100% - 86px));
+    max-width: 320px;
     transform: none;
     border-radius: 14px;
     max-height: calc(100dvh - var(--top-h, 52px) - var(--dock-h, 60px) - 36px);
     box-shadow: var(--shadow-xs);
     z-index: var(--z-bottom-sheet, 600);
-    padding: 12px;
+    padding: 10px;
     box-sizing: border-box;
     overflow-y: auto;
   }
@@ -6396,19 +6420,31 @@
 }
 
 @media (max-width: 600px) {
-  .route-preview-card.mobile-bottom-sheet {
-    top: auto;
-    bottom: calc(var(--dock-h, 60px) + env(safe-area-inset-bottom, 0px) + 8px);
-    left: 8px;
-    right: 8px;
-    width: auto;
-    max-width: none;
+  .route-preview-card.mobile-top-card {
+    top: calc(var(--top-h, 52px) + 8px);
+    bottom: auto;
+    left: 10px;
+    right: auto;
+    width: min(320px, calc(100% - 86px));
+    max-width: 320px;
     transform: none;
-    max-height: min(70dvh, calc(100dvh - var(--top-h, 52px) - var(--dock-h, 60px) - 20px));
-    padding: 6px 10px;
-    border-radius: 16px;
-    gap: 1px;
-    overflow: hidden;
+    max-height: min(65dvh, calc(100dvh - var(--top-h, 52px) - var(--dock-h, 60px) - 20px));
+    padding: 8px 10px;
+    border-radius: 14px;
+    gap: 3px;
+    overflow-y: auto;
+  }
+
+  .route-preview-card.mobile-top-card .route-safety-action {
+    min-height: 36px;
+    padding: 0 8px;
+    font-size: 11.5px;
+  }
+
+  .route-preview-card.mobile-top-card .route-preview-start-btn {
+    height: 42px;
+    min-height: 42px;
+    font-size: 13px;
   }
 
   .route-card-compact .route-preview-title {
@@ -6424,8 +6460,8 @@
     font-size: 10px;
   }
 
-  .route-preview-card.mobile-bottom-sheet.is-expanded {
-    max-height: min(70dvh, calc(100dvh - var(--top-h, 52px) - var(--dock-h, 60px) - 20px));
+  .route-preview-card.mobile-top-card.is-expanded {
+    max-height: min(68dvh, calc(100dvh - var(--top-h, 52px) - var(--dock-h, 60px) - 20px));
   }
 
   .route-card-compact.is-expanded .route-preview-details {
@@ -6434,27 +6470,35 @@
 
   .route-nav-compact {
     top: calc(var(--top-h, 52px) + 8px);
-    width: calc(100vw - 16px);
-    max-width: none;
-    height: 56px;
-    max-height: 56px;
+    left: 10px;
+    right: auto;
+    transform: none;
+    width: min(320px, calc(100% - 86px));
+    max-width: 320px;
+    height: auto;
+    min-height: 54px;
+    max-height: none;
     gap: 8px;
+    padding: 7px 8px 7px 10px;
   }
 
   .route-nav-compact .nav-bar-content {
-    gap: 6px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
   }
 
   .route-nav-compact .nav-bar-instruction {
-    font-size: 12px;
+    font-size: 12.5px;
   }
 
   .route-nav-compact .nav-bar-subline {
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .route-nav-compact .nav-bar-stop-btn {
-    height: 44px;
+    height: 38px;
+    min-height: 38px;
     padding: 0 10px;
   }
 }
@@ -6653,10 +6697,10 @@
 
   .resident-home .bottom-actions-container,
   .resident-home .bottom-actions-container.mobile {
-    left: auto;
-    right: calc(var(--space-2) + env(safe-area-inset-right, 0px));
-    gap: var(--space-1);
-    transform: none;
+    left: 50%;
+    right: auto;
+    gap: var(--space-2);
+    transform: translateX(-50%);
   }
 }
 

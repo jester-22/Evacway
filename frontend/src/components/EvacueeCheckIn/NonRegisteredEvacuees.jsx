@@ -4,12 +4,13 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faXmark, faSpinner } from '@fortawesome/free-solid-svg-icons';
 import { api } from '../../services/api';
 import { formatFloorLabel, formatRoomLabel } from '../../utils/formatRoomLabel';
+import { formatManilaDateTime, getManilaDateKey } from '../../utils/dateTime';
 import './NonRegisteredEvacuees.css';
 
 const emptyPerson = () => ({ first_name: '', middle_name: '', last_name: '', sex: '', age_years: '',
   birthdate: '', contact_number: '', address: '', is_pwd: false, is_pregnant: false, is_lactating: false,
   is_solo_parent: false, needs_assistance: false, needs_medical: false, notes: '' });
-const formatTime = (value) => value ? new Date(value).toLocaleString() : '—';
+const formatTime = (value) => (value ? formatManilaDateTime(value, {}, '—') : '—');
 const ageFromBirthdate = (value) => {
   if (!value) return '';
   const [year, month, day] = value.split('-').map(Number);
@@ -54,7 +55,7 @@ function PersonFields({ person, index, update, remove, operationId, fields, pref
     return <label className="nre-field" htmlFor={id} key={name}>
       <span>{label}{required ? ' *' : ''}</span>
       <input id={id} type={type} value={person[name] ?? ''} required={required}
-        min={type === 'number' ? 0 : undefined} max={type === 'number' ? 120 : type === 'date' ? new Date().toLocaleDateString('en-CA') : undefined}
+        min={type === 'number' ? 0 : undefined} max={type === 'number' ? 120 : type === 'date' ? getManilaDateKey(new Date()) : undefined}
         step={type === 'number' ? 1 : undefined} maxLength={name.includes('name') ? 60 : type === 'text' ? 200 : undefined}
         autoComplete="off" aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
         onChange={(event) => update(name, event.target.value)} />
@@ -89,7 +90,7 @@ function PersonFields({ person, index, update, remove, operationId, fields, pref
       </label>
       <>
         <label className="nre-field" htmlFor={`nre-birthdate-${index}`}><span>Birthdate *</span>
-          <input id={`nre-birthdate-${index}`} type="date" value={person.birthdate || ''} max={new Date().toLocaleDateString('en-CA')}
+          <input id={`nre-birthdate-${index}`} type="date" value={person.birthdate || ''} max={getManilaDateKey(new Date())}
             required aria-invalid={Boolean(fields[`${prefix}birthdate`])}
             onChange={(event) => { update('birthdate', event.target.value); update('age_years', ageFromBirthdate(event.target.value)); }} />
           {fields[`${prefix}birthdate`] && <span className="nre-field-error">{fields[`${prefix}birthdate`]}</span>}

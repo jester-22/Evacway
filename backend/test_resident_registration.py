@@ -14,7 +14,9 @@ from models import (
     Family,
     Resident,
     ResidentRegistrationRequest,
+    RegistrationLinkOverrideLog,
     ResidentAccount,
+    ResidentLookupLog,
     RosterYear,
     EvacuationAssignment,
     Amenity,
@@ -81,7 +83,9 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             EvacuationCenterRoom.__table__,
             Resident.__table__,
             ResidentAccount.__table__,
+            ResidentLookupLog.__table__,
             ResidentRegistrationRequest.__table__,
+            RegistrationLinkOverrideLog.__table__,
             StaffNotification.__table__,
             SystemLog.__table__,
         ])
@@ -107,6 +111,8 @@ class ResidentRegistrationApiTests(unittest.TestCase):
 
     def setUp(self):
         db.session.remove()
+        RegistrationLinkOverrideLog.query.delete(synchronize_session=False)
+        ResidentLookupLog.query.delete(synchronize_session=False)
         ResidentRegistrationRequest.query.delete(synchronize_session=False)
         SystemLog.query.delete(synchronize_session=False)
         ResidentAccount.query.delete(synchronize_session=False)
@@ -1282,6 +1288,366 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             'password': 'NewPassword123!',
         })
         self.assertEqual(login_res.status_code, 200)
+
+    def test_birthdate_must_be_past_date_across_registration_and_roster(self):
+        from models import philippines_now
+        today_iso = philippines_now().date().isoformat()
+
+        # 1. Public registration rejects today's date
+        today_res = self._submit(birthdate=today_iso)
+        self.assertEqual(today_res.status_code, 400)
+        self.assertIn('past date', today_res.get_json()['error'].lower())
+
+        # 2. Staff edit registration rejects today's date
+        ok_submit = self._submit(birthdate='1990-04-12')
+        self.assertEqual(ok_submit.status_code, 201)
+        req_id = ok_submit.get_json()['registration']['id']
+        patch_res = self.client.patch(
+            f'/api/resident-registrations/{req_id}',
+            headers=self._staff_headers(),
+            json={'birthdate': today_iso},
+        )
+        self.assertEqual(patch_res.status_code, 400)
+        self.assertIn('past date', patch_res.get_json()['error'].lower())
+
+        # 3. Manual create rejects missing or today birthdate for roster resident
+        resident_today = self._create_roster_resident(
+            first_name='Today',
+            last_name='Tester',
+            date_of_birth=philippines_now().date(),
+        )
+        manual_today = self.client.post(
+            '/api/resident-registrations/manual-create',
+            headers=self._staff_headers(),
+            json={
+                'resident_id': resident_today.id,
+                'email': 'manual.today@example.com',
+                'password': 'Password123',
+                'send_email': False,
+            },
+        )
+        self.assertEqual(manual_today.status_code, 400)
+
+        # 4. Roster family member add/update rejects today's date
+        family_id = resident_today.family_id
+        add_member = self.client.post(
+            f'/api/families/{family_id}/members',
+            headers=self._staff_headers(),
+            json={
+                'first_name': 'Baby',
+                'last_name': 'Tester',
+                'date_of_birth': today_iso,
+            },
+        )
+        self.assertEqual(add_member.status_code, 400)
+        self.assertIn('past date', add_member.get_json()['error'].lower())
+
+    def test_approval_blocks_link_unless_name_and_barangay_match(self):
+        # Same barangay, different name -> blocked
+        wrong_name = self._create_roster_resident(
+            first_name='Pedro',
+            middle_name='Lopez',
+            last_name='Garcia',
+            barangay='San Jose',
+        )
+        # Same name, different barangay -> blocked
+        wrong_barangay = self._create_roster_resident(
+            first_name='Jose',
+            middle_name='Manuel',
+            last_name='Dela Cruz',
+            barangay='Poblacion',
+        )
+        # Same name and barangay, different birthdate/address/contact -> allowed
+        name_and_brgy_match = self._create_roster_resident(
+            first_name='Jose',
+            middle_name='Manuel',
+            last_name='Dela Cruz',
+            barangay='San Jose',
+            date_of_birth=date(1985, 1, 1),
+            address='Purok 9',
+            contact_number='09998887777',
+        )
+
+        self.assertEqual(self._submit().status_code, 201)
+        registration = ResidentRegistrationRequest.query.one()
+        headers = self._staff_headers()
+
+        # Mismatched name -> 400
+        res_name = self.client.post(
+            f'/api/resident-registrations/{registration.id}/approve',
+            headers=headers,
+            json={'matched_resident_id': wrong_name.id},
+        )
+        self.assertEqual(res_name.status_code, 400)
+        self.assertIn('name', res_name.get_json()['error'].lower())
+        self.assertEqual(registration.status, 'pending')
+
+        # Mismatched barangay -> 400
+        res_brgy = self.client.post(
+            f'/api/resident-registrations/{registration.id}/approve',
+            headers=headers,
+            json={'matched_resident_id': wrong_barangay.id},
+        )
+        self.assertEqual(res_brgy.status_code, 400)
+        self.assertIn('barangay', res_brgy.get_json()['error'].lower())
+        self.assertEqual(registration.status, 'pending')
+
+        # Mismatched both name and barangay -> 400
+        wrong_both = self._create_roster_resident(
+            first_name='Ana',
+            middle_name='Cruz',
+            last_name='Santos',
+            barangay='Santa Cruz',
+        )
+        res_both = self.client.post(
+            f'/api/resident-registrations/{registration.id}/approve',
+            headers=headers,
+            json={'matched_resident_id': wrong_both.id},
+        )
+        self.assertEqual(res_both.status_code, 400)
+        err_both = res_both.get_json()['error'].lower()
+        self.assertIn('name', err_both)
+        self.assertIn('barangay', err_both)
+        self.assertEqual(ResidentAccount.query.count(), 0)
+
+        # Matching name and barangay -> 200
+        with patch('routes.resident_registrations.send_resident_registration_email'):
+            res_ok = self.client.post(
+                f'/api/resident-registrations/{registration.id}/approve',
+                headers=headers,
+                json={'matched_resident_id': name_and_brgy_match.id},
+            )
+        self.assertEqual(res_ok.status_code, 200, res_ok.get_json())
+        self.assertEqual(registration.status, 'approved')
+        self.assertEqual(registration.matched_resident_id, name_and_brgy_match.id)
+        self.assertEqual(RegistrationLinkOverrideLog.query.count(), 0)
+
+    def test_admin_override_for_mismatched_link_requires_reason_and_logs(self):
+        mismatched = self._create_roster_resident(
+            first_name='Pedro',
+            middle_name='Lopez',
+            last_name='Garcia',
+            barangay='Poblacion',
+        )
+        self.assertEqual(self._submit().status_code, 201)
+        registration = ResidentRegistrationRequest.query.one()
+
+        # LGU personnel cannot override even with a reason -> 403
+        lgu_res = self.client.post(
+            f'/api/resident-registrations/{registration.id}/approve',
+            headers=self.lgu['headers'],
+            json={
+                'matched_resident_id': mismatched.id,
+                'override_reason': 'Verified in person at barangay hall',
+            },
+        )
+        self.assertEqual(lgu_res.status_code, 403)
+        self.assertIn('admin', lgu_res.get_json()['error'].lower())
+        self.assertEqual(registration.status, 'pending')
+        self.assertEqual(RegistrationLinkOverrideLog.query.count(), 0)
+
+        # Admin with blank/whitespace override reason -> 400
+        blank_res = self.client.post(
+            f'/api/resident-registrations/{registration.id}/approve',
+            headers=self._staff_headers(),
+            json={
+                'matched_resident_id': mismatched.id,
+                'override_reason': '   ',
+            },
+        )
+        self.assertEqual(blank_res.status_code, 400)
+        self.assertIn('override reason', blank_res.get_json()['error'].lower())
+        self.assertEqual(RegistrationLinkOverrideLog.query.count(), 0)
+
+        # Admin with typed override reason -> 200 and logged
+        reason_text = 'Verified via barangay ID; maiden name listed on roster'
+        with patch('routes.resident_registrations.send_resident_registration_email'):
+            ok_res = self.client.post(
+                f'/api/resident-registrations/{registration.id}/approve',
+                headers=self._staff_headers(),
+                json={
+                    'matched_resident_id': mismatched.id,
+                    'override_reason': reason_text,
+                },
+            )
+        self.assertEqual(ok_res.status_code, 200, ok_res.get_json())
+        self.assertEqual(registration.status, 'approved')
+        self.assertEqual(registration.matched_resident_id, mismatched.id)
+
+        log = RegistrationLinkOverrideLog.query.one()
+        self.assertEqual(log.admin_id, self.staff['user'].id)
+        self.assertEqual(log.request_id, registration.id)
+        self.assertEqual(log.roster_id, mismatched.id)
+        self.assertEqual(log.reason, reason_text)
+        self.assertIsNotNone(log.timestamp)
+
+    def test_admin_unlink_removes_link_inherited_center_room_and_logs(self):
+        resident = self._create_roster_resident()
+        with db.engine.begin() as conn:
+            conn.execute(text(
+                "INSERT OR REPLACE INTO evacuation_centers (id, name, capacity, is_active) "
+                "VALUES (10, 'Sogod Gym', 100, 1)"
+            ))
+        room = EvacuationCenterRoom(
+            id=10,
+            evacuation_center_id=10,
+            room_number='Room 101',
+            capacity=10,
+            is_active=True,
+        )
+        assignment = EvacuationAssignment(
+            resident_id=resident.id,
+            evacuation_center_id=10,
+            room_id=10,
+        )
+        db.session.add_all([room, assignment])
+        db.session.commit()
+
+        # Submit & approve registration
+        self.assertEqual(self._submit().status_code, 201)
+        registration = ResidentRegistrationRequest.query.one()
+        with patch('routes.resident_registrations.send_resident_registration_email'):
+            approve_res = self.client.post(
+                f'/api/resident-registrations/{registration.id}/approve',
+                headers=self._staff_headers(),
+                json={'matched_resident_id': resident.id},
+            )
+        self.assertEqual(approve_res.status_code, 200)
+
+        # Linked resident account logs in and inherits the roster family's center & room
+        login_res = self.client.post('/api/auth/resident-login', json={
+            'email': 'jose@example.com',
+            'password': 'Secret123!',
+        })
+        self.assertEqual(login_res.status_code, 200)
+        resident_token = login_res.get_json()['access_token']
+        res_headers = {'Authorization': f'Bearer {resident_token}'}
+
+        before_center = self.client.get('/api/residents/my-center', headers=res_headers)
+        self.assertEqual(before_center.status_code, 200)
+        self.assertEqual(before_center.get_json()['center_name'], 'Sogod Gym')
+        self.assertEqual(before_center.get_json()['room']['room_number'], 'Room 101')
+
+        # Non-admin (lgu_personnel) cannot unlink -> 403
+        lgu_unlink = self.client.post(
+            f'/api/resident-registrations/{registration.id}/unlink',
+            headers=self.lgu['headers'],
+        )
+        self.assertEqual(lgu_unlink.status_code, 403)
+
+        # Admin unlinks the registration
+        unlink_res = self.client.post(
+            f'/api/resident-registrations/{registration.id}/unlink',
+            headers=self._staff_headers(),
+        )
+        self.assertEqual(unlink_res.status_code, 200, unlink_res.get_json())
+        body = unlink_res.get_json()
+        self.assertEqual(body['request']['status'], 'pending')
+        self.assertIsNone(body['request']['matched_resident_id'])
+        self.assertFalse(body['request']['has_account'])
+        self.assertEqual(body['unlinked_resident_id'], resident.id)
+        self.assertEqual(body['cleared_inherited_assignment']['center_name'], 'Sogod Gym')
+        self.assertEqual(body['cleared_inherited_assignment']['room_number'], 'Room 101')
+
+        # Registration is unlinked and linked ResidentAccount is removed
+        db.session.refresh(registration)
+        self.assertIsNone(registration.matched_resident_id)
+        self.assertEqual(registration.status, 'pending')
+        self.assertEqual(ResidentAccount.query.filter_by(resident_id=resident.id).count(), 0)
+
+        # Previous resident token no longer inherits center/room, and login is awaiting verification
+        after_center = self.client.get('/api/residents/my-center', headers=res_headers)
+        self.assertEqual(after_center.status_code, 401)
+        after_login = self.client.post('/api/auth/resident-login', json={
+            'email': 'jose@example.com',
+            'password': 'Secret123!',
+        })
+        self.assertEqual(after_login.status_code, 403)
+
+        # Roster family's own EvacuationAssignment stays intact and resident is available again
+        self.assertEqual(EvacuationAssignment.query.filter_by(resident_id=resident.id).count(), 1)
+        matches = self.client.get(
+            f'/api/resident-registrations/{registration.id}/matches',
+            headers=self._staff_headers(),
+        ).get_json()
+        self.assertTrue(matches['matches'][0]['available'])
+
+        # Action is logged in SystemLog
+        unlink_log = SystemLog.query.filter(SystemLog.action.ilike('%Unlinked resident registration%')).one()
+        self.assertEqual(unlink_log.user_id, self.staff['user'].id)
+        self.assertIn(f'#{registration.id}', unlink_log.action)
+        self.assertIn(f'#{resident.id}', unlink_log.action)
+        self.assertIn('Sogod Gym', unlink_log.action)
+
+        # Unlinking again when already unlinked returns 409
+        repeat_unlink = self.client.post(
+            f'/api/resident-registrations/{registration.id}/unlink',
+            headers=self._staff_headers(),
+        )
+        self.assertEqual(repeat_unlink.status_code, 409)
+
+    def test_manual_resident_create_uses_setup_link_flow_and_never_emails_password(self):
+        resident = self._create_roster_resident()
+        self.app.config.update(
+            MAIL_MAILER='smtp',
+            MAIL_HOST='smtp.example.com',
+            MAIL_PORT=587,
+            MAIL_USERNAME='mailer@example.com',
+            MAIL_PASSWORD='smtp-secret',
+            MAIL_ENCRYPTION='tls',
+            MAIL_FROM_ADDRESS='mailer@example.com',
+            MAIL_FROM_NAME='EvacWay',
+            FRONTEND_URL='https://evacway.example.com',
+        )
+
+        # Even if a client sends a password field, it is ignored and a setup link is sent instead
+        with patch('services.mailer.smtplib.SMTP') as smtp:
+            smtp_server = smtp.return_value.__enter__.return_value
+            res = self.client.post(
+                '/api/resident-registrations/manual-create',
+                headers=self._staff_headers(),
+                json={
+                    'resident_id': resident.id,
+                    'email': 'manual.setup@example.com',
+                    'password': 'IgnoredPassword123!',
+                },
+            )
+            self.assertEqual(res.status_code, 201, res.get_json())
+            body = res.get_json()
+            self.assertTrue(body['email_sent'])
+            self.assertIn('password setup link', body['message'].lower())
+            self.assertNotIn('password', body)
+
+            sent_message = smtp_server.send_message.call_args.args[0]
+            self.assertEqual(sent_message['Subject'], 'Set your EvacWay password')
+            plain_body = sent_message.get_body(preferencelist=('plain',)).get_content()
+            self.assertIn('/set-password?token=', plain_body)
+            self.assertNotIn('IgnoredPassword123!', plain_body)
+
+        # Ignored password must NOT log the user in
+        bad_login = self.client.post('/api/auth/resident-login', json={
+            'email': 'manual.setup@example.com',
+            'password': 'IgnoredPassword123!',
+        })
+        self.assertEqual(bad_login.status_code, 401)
+
+        # Extract token from setup email, complete setup, and log in
+        import re as _re
+        token_match = _re.search(r'/set-password\?token=([^\s]+)', plain_body)
+        self.assertIsNotNone(token_match)
+        token = token_match.group(1)
+
+        setup_res = self.client.post('/api/auth/password/setup', json={
+            'token': token,
+            'password': 'ChosenPassword123!',
+        })
+        self.assertEqual(setup_res.status_code, 200, setup_res.get_json())
+
+        good_login = self.client.post('/api/auth/resident-login', json={
+            'email': 'manual.setup@example.com',
+            'password': 'ChosenPassword123!',
+        })
+        self.assertEqual(good_login.status_code, 200)
 
 if __name__ == '__main__':
     unittest.main()

@@ -4,34 +4,19 @@ import {
   faCheck,
   faCircleNotch,
   faEnvelope,
-  faEye,
-  faEyeSlash,
   faIdCard,
-  faKey,
   faMagnifyingGlass,
   faShieldHalved,
   faTriangleExclamation,
   faUserPlus,
-  faWandMagicSparkles,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../../services/api";
-
-function generateSecurePassword() {
-  const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let pwd = "Evac!";
-  for (let i = 0; i < 6; i++) {
-    pwd += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return pwd;
-}
+import { formatManilaDate } from "../../utils/dateTime";
 
 function formatDate(val) {
   if (!val) return "Not provided";
-  const parsed = new Date(`${val}T00:00:00`);
-  return Number.isNaN(parsed.getTime())
-    ? val
-    : new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(parsed);
+  return formatManilaDate(val, { dateStyle: "medium" }, val);
 }
 
 export default function CreateResidentAccountModal({
@@ -54,9 +39,6 @@ function CreateResidentAccountDialog({ onClose, onSuccess }) {
 
   // Credentials State
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState(() => generateSecurePassword());
-  const [showPassword, setShowPassword] = useState(false);
-  const [sendEmail, setSendEmail] = useState(true);
 
   // Status
   const [submitting, setSubmitting] = useState(false);
@@ -152,11 +134,6 @@ function CreateResidentAccountDialog({ onClose, onSuccess }) {
     setFormError("");
   }
 
-  function handleAutoGeneratePassword() {
-    setPassword(generateSecurePassword());
-    setShowPassword(true);
-  }
-
   async function handleSubmit(e) {
     e.preventDefault();
     if (submitting) return;
@@ -172,16 +149,10 @@ function CreateResidentAccountDialog({ onClose, onSuccess }) {
       setFormError("Please enter a valid email address.");
       return;
     }
-    if (!password || password.length < 6) {
-      setFormError("Password must be at least 6 characters.");
-      return;
-    }
 
     const payload = {
       resident_id: selectedRosterResident.id,
       email: cleanEmail,
-      password,
-      send_email: sendEmail,
     };
 
     setSubmitting(true);
@@ -396,60 +367,10 @@ function CreateResidentAccountDialog({ onClose, onSuccess }) {
                     required
                   />
                 </div>
-              </div>
-
-              <div className="resident-form-group resident-form-group--spaced">
-                <div className="resident-label-row">
-                  <label className="resident-form-label" htmlFor="account-password-input">
-                    Initial Password <span>*</span>
-                  </label>
-                  <button
-                    type="button"
-                    className="resident-generate-pwd-btn"
-                    onClick={handleAutoGeneratePassword}
-                    title="Generate a secure temporary password"
-                  >
-                    <FontAwesomeIcon icon={faWandMagicSparkles} />
-                    <span>Auto-generate</span>
-                  </button>
-                </div>
-                <div className="resident-input-icon-wrap">
-                  <FontAwesomeIcon icon={faKey} className="resident-field-icon" />
-                  <input
-                    id="account-password-input"
-                    type={showPassword ? "text" : "password"}
-                    className="resident-input with-left-icon with-right-btn"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Minimum 6 characters"
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="resident-pwd-toggle-btn"
-                    onClick={() => setShowPassword((prev) => !prev)}
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                  >
-                    <FontAwesomeIcon icon={showPassword ? faEyeSlash : faEye} />
-                  </button>
-                </div>
                 <small className="resident-field-hint">
-                  The resident can change this password after logging into their portal.
+                  A secure password setup link will be emailed to this address (expires in 1 hour). No password is emailed.
                 </small>
               </div>
-
-              {/* Send email toggle */}
-              <label className="resident-checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={sendEmail}
-                  onChange={(e) => setSendEmail(e.target.checked)}
-                />
-                <span className="resident-checkbox-custom"></span>
-                <span className="resident-checkbox-text">
-                  Send welcome email with portal link and login credentials
-                </span>
-              </label>
             </div>
           </div>
 
@@ -469,8 +390,7 @@ function CreateResidentAccountDialog({ onClose, onSuccess }) {
               disabled={
                 submitting ||
                 !selectedRosterResident ||
-                !email.trim() ||
-                !password.trim()
+                !email.trim()
               }
             >
               {submitting ? (

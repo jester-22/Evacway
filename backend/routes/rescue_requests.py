@@ -7,11 +7,18 @@ from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
 from werkzeug.utils import secure_filename
 
-from models import RescueRequest, SystemLog, db, Resident, ResidentAccount, User
+from models import RescueRequest, SystemLog, db, Resident, ResidentAccount, User, utc_now, to_utc_iso
 from services.sogod_boundary import is_inside_sogod
 from services.notifications import (
     create_staff_notifications,
     send_staff_push_notifications,
+)
+from services.rescue_status import (
+    RESCUE_OVERDUE_THRESHOLD_HOURS,
+    is_open_rescue_status,
+    is_rescue_overdue,
+    open_rescue_requests_query,
+    rescue_status_since,
 )
 from utils import role_required
 
@@ -84,6 +91,7 @@ def _rescue_to_dict(rescue):
             proof_images = json.loads(rescue.proof_images)
         except (ValueError, TypeError):
             proof_images = []
+    status_since = rescue_status_since(rescue)
     return {
         'id': rescue.id,
         'description': rescue.description,
@@ -94,14 +102,20 @@ def _rescue_to_dict(rescue):
         'is_manual_pin': bool(getattr(rescue, 'is_manual_pin', False)),
         'location_source': getattr(rescue, 'location_source', None) or ('manual' if getattr(rescue, 'is_manual_pin', False) else ('gps' if rescue.latitude is not None else None)),
         'status': rescue.status,
+        'is_open': is_open_rescue_status(rescue.status),
+        'is_overdue': is_rescue_overdue(rescue),
+        'overdue_threshold_hours': RESCUE_OVERDUE_THRESHOLD_HOURS,
+        'status_updated_at': to_utc_iso(status_since),
+        'handed_to_agency': getattr(rescue, 'handed_to_agency', None),
+        'notes': getattr(rescue, 'notes', None),
         'requester_name': rescue.requester_name,
         'requester_contact': rescue.requester_contact,
         'proof_images': proof_images,
         'selected_needs': json.loads(rescue.selected_needs) if rescue.selected_needs else [],
         'people_count': rescue.people_count,
         'vulnerability_flags': json.loads(rescue.vulnerability_flags) if rescue.vulnerability_flags else [],
-        'created_at': rescue.created_at.isoformat() if rescue.created_at else None,
-        'updated_at': rescue.updated_at.isoformat() if rescue.updated_at else None,
+        'created_at': to_utc_iso(rescue.created_at),
+        'updated_at': to_utc_iso(rescue.updated_at),
     }
 
 
@@ -320,7 +334,13 @@ def get_rescue_form_context():
 @rescue_bp.route('/api/rescue-requests', methods=['GET'])
 @role_required('admin', 'lgu_personnel')
 def list_rescue_requests():
-    rescue_requests = RescueRequest.query.order_by(
+    status_filter = str(request.args.get('status') or '').strip().lower()
+    query = (
+        open_rescue_requests_query()
+        if status_filter == 'open'
+        else RescueRequest.query
+    )
+    rescue_requests = query.order_by(
         RescueRequest.created_at.desc(),
         RescueRequest.id.desc(),
     ).limit(200).all()
@@ -332,28 +352,63 @@ def list_rescue_requests():
 def update_rescue_status(rescue_id):
     rescue = RescueRequest.query.get_or_404(rescue_id)
     data = request.get_json(silent=True) or {}
-    new_status = data.get('status')
-    if new_status not in RESCUE_STATUSES:
+    if not isinstance(data, dict):
+        return jsonify({'error': 'A JSON object is required.'}), 400
+
+    has_status = 'status' in data and data.get('status') is not None
+    has_agency = 'handed_to_agency' in data
+    has_notes = 'notes' in data
+    if not has_status and not has_agency and not has_notes:
         return jsonify({
-            'error': 'status must be pending, acknowledged, responding, or resolved'
+            'error': 'Provide status, handed_to_agency, or notes to update.'
         }), 400
 
-    # One-way status flow: pending → acknowledged → responding → resolved
-    status_order = ['pending', 'acknowledged', 'responding', 'resolved']
-    current_index = status_order.index(rescue.status)
-    new_index = status_order.index(new_status)
-    if new_index < current_index:
-        return jsonify({
-            'error': f'Cannot change status from {rescue.status} back to {new_status}. Status only moves forward.'
-        }), 400
-    if new_index == current_index:
-        return jsonify({'error': f'Status is already {new_status}.'}), 400
+    log_parts = []
+    staff_id = int(get_jwt_identity())
 
-    rescue.status = new_status
-    rescue.status_updated_by = int(get_jwt_identity())
-    db.session.add(SystemLog(
-        user_id=rescue.status_updated_by,
-        action=f'Updated rescue request #{rescue.id} to {new_status}',
-    ))
+    if has_status:
+        new_status = data.get('status')
+        if new_status not in RESCUE_STATUSES:
+            return jsonify({
+                'error': 'status must be pending, acknowledged, responding, or resolved'
+            }), 400
+
+        # One-way status flow: pending → acknowledged → responding → resolved
+        status_order = ['pending', 'acknowledged', 'responding', 'resolved']
+        current_index = status_order.index(rescue.status)
+        new_index = status_order.index(new_status)
+        if new_index < current_index:
+            return jsonify({
+                'error': f'Cannot change status from {rescue.status} back to {new_status}. Status only moves forward.'
+            }), 400
+        if new_index == current_index and not has_agency and not has_notes:
+            return jsonify({'error': f'Status is already {new_status}.'}), 400
+
+        if new_status != rescue.status:
+            rescue.status = new_status
+            rescue.status_updated_by = staff_id
+            rescue.status_updated_at = utc_now()
+            log_parts.append(f'status to {new_status}')
+
+    if has_agency:
+        raw_agency = data.get('handed_to_agency')
+        agency = str(raw_agency or '').strip() if raw_agency is not None else ''
+        if len(agency) > 150:
+            return jsonify({'error': 'Handed to (agency) must be 150 characters or fewer.'}), 400
+        rescue.handed_to_agency = agency or None
+        log_parts.append(f'handed to {agency}' if agency else 'cleared agency handoff')
+
+    if has_notes:
+        raw_notes = data.get('notes')
+        notes = str(raw_notes or '').strip() if raw_notes is not None else ''
+        if len(notes) > 2000:
+            return jsonify({'error': 'Notes must be 2000 characters or fewer.'}), 400
+        rescue.notes = notes or None
+        log_parts.append('updated notes' if notes else 'cleared notes')
+
+    if log_parts:
+        action_text = f"Updated rescue request #{rescue.id}: {', '.join(log_parts)}"[:255]
+        db.session.add(SystemLog(user_id=staff_id, action=action_text))
+
     db.session.commit()
     return jsonify(_rescue_to_dict(rescue))

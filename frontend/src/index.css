@@ -198,6 +198,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {
@@ -233,35 +234,51 @@
   outline-offset: 2px;
 }
 
-.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
 .btn-primary {
   background: var(--brand);
   border-color: var(--brand);
   color: #fff;
 }
-.btn-primary:hover:not(:disabled) { background: var(--brand-dark); border-color: var(--brand-dark); }
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--brand-dark);
+  border-color: var(--brand-dark);
+}
 
 .btn-secondary {
   background: transparent;
   border-color: var(--line);
   color: var(--ink);
 }
-.btn-secondary:hover:not(:disabled) { background: var(--bg-2); }
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-2);
+}
 
 .btn-ghost {
   background: transparent;
   border-color: transparent;
   color: var(--text-2);
 }
-.btn-ghost:hover:not(:disabled) { background: var(--bg-2); }
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-2);
+}
 
 .btn-danger {
   background: var(--danger);
   border-color: var(--danger);
   color: #fff;
 }
-.btn-danger:hover:not(:disabled) { opacity: 0.9; }
+
+.btn-danger:hover:not(:disabled) {
+  opacity: 0.9;
+}
 
 .chip {
   display: inline-flex;
@@ -288,10 +305,29 @@
   font-weight: 600;
 }
 
-.badge--available { background: var(--success-soft); color: var(--success); border-color: transparent; }
-.badge--near-full { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
-.badge--full { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
-.badge--closed { background: var(--neutral-soft); color: var(--neutral); border-color: transparent; }
+.badge--available {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: transparent;
+}
+
+.badge--near-full {
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-color: transparent;
+}
+
+.badge--full {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: transparent;
+}
+
+.badge--closed {
+  background: var(--neutral-soft);
+  color: var(--neutral);
+  border-color: transparent;
+}
 
 .page {
   display: flex;
@@ -300,7 +336,9 @@
 }
 
 @media (max-width: 768px) {
-  .page { padding: var(--space-4); }
+  .page {
+    padding: var(--space-4);
+  }
 }
 
 .page-header {
@@ -311,19 +349,30 @@
   margin-bottom: var(--space-4);
 }
 
-*, *::before, *::after { box-sizing: border-box; }
-html, body {
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
 }
+
 html {
   font-size: 14px;
 }
-html, body, #root {
+
+html,
+body,
+#root {
   min-height: 100%;
   height: 100%;
 }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -333,7 +382,13 @@ body {
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
 }
-h1, h2, h3, h4, h5, h6 {
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-family: var(--font-display);
 }
 
@@ -393,8 +448,17 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--muted);
 }
 
-::selection { background: var(--brand); color: #fff; }
-button, input, textarea, select { font-family: inherit; }
+::selection {
+  background: var(--brand);
+  color: #fff;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
 
 .network-status {
   position: fixed;
@@ -412,8 +476,13 @@ button, input, textarea, select { font-family: inherit; }
   transform: translateX(-50%);
 }
 
-.network-status.is-offline { background: var(--alert); }
-.network-status.is-online { background: #26805e; }
+.network-status.is-offline {
+  background: var(--alert);
+}
+
+.network-status.is-online {
+  background: #26805e;
+}
 
 /* Hide Mapbox watermark logo and attribution */
 .mapboxgl-ctrl-logo,
@@ -436,9 +505,17 @@ a.mapboxgl-ctrl-logo {
   width: 100%;
 }
 
-.stat-card-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
-.stat-card-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
-.stat-card-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.stat-card-grid.cols-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.stat-card-grid.cols-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.stat-card-grid.cols-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
 
 /* Base stat card */
 .stat-card {
@@ -460,6 +537,7 @@ a.mapboxgl-ctrl-logo {
 .stat-card.is-plain {
   cursor: default;
 }
+
 .stat-card.is-plain:hover {
   border-color: var(--line, #e2e8f0);
   box-shadow: var(--shadow-xs);
@@ -470,15 +548,18 @@ a.mapboxgl-ctrl-logo {
   cursor: pointer;
   transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease, transform 150ms ease;
 }
+
 .stat-card.is-clickable:hover {
   border-color: var(--primary-200);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
+
 .stat-card.is-clickable:focus-visible {
   outline: 2px solid var(--brand, #2563eb);
   outline-offset: 2px;
 }
+
 .stat-card.is-clickable.is-selected {
   border: 2px solid var(--brand, #2563eb) !important;
   background: #ffffff;
@@ -524,7 +605,8 @@ a.mapboxgl-ctrl-logo {
   line-height: 1.3;
   white-space: normal;
   word-break: break-word;
-  max-height: 2.6em; /* ~2 lines */
+  max-height: 2.6em;
+  /* ~2 lines */
   overflow: hidden;
 }
 
@@ -545,21 +627,25 @@ a.mapboxgl-ctrl-logo {
   background: #f8fafc;
   color: #64748b;
 }
+
 .stat-card-icon--pending,
 .stat-card-icon--in-progress {
   background: #eff6ff;
   color: #2563eb;
 }
+
 .stat-card-icon--alert,
 .stat-card-icon--hazard {
   background: #fef2f2;
   color: #dc2626;
 }
+
 .stat-card-icon--resolved,
 .stat-card-icon--cleared {
   background: #f0fdf4;
   color: #16a34a;
 }
+
 .stat-card-icon--warning {
   background: #fffbeb;
   color: #d97706;
@@ -567,6 +653,7 @@ a.mapboxgl-ctrl-logo {
 
 /* Responsive breakpoints */
 @media (min-width: 769px) and (max-width: 1024px) {
+
   .stat-card-grid.cols-4,
   .stat-card-grid.cols-3 {
     grid-template-columns: repeat(2, 1fr);
@@ -577,23 +664,29 @@ a.mapboxgl-ctrl-logo {
   .stat-card-grid.cols-4 {
     grid-template-columns: repeat(2, 1fr);
   }
+
   .stat-card-grid.cols-3,
   .stat-card-grid.cols-2 {
     grid-template-columns: 1fr;
   }
+
   .stat-card {
     padding: 12px 14px;
     min-height: auto;
   }
+
   .stat-card-label {
     font-size: 12px;
   }
+
   .stat-card-value {
     font-size: 24px;
   }
+
   .stat-card-hint {
     font-size: 11px;
   }
+
   .stat-card-icon {
     width: 36px;
     height: 36px;
@@ -606,7 +699,9 @@ a.mapboxgl-ctrl-logo {
    ========================================================================== */
 
 /* Modern standards (Firefox, modern Chrome/Edge) */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
 }
@@ -647,4 +742,3 @@ a.mapboxgl-ctrl-logo {
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
-

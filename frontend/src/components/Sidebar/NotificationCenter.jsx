@@ -15,6 +15,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../services/api";
 import { queryKeys, useNotifications } from "../../hooks/useEvacuationQueries";
+import { formatManilaDateTime } from "../../utils/dateTime";
 import "./NotificationCenter.css";
 
 function decodeVapidKey(value) {
@@ -520,7 +521,7 @@ export default function NotificationCenter({ onSelect }) {
                   <span className="notification-item-copy">
                     <strong>{notification.title}</strong>
                     <span>{notification.message}</span>
-                    <small>{notification.created_at ? new Date(notification.created_at).toLocaleString() : ""}</small>
+                    <small>{notification.created_at ? formatManilaDateTime(notification.created_at) : ""}</small>
                   </span>
                   <button
                     type="button"

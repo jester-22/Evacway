@@ -32,6 +32,7 @@ export const queryKeys = {
   publicStatusSummary: ["public-status-summary"],
   publicOperationAlert: ["public-operation-alert"],
   sogodBoundary: ["sogod-boundary"],
+  dashboardSummary: ["dashboard", "summary"],
   dashboardFamilies: ["families", "dashboard"],
   checkInSummary: ["evacuee-check-in-list", "summary"],
   users: ["users"],
@@ -51,6 +52,7 @@ export async function invalidateEvacuationQueries(queryClient) {
     queryClient.invalidateQueries({ queryKey: ["buildings"] }),
     queryClient.invalidateQueries({ queryKey: ["building-details"] }),
     queryClient.invalidateQueries({ queryKey: ["room-families"] }),
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
   ]);
 }
 
@@ -249,203 +251,34 @@ export function useBuildingDetails(buildingId, options = {}) {
 }
 
 export function useDashboardSummary(isAdmin) {
-  const refreshOptions = {
-    refetchInterval: 30000,
+  const summaryQuery = useQuery({
+    queryKey: [...queryKeys.dashboardSummary, Boolean(isAdmin)],
+    queryFn: api.getDashboardSummary,
+    staleTime: 60 * 1000,
+    refetchInterval: 60 * 1000,
     refetchIntervalInBackground: false,
-  };
-  const barangaysQuery = useBarangays(refreshOptions);
-  const familiesQuery = useQuery({
-    queryKey: queryKeys.dashboardFamilies,
-    queryFn: () => api.getFamilies({ all: "true" }),
-    ...refreshOptions,
-  });
-  const centersQuery = useEvacuationCenters(false, refreshOptions);
-  const roomsQuery = useRoomsForCenters(centersQuery.data, refreshOptions);
-  const checkInQuery = useQuery({
-    queryKey: queryKeys.checkInSummary,
-    queryFn: () => api.getCheckInList({ status: "all" }),
-    ...refreshOptions,
-  });
-  const usersQuery = useQuery({
-    queryKey: queryKeys.users,
-    queryFn: api.getUsers,
-    enabled: isAdmin,
-    ...refreshOptions,
   });
 
-  const barangays = Array.isArray(barangaysQuery.data) ? barangaysQuery.data : [];
-  const centersById = new Map();
-  (centersQuery.data?.features || []).forEach((feature) => {
-    const props = feature?.properties || feature || {};
-    const centerId = props.id ?? props.center_id ?? feature?.id;
-    if (props.is_active !== false && centerId != null && !centersById.has(String(centerId))) {
-      centersById.set(String(centerId), feature);
-    }
-  });
-  const centers = Array.from(centersById.values());
-  const seenRoomIds = new Set();
-  const centerRooms = roomsQuery.results.map(({ center, rooms }) => {
-    const properties = center.properties || center;
-    const uniqueRooms = rooms.filter((room) => {
-      if (room.id == null) return false;
-      if (room.is_active === false) return false;
-      const roomId = String(room.id);
-      if (seenRoomIds.has(roomId)) return false;
-      seenRoomIds.add(roomId);
-      return true;
-    });
-
-    const isRoomFull = (room) => {
-      if (typeof room.is_full === "boolean") return room.is_full;
-      if (typeof room.is_fully_assigned === "boolean") return room.is_fully_assigned;
-
-      const availableSlots = room.available_slots != null
-        ? Number(room.available_slots)
-        : room.family_slots != null
-          ? Number(room.family_slots) - Number(room.used_slots ?? 0)
-          : null;
-      const peopleLimit = room.people_spaces ?? room.capacity;
-      const availableSpaces = room.available_spaces != null
-        ? Number(room.available_spaces)
-        : peopleLimit != null
-          ? Number(peopleLimit) - Number(room.used_spaces ?? room.assigned ?? room.occupied ?? 0)
-          : null;
-
-      return (availableSlots != null && availableSlots <= 0)
-        || (availableSpaces != null && availableSpaces <= 0);
-    };
-
-    const occupied = uniqueRooms.filter((room) =>
-      Boolean(
-        room.is_assigned ||
-        room.assignment_status === "Assigned" ||
-        Number(room.assigned ?? room.occupied) > 0
-      )
-    ).length;
-    const available = uniqueRooms.filter((room) => !isRoomFull(room)).length;
-    const capacity = uniqueRooms.reduce(
-      (sum, room) => sum + Number(room.people_spaces ?? room.capacity ?? 0),
-      0
-    );
-    const occupiedPeople = uniqueRooms.reduce((sum, room) => sum + Number(room.occupied || 0), 0);
-    const assignedPeople = uniqueRooms.reduce((sum, room) => sum + Number(room.assigned ?? room.occupied ?? 0), 0);
-
-    return {
-      id: properties.id ?? properties.center_id ?? center.id,
-      name: properties.name || "Unnamed center",
-      barangays: properties.barangays || [],
-      barangay: (properties.barangays || []).map((barangay) => barangay.name).filter(Boolean).join(", ")
-        || "Barangay not specified",
-      total: uniqueRooms.length,
-      occupied,
-      assignedRooms: occupied,
-      unassignedRooms: Math.max(0, uniqueRooms.length - occupied),
-      available,
-      fullRooms: uniqueRooms.length - available,
-      capacity,
-      occupiedPeople,
-      assignedPeople,
-      remainingCapacity: Math.max(0, capacity - occupiedPeople),
-    };
-  }).sort((first, second) =>
-    second.available - first.available
-    || second.total - first.total
-    || first.name.localeCompare(second.name)
-    || first.barangay.localeCompare(second.barangay)
-    || String(first.id).localeCompare(String(second.id))
-  );
-  const totalRooms = centerRooms.reduce((total, center) => total + center.total, 0);
-  const occupiedRooms = centerRooms.reduce((total, center) => total + center.occupied, 0);
-  const availableRooms = centerRooms.reduce((total, center) => total + center.available, 0);
-  const fullRooms = Math.max(0, totalRooms - availableRooms);
-  const staff = isAdmin ? usersQuery.data || [] : [];
-  const errors = [
-    barangaysQuery.error,
-    familiesQuery.error,
-    centersQuery.error,
-    roomsQuery.error,
-    usersQuery.error,
-  ];
-
-  // Core data is ready as soon as families and centers datasets have resolved or settled
-  const hasCoreData = Boolean(
-    familiesQuery.data ||
-    centersQuery.data ||
-    (!familiesQuery.isLoading && !centersQuery.isLoading)
-  );
-  const isLoading = !hasCoreData && (familiesQuery.isLoading || centersQuery.isLoading);
-
-  const totalHouseholds = Number(
-    familiesQuery.data?.household_count ?? familiesQuery.data?.total ?? 0
-  );
-  const totalResidents = Number(familiesQuery.data?.resident_count ?? 0);
-  const assignedFamilies = Number(familiesQuery.data?.assigned_family_count ?? 0);
-  const unassignedFamilies = Number(
-    familiesQuery.data?.unassigned_family_count ?? Math.max(0, totalHouseholds - assignedFamilies)
-  );
-
-  const checkInSummary = checkInQuery.data?.summary || null;
-  const arrivedFamilies = Number(checkInSummary?.total_checked_in ?? familiesQuery.data?.arrived_family_count ?? 0);
-  const partialFamilies = Number(checkInSummary?.total_partial ?? 0);
-  const pendingArrivalFamilies = Number(
-    checkInSummary?.total_pending ?? Math.max(0, assignedFamilies - arrivedFamilies)
-  );
-  const arrivedResidents = Number(
-    checkInSummary?.total_residents_checked_in ?? familiesQuery.data?.arrived_resident_count ?? 0
-  );
-  const assignedResidents = Number(
-    checkInSummary?.total_residents_assigned ?? centerRooms.reduce((total, center) => total + center.assignedPeople, 0)
-  );
+  const payload = summaryQuery.data || null;
+  const stats = payload?.stats || null;
+  const barangays = Array.isArray(payload?.barangays) ? payload.barangays : [];
+  const isLoading = summaryQuery.isLoading;
 
   return {
-    stats: hasCoreData
-      ? {
-          barangays: barangays.length,
-          families: totalHouseholds,
-          assignedFamilies,
-          unassignedFamilies,
-          arrivedFamilies,
-          partialFamilies,
-          pendingArrivalFamilies,
-          totalArrivedFamilies: arrivedFamilies + partialFamilies,
-          residents: totalResidents,
-          arrivedResidents,
-          assignedResidents,
-          pendingResidents: Math.max(0, assignedResidents - arrivedResidents),
-          centers: centers.length,
-          totalCapacity: centerRooms.reduce((total, center) => total + center.capacity, 0),
-          totalOccupiedPeople: centerRooms.reduce((total, center) => total + (center.occupiedPeople || 0), 0),
-          totalAssignedPeople: centerRooms.reduce((total, center) => total + center.assignedPeople, 0),
-          totalRooms,
-          assignedRooms: occupiedRooms,
-          unassignedRooms: Math.max(0, totalRooms - occupiedRooms),
-          occupiedRooms,
-          availableRooms,
-          fullRooms,
-          centerRooms,
-          checkInSummary,
-          checkInCenters: checkInQuery.data?.centers || [],
-          totalStaff: staff.filter((account) => account.role === "lgu_personnel").length,
-          activeStaff: staff.filter((account) => account.role === "lgu_personnel" && account.is_active).length,
-        }
-      : null,
+    stats,
+    barangays,
     isLoading,
-    isFetching: barangaysQuery.isFetching
-      || familiesQuery.isFetching
-      || centersQuery.isFetching
-      || roomsQuery.isFetching
-      || checkInQuery.isFetching
-      || (isAdmin && usersQuery.isFetching),
-    error: errors.find(Boolean) || null,
+    loading: {
+      families: isLoading,
+      checkIn: isLoading,
+      centers: isLoading,
+      barangays: isLoading,
+      users: Boolean(isAdmin) && isLoading,
+    },
+    isFetching: summaryQuery.isFetching,
+    error: summaryQuery.error || null,
     refetch: async () => {
-      await Promise.all([
-        barangaysQuery.refetch(),
-        familiesQuery.refetch(),
-        centersQuery.refetch(),
-        roomsQuery.refetch(),
-        checkInQuery.refetch(),
-        isAdmin ? usersQuery.refetch() : Promise.resolve(),
-      ]);
+      await summaryQuery.refetch();
     },
   };
 }

@@ -142,6 +142,165 @@ class RescueFormContextRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         get_resident.assert_not_called()
 
+    def test_open_rescue_status_excludes_only_resolved_and_closed(self):
+        from models import RescueRequest, User
+        from services.rescue_status import (
+            count_open_rescue_requests,
+            is_open_rescue_status,
+            open_rescue_requests_query,
+        )
+        from werkzeug.security import generate_password_hash
+
+        # Pure helper checks
+        for open_status in ('pending', 'acknowledged', 'responding', 'open', None, ''):
+            self.assertTrue(is_open_rescue_status(open_status), open_status)
+        for closed_status in ('resolved', 'Resolved', 'closed', 'CLOSED', ' resolved '):
+            self.assertFalse(is_open_rescue_status(closed_status), closed_status)
+
+        # Shared DB query + GET /api/rescue-requests agree on exact open count
+        db.metadata.create_all(bind=db.engine, tables=[User.__table__, RescueRequest.__table__])
+        admin = User(
+            name='Admin User',
+            email='admin-rescue@example.com',
+            password_hash=generate_password_hash('Secret123!'),
+            role='admin',
+            is_active=True,
+        )
+        db.session.add(admin)
+        db.session.add_all([
+            RescueRequest(description='Pending help', status='pending'),
+            RescueRequest(description='Acknowledged help', status='acknowledged'),
+            RescueRequest(description='Responding help', status='responding'),
+            RescueRequest(description='Resolved help', status='resolved'),
+            RescueRequest(description='Closed help', status='closed'),
+        ])
+        db.session.commit()
+
+        self.assertEqual(count_open_rescue_requests(), 3)
+        self.assertEqual(open_rescue_requests_query().count(), 3)
+
+        admin_token = create_access_token(
+            identity=str(admin.id),
+            additional_claims={
+                'role': 'admin',
+                'account_type': 'user',
+                'mfa_verified': True,
+                'mfa_version': 0,
+            },
+        )
+        headers = {'Authorization': f'Bearer {admin_token}'}
+
+        all_res = self.client.get('/api/rescue-requests', headers=headers)
+        self.assertEqual(all_res.status_code, 200)
+        all_items = all_res.get_json()
+        self.assertEqual(len(all_items), 5)
+        self.assertEqual(sum(1 for item in all_items if item['is_open']), 3)
+
+        open_res = self.client.get('/api/rescue-requests?status=open', headers=headers)
+        self.assertEqual(open_res.status_code, 200)
+        open_items = open_res.get_json()
+        self.assertEqual(len(open_items), 3)
+        self.assertEqual(
+            {item['status'] for item in open_items},
+            {'pending', 'acknowledged', 'responding'},
+        )
+
+    def test_overdue_threshold_and_handoff_agency_notes_update(self):
+        from datetime import timedelta
+        from models import RescueRequest, SystemLog, User, utc_now
+        from services.rescue_status import (
+            RESCUE_OVERDUE_THRESHOLD_HOURS,
+            is_rescue_overdue,
+        )
+        from werkzeug.security import generate_password_hash
+
+        self.assertEqual(RESCUE_OVERDUE_THRESHOLD_HOURS, 2)
+        db.metadata.create_all(
+            bind=db.engine,
+            tables=[User.__table__, RescueRequest.__table__, SystemLog.__table__],
+        )
+        admin = User(
+            name='Admin Dispatch',
+            email='admin-dispatch@example.com',
+            password_hash=generate_password_hash('Secret123!'),
+            role='admin',
+            is_active=True,
+        )
+        db.session.add(admin)
+
+        now = utc_now()
+        old_time = now - timedelta(hours=RESCUE_OVERDUE_THRESHOLD_HOURS + 1)
+        fresh_time = now - timedelta(minutes=30)
+
+        overdue_req = RescueRequest(
+            description='Roof rescue needed',
+            status='acknowledged',
+            created_at=old_time,
+            updated_at=old_time,
+            status_updated_at=old_time,
+        )
+        fresh_req = RescueRequest(
+            description='Recent request',
+            status='pending',
+            created_at=fresh_time,
+            updated_at=fresh_time,
+            status_updated_at=fresh_time,
+        )
+        resolved_old = RescueRequest(
+            description='Already resolved',
+            status='resolved',
+            created_at=old_time,
+            updated_at=old_time,
+            status_updated_at=old_time,
+        )
+        db.session.add_all([overdue_req, fresh_req, resolved_old])
+        db.session.commit()
+
+        self.assertTrue(is_rescue_overdue(overdue_req, now=now))
+        self.assertFalse(is_rescue_overdue(fresh_req, now=now))
+        self.assertFalse(is_rescue_overdue(resolved_old, now=now))
+
+        admin_token = create_access_token(
+            identity=str(admin.id),
+            additional_claims={
+                'role': 'admin',
+                'account_type': 'user',
+                'mfa_verified': True,
+                'mfa_version': 0,
+            },
+        )
+        headers = {'Authorization': f'Bearer {admin_token}'}
+
+        # Updating handed_to_agency & notes works without changing status and preserves status_updated_at
+        patch_details = self.client.patch(
+            f'/api/rescue-requests/{overdue_req.id}',
+            headers=headers,
+            json={
+                'handed_to_agency': 'MDRRMO Sogod',
+                'notes': 'Boat team dispatched via Barangay San Jose',
+            },
+        )
+        self.assertEqual(patch_details.status_code, 200, patch_details.get_json())
+        updated = patch_details.get_json()
+        self.assertEqual(updated['handed_to_agency'], 'MDRRMO Sogod')
+        self.assertEqual(updated['notes'], 'Boat team dispatched via Barangay San Jose')
+        self.assertEqual(updated['status'], 'acknowledged')
+        self.assertTrue(updated['is_overdue'])
+        self.assertEqual(updated['overdue_threshold_hours'], RESCUE_OVERDUE_THRESHOLD_HOURS)
+
+        # Advancing status resets status_updated_at so it is no longer overdue
+        patch_status = self.client.patch(
+            f'/api/rescue-requests/{overdue_req.id}',
+            headers=headers,
+            json={'status': 'responding'},
+        )
+        self.assertEqual(patch_status.status_code, 200, patch_status.get_json())
+        advanced = patch_status.get_json()
+        self.assertEqual(advanced['status'], 'responding')
+        self.assertFalse(advanced['is_overdue'])
+        self.assertEqual(advanced['handed_to_agency'], 'MDRRMO Sogod')
+        self.assertEqual(advanced['notes'], 'Boat team dispatched via Barangay San Jose')
+
 
 if __name__ == '__main__':
     unittest.main()

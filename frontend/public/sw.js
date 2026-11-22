@@ -222,7 +222,8 @@ self.addEventListener("fetch", (event) => {
   if (url.origin === self.location.origin && request.mode === "navigate") {
     event.respondWith(fetch(request).catch(async () => {
       const shell = await caches.open(SHELL_CACHE);
-      return shell.match("/index.html") || Response.error();
+      const cached = await shell.match("/index.html");
+      return cached || Response.error();
     }));
   }
 });

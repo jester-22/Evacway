@@ -19,12 +19,11 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import { countOpenRescueRequests } from "../../utils/rescueStatus";
+import { formatManilaDate, getManilaDateKey } from "../../utils/dateTime";
 import { api } from "../../services/api";
-import { useQuery } from "@tanstack/react-query";
 import {
-  queryKeys,
   useDashboardSummary,
-  useBarangays,
   useHazardReports,
   useRescueRequests,
 } from "../../hooks/useEvacuationQueries";
@@ -65,6 +64,24 @@ function formatCount(value) {
 
 function percentage(value, total) {
   return total > 0 ? Math.round((value / total) * 100) : 0;
+}
+
+function DashboardStatSkeleton({ label }) {
+  return (
+    <div
+      className="dashboard-stat-skeleton"
+      role="status"
+      aria-busy="true"
+      aria-label={`Loading ${label}`}
+    >
+      <div className="dashboard-stat-skeleton__top">
+        <span className="ds-skeleton dashboard-stat-skeleton__icon" aria-hidden="true" />
+        <span className="ds-skeleton dashboard-stat-skeleton__label" aria-hidden="true" />
+      </div>
+      <span className="ds-skeleton dashboard-stat-skeleton__value" aria-hidden="true" />
+      <span className="ds-skeleton dashboard-stat-skeleton__footer" aria-hidden="true" />
+    </div>
+  );
 }
 
 /* -------------------------------------------------------------
@@ -155,16 +172,17 @@ function CenterArrivalList({
       {isLoading ? (
         <div
           className="dashboard-capacity-grid"
+          role="status"
           aria-busy="true"
           aria-label="Loading evacuation center capacity"
         >
           {[0, 1, 2, 3].map((slot) => (
             <div key={slot} className="dashboard-capacity-skeleton" aria-hidden="true">
               <div className="dashboard-capacity-skeleton__top">
-                <span className="dashboard-skel-line dashboard-skel-line--mid" />
-                <span className="dashboard-skel-line dashboard-skel-line--xs" />
+                <span className="ds-skeleton dashboard-skel-line dashboard-skel-line--mid" />
+                <span className="ds-skeleton dashboard-skel-line dashboard-skel-line--xs" />
               </div>
-              <span className="dashboard-skel-bar dashboard-skel-bar--sm" />
+              <span className="ds-skeleton dashboard-skel-bar dashboard-skel-bar--sm" />
             </div>
           ))}
         </div>
@@ -384,14 +402,14 @@ function IncidentTrendsCard({
     });
   };
 
-  // 1. Filter items to only the selected month
+  // 1. Filter items to only the selected month (in Asia/Manila time)
   const monthItems = useMemo(() => {
+    const targetPrefix = `${selectedYear}-${String(selectedMonth + 1).padStart(2, "0")}-`;
     return (items || []).filter((item) => {
       const raw = dateExtractor ? dateExtractor(item) : item?.submitted_at || item?.created_at;
       if (!raw) return false;
-      const d = new Date(raw);
-      if (isNaN(d.getTime())) return false;
-      return d.getFullYear() === selectedYear && d.getMonth() === selectedMonth;
+      const manilaKey = getManilaDateKey(raw);
+      return Boolean(manilaKey && manilaKey.startsWith(targetPrefix));
     });
   }, [items, dateExtractor, selectedYear, selectedMonth]);
 
@@ -413,24 +431,27 @@ function IncidentTrendsCard({
   // 3. Days in selected month & counts per day
   const monthMeta = useMemo(() => {
     const totalDays = new Date(selectedYear, selectedMonth + 1, 0).getDate();
-    const shortMonthName = new Date(selectedYear, selectedMonth, 1).toLocaleDateString("en-US", {
-      month: "short",
-    });
-    const now = new Date();
-    const isThisMonth = selectedYear === now.getFullYear() && selectedMonth === now.getMonth();
-    const todayDay = now.getDate();
+    const monthPadded = String(selectedMonth + 1).padStart(2, "0");
+    const shortMonthName = formatManilaDate(
+      `${selectedYear}-${monthPadded}-01`,
+      { month: "short" }
+    );
+    const [todayYear, todayMonthOneBased, todayDay] = getManilaDateKey(new Date())
+      .split("-")
+      .map(Number);
+    const todayMonth = (todayMonthOneBased || 1) - 1;
+    const isThisMonth = selectedYear === todayYear && selectedMonth === todayMonth;
     const maxDayWithData = isThisMonth
       ? Math.min(todayDay, totalDays)
-      : selectedYear < now.getFullYear() || (selectedYear === now.getFullYear() && selectedMonth < now.getMonth())
+      : selectedYear < todayYear || (selectedYear === todayYear && selectedMonth < todayMonth)
         ? totalDays
         : 0;
 
     const list = [];
     for (let d = 1; d <= totalDays; d++) {
-      const dayDateObj = new Date(selectedYear, selectedMonth, d);
-      const key = `${selectedYear}-${String(selectedMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const key = `${selectedYear}-${monthPadded}-${String(d).padStart(2, "0")}`;
       const shortDay = `${shortMonthName} ${d}`;
-      const fullDate = dayDateObj.toLocaleDateString("en-US", {
+      const fullDate = formatManilaDate(key, {
         weekday: "short",
         month: "short",
         day: "numeric",
@@ -453,14 +474,12 @@ function IncidentTrendsCard({
     monthItems.forEach((item) => {
       const raw = dateExtractor ? dateExtractor(item) : item?.submitted_at || item?.created_at;
       if (!raw) return;
-      const d = new Date(raw);
-      if (!isNaN(d.getTime())) {
-        const dayNum = d.getDate();
-        if (dayNum >= 1 && dayNum <= totalDays) {
-          const grp = statusExtractor ? statusExtractor(item) : item.status;
-          if (list[dayNum - 1] && list[dayNum - 1].counts[grp] !== undefined) {
-            list[dayNum - 1].counts[grp] += 1;
-          }
+      const manilaKey = getManilaDateKey(raw);
+      const dayNum = manilaKey ? Number(manilaKey.slice(8, 10)) : NaN;
+      if (dayNum >= 1 && dayNum <= totalDays) {
+        const grp = statusExtractor ? statusExtractor(item) : item.status;
+        if (list[dayNum - 1] && list[dayNum - 1].counts[grp] !== undefined) {
+          list[dayNum - 1].counts[grp] += 1;
         }
       }
     });
@@ -555,28 +574,36 @@ function IncidentTrendsCard({
 
         {/* Legend with colored dots and bold counts */}
         <div className="dashboard-chart-legend">
-          {seriesConfig.map((s) => {
-            const isHidden = hiddenSeries.has(s.key);
-            return (
-              <button
-                key={s.key}
-                type="button"
-                aria-pressed={!isHidden}
-                onClick={() => toggleSeries(s.key)}
-                className={`dashboard-legend-btn ${isHidden ? "is-hidden" : ""}`}
-              >
+          {isLoading
+            ? seriesConfig.map((s) => (
                 <span
-                  className="dashboard-legend-dot"
-                  style={{ backgroundColor: s.color }}
+                  key={s.key}
+                  className="ds-skeleton dashboard-skel-legend-pill"
                   aria-hidden="true"
                 />
-                <span className="dashboard-legend-label">{s.label}</span>
-                <strong className="dashboard-legend-count">
-                  {totalCounts[s.key] || 0}
-                </strong>
-              </button>
-            );
-          })}
+              ))
+            : seriesConfig.map((s) => {
+                const isHidden = hiddenSeries.has(s.key);
+                return (
+                  <button
+                    key={s.key}
+                    type="button"
+                    aria-pressed={!isHidden}
+                    onClick={() => toggleSeries(s.key)}
+                    className={`dashboard-legend-btn ${isHidden ? "is-hidden" : ""}`}
+                  >
+                    <span
+                      className="dashboard-legend-dot"
+                      style={{ backgroundColor: s.color }}
+                      aria-hidden="true"
+                    />
+                    <span className="dashboard-legend-label">{s.label}</span>
+                    <strong className="dashboard-legend-count">
+                      {totalCounts[s.key] || 0}
+                    </strong>
+                  </button>
+                );
+              })}
         </div>
       </div>
 
@@ -584,13 +611,14 @@ function IncidentTrendsCard({
       {isLoading ? (
         <div
           className="dashboard-chart-skeleton"
+          role="status"
           aria-busy="true"
           aria-label={`Loading ${title.toLowerCase()} chart`}
         >
-          <span className="dashboard-skel-line dashboard-chart-skeleton__line" />
-          <span className="dashboard-skel-line dashboard-chart-skeleton__line" />
-          <span className="dashboard-skel-line dashboard-chart-skeleton__line" />
-          <span className="dashboard-skel-line dashboard-chart-skeleton__line" />
+          <span className="ds-skeleton dashboard-skel-line dashboard-chart-skeleton__line" aria-hidden="true" />
+          <span className="ds-skeleton dashboard-skel-line dashboard-chart-skeleton__line" aria-hidden="true" />
+          <span className="ds-skeleton dashboard-skel-line dashboard-chart-skeleton__line" aria-hidden="true" />
+          <span className="ds-skeleton dashboard-skel-line dashboard-chart-skeleton__line" aria-hidden="true" />
         </div>
       ) : error ? (
         <div className="dashboard-card-state" role="alert">
@@ -839,17 +867,20 @@ function Dashboard() {
   const dashboardBasePath = isAdmin ? "/admin" : "/lgu";
 
   const refreshOptions = {
-    refetchInterval: 30000,
+    refetchInterval: 60000,
     refetchIntervalInBackground: false,
   };
 
-  const { stats, isLoading, isFetching, error, refetch: refetchSummary } = useDashboardSummary(isAdmin);
   const {
-    data: barangaysData,
-    isLoading: barangaysLoading,
-    error: barangaysError,
-    refetch: refetchBarangays,
-  } = useBarangays(refreshOptions);
+    stats,
+    barangays: barangaysData,
+    isLoading,
+    loading: summaryLoading,
+    error,
+    refetch: refetchSummary,
+  } = useDashboardSummary(isAdmin);
+  const barangaysLoading = Boolean(summaryLoading?.barangays);
+  const barangaysError = error;
   const {
     data: hazardReportsData,
     isLoading: hazardLoading,
@@ -881,7 +912,8 @@ function Dashboard() {
     trendYearMonth.year === currentTrendYear && trendYearMonth.month === currentTrendMonth;
 
   const trendMonthLabel = useMemo(() => {
-    return new Date(trendYearMonth.year, trendYearMonth.month, 1).toLocaleDateString("en-US", {
+    const monthPadded = String(trendYearMonth.month + 1).padStart(2, "0");
+    return formatManilaDate(`${trendYearMonth.year}-${monthPadded}-01`, {
       month: "short",
       year: "numeric",
     });
@@ -915,66 +947,18 @@ function Dashboard() {
     });
   }, []);
 
-  const { data: familiesData } = useQuery({
-    queryKey: queryKeys.dashboardFamilies,
-    queryFn: () => api.getFamilies({ all: "true" }),
-    ...refreshOptions,
-  });
-
-  const demographicsByBarangay = useMemo(() => {
-    const map = new Map();
-    const families = Array.isArray(familiesData?.items) ? familiesData.items : [];
-
-    families.forEach((fam) => {
-      const bKey = String(fam.barangay_id ?? fam.barangay ?? "").toLowerCase();
-      const bNameKey = String(fam.barangay || "").toLowerCase();
-
-      const updateData = (entry) => {
-        entry.households += 1;
-        const members = Array.isArray(fam.members) ? fam.members : [];
-        entry.residents += members.length || Number(fam.member_count || 1);
-
-        members.forEach((m) => {
-          if (m.is_pwd) entry.pwd += 1;
-          if (m.is_pregnant) entry.pregnant += 1;
-          const age = Number(m.age ?? m.computed_age);
-          if (Number.isFinite(age) && age >= 60) entry.senior += 1;
-          if (m.is_solo_parent) entry.soloParent += 1;
-          if (m.needs_assistance) entry.needsAssistance += 1;
-        });
-      };
-
-      if (bKey) {
-        if (!map.has(bKey)) {
-          map.set(bKey, { households: 0, residents: 0, pwd: 0, pregnant: 0, senior: 0, soloParent: 0, needsAssistance: 0 });
-        }
-        updateData(map.get(bKey));
-      }
-      if (bNameKey && bNameKey !== bKey) {
-        if (!map.has(bNameKey)) {
-          map.set(bNameKey, { households: 0, residents: 0, pwd: 0, pregnant: 0, senior: 0, soloParent: 0, needsAssistance: 0 });
-        }
-        updateData(map.get(bNameKey));
-      }
-    });
-
-    return map;
-  }, [familiesData]);
-
   const getBarangayDemographics = useCallback((b) => {
-    const fromMap =
-      demographicsByBarangay.get(String(b.id).toLowerCase()) ||
-      demographicsByBarangay.get(String(b.name || "").toLowerCase());
+    const demo = b?.demographics || null;
     return {
-      households: fromMap?.households ?? Number(b.household_count ?? b.family_count ?? 0),
-      residents: fromMap?.residents ?? Number(b.resident_count ?? b.population ?? 0),
-      pwd: fromMap?.pwd ?? 0,
-      pregnant: fromMap?.pregnant ?? 0,
-      senior: fromMap?.senior ?? 0,
-      soloParent: fromMap?.soloParent ?? 0,
-      needsAssistance: fromMap?.needsAssistance ?? 0,
+      households: demo?.households ?? Number(b.household_count ?? b.family_count ?? 0),
+      residents: demo?.residents ?? Number(b.resident_count ?? b.population ?? 0),
+      pwd: demo?.pwd ?? 0,
+      pregnant: demo?.pregnant ?? 0,
+      senior: demo?.senior ?? 0,
+      soloParent: demo?.soloParent ?? 0,
+      needsAssistance: demo?.needsAssistance ?? 0,
     };
-  }, [demographicsByBarangay]);
+  }, []);
 
   const handleOpenPopover = useCallback((barangay, element) => {
     if (!element) return;
@@ -1089,7 +1073,6 @@ function Dashboard() {
     try {
       await Promise.all([
         refetchSummary(),
-        refetchBarangays(),
         refetchHazardReports(),
         refetchRescueRequests(),
       ]);
@@ -1134,7 +1117,7 @@ function Dashboard() {
   }
 
   const todayFormatted = useMemo(() => {
-    return new Date().toLocaleDateString("en-US", {
+    return formatManilaDate(new Date(), {
       weekday: "long",
       year: "numeric",
       month: "short",
@@ -1167,8 +1150,11 @@ function Dashboard() {
   }, [hazardReportsData]);
 
   const openRescueCount = useMemo(() => {
-    return rescueList.filter((r) => r.status !== "resolved").length;
-  }, [rescueList]);
+    if (typeof stats?.openRescues === "number") {
+      return stats.openRescues;
+    }
+    return countOpenRescueRequests(rescueList);
+  }, [stats?.openRescues, rescueList]);
 
   const pendingHazardCount = useMemo(() => {
     return hazardList.filter((h) => h.status === "pending").length;
@@ -1243,6 +1229,19 @@ function Dashboard() {
       ? allBarangays.filter((barangay) => String(barangay.name || "").toLocaleLowerCase().includes(query))
       : allBarangays;
   }, [allBarangays, barangaySearch]);
+
+  const isArrivalLoading = Boolean(
+    (isLoading && !stats) || summaryLoading?.families || summaryLoading?.checkIn
+  );
+  const isAlertsLoading = Boolean(
+    (hazardLoading && hazardList.length === 0) || (rescueLoading && rescueList.length === 0)
+  );
+  const isCapacityLoading = Boolean(
+    (isLoading && !stats) || summaryLoading?.centers
+  );
+  const isBarangaysCardLoading = Boolean(
+    (barangaysLoading || summaryLoading?.barangays) && allBarangays.length === 0
+  );
 
   return (
     <div className="dashboard-layout">
@@ -1336,7 +1335,7 @@ function Dashboard() {
               >
                 <RefreshCw
                   size={16}
-                  className={isRefreshing || isFetching ? "dashboard-spin" : ""}
+                  className={isRefreshing ? "dashboard-spin" : ""}
                   aria-hidden="true"
                 />
               </Button>
@@ -1389,13 +1388,18 @@ function Dashboard() {
               title="Evacuee & shelter arrival status"
             />
 
-            {isLoading && !stats ? (
-              <div className="dashboard-arrival-skeleton" aria-busy="true" aria-label="Loading arrival status">
-                <div className="dashboard-skel-line dashboard-skel-line--wide" />
-                <div className="dashboard-skel-bar" />
-                <div className="dashboard-arrival-ends">
-                  <div className="dashboard-skel-line dashboard-skel-line--sm" />
-                  <div className="dashboard-skel-line dashboard-skel-line--sm" />
+            {isArrivalLoading ? (
+              <div
+                className="dashboard-arrival-skeleton"
+                role="status"
+                aria-busy="true"
+                aria-label="Loading arrival status"
+              >
+                <span className="ds-skeleton dashboard-skel-line dashboard-skel-line--wide" aria-hidden="true" />
+                <span className="ds-skeleton dashboard-skel-bar" aria-hidden="true" />
+                <div className="dashboard-arrival-ends" aria-hidden="true">
+                  <span className="ds-skeleton dashboard-skel-line dashboard-skel-line--sm" />
+                  <span className="ds-skeleton dashboard-skel-line dashboard-skel-line--sm" />
                 </div>
               </div>
             ) : error && !stats ? (
@@ -1440,23 +1444,7 @@ function Dashboard() {
 
           {/* 3. EXECUTIVE KPI METRICS (4 Link StatCards) */}
           <section className="dashboard-kpi-grid" aria-label="Operational summary metrics">
-            {isLoading && !stats ? (
-              [0, 1, 2, 3].map((slot) => (
-                <div
-                  key={slot}
-                  className="dashboard-stat-skeleton"
-                  aria-busy="true"
-                  aria-hidden="true"
-                >
-                  <div className="dashboard-stat-skeleton__top">
-                    <span className="dashboard-stat-skeleton__icon" />
-                    <span className="dashboard-stat-skeleton__label" />
-                  </div>
-                  <span className="dashboard-stat-skeleton__value" />
-                  <span className="dashboard-stat-skeleton__footer" />
-                </div>
-              ))
-            ) : error && !stats ? (
+            {error && !stats && !isLoading ? (
               <div className="dashboard-surface-card dashboard-kpi-error" role="alert">
                 <div className="dashboard-card-state">
                   <AlertTriangle size={18} className="dashboard-card-state__icon--danger" aria-hidden="true" />
@@ -1470,49 +1458,65 @@ function Dashboard() {
               </div>
             ) : (
               <>
-                <StatCard
-                  to={`${dashboardBasePath}?tab=rescue`}
-                  tint="danger"
-                  icon={LifeBuoy}
-                  label="Emergency alerts"
-                  value={formatCount(openRescueCount + pendingHazardCount)}
-                  footer={`${openRescueCount} rescues · ${pendingHazardCount} hazards${
-                    openRescueCount > 0
-                      ? " · Needs Rescue"
-                      : pendingHazardCount > 0
-                        ? " · Needs Review"
-                        : " · All Clear"
-                  }`}
-                />
+                {isAlertsLoading ? (
+                  <DashboardStatSkeleton label="emergency alerts" />
+                ) : (
+                  <StatCard
+                    to={`${dashboardBasePath}?tab=rescue`}
+                    tint="danger"
+                    icon={LifeBuoy}
+                    label="Emergency alerts"
+                    value={formatCount(openRescueCount + pendingHazardCount)}
+                    footer={`${openRescueCount} rescues · ${pendingHazardCount} hazards${
+                      openRescueCount > 0
+                        ? " · Needs Rescue"
+                        : pendingHazardCount > 0
+                          ? " · Needs Review"
+                          : " · All Clear"
+                    }`}
+                  />
+                )}
 
-                <StatCard
-                  to={`${dashboardBasePath}?tab=checkin`}
-                  tint="warn"
-                  icon={Clock}
-                  label="Pending arrival"
-                  value={formatCount(pendingArrivalFamilies)}
-                  footer={`${formatCount(pendingResidents)} residents${
-                    pendingArrivalFamilies > 0 ? " · Awaiting Intake" : " · None Pending"
-                  }`}
-                />
+                {isArrivalLoading ? (
+                  <DashboardStatSkeleton label="pending arrivals" />
+                ) : (
+                  <StatCard
+                    to={`${dashboardBasePath}?tab=checkin`}
+                    tint="warn"
+                    icon={Clock}
+                    label="Pending arrival"
+                    value={formatCount(pendingArrivalFamilies)}
+                    footer={`${formatCount(pendingResidents)} residents${
+                      pendingArrivalFamilies > 0 ? " · Awaiting Intake" : " · None Pending"
+                    }`}
+                  />
+                )}
 
-                <StatCard
-                  to={`${dashboardBasePath}?tab=checkin`}
-                  tint="success"
-                  icon={UserCheck}
-                  label="Families arrived"
-                  value={formatCount(totalArrivedFamilies)}
-                  footer={`${formatCount(arrivedResidents)} residents on-site · ${familyArrivalRate}% arrived`}
-                />
+                {isArrivalLoading ? (
+                  <DashboardStatSkeleton label="arrived families" />
+                ) : (
+                  <StatCard
+                    to={`${dashboardBasePath}?tab=checkin`}
+                    tint="success"
+                    icon={UserCheck}
+                    label="Families arrived"
+                    value={formatCount(totalArrivedFamilies)}
+                    footer={`${formatCount(arrivedResidents)} residents on-site · ${familyArrivalRate}% arrived`}
+                  />
+                )}
 
-                <StatCard
-                  to={`${dashboardBasePath}?tab=centers`}
-                  tint="success"
-                  icon={DoorOpen}
-                  label="Available headroom"
-                  value={formatCount(totalRemainingCapacity)}
-                  footer={`of ${formatCount(totalCapacity)} capacity · ${remainingPercent}% free`}
-                />
+                {isCapacityLoading ? (
+                  <DashboardStatSkeleton label="available headroom" />
+                ) : (
+                  <StatCard
+                    to={`${dashboardBasePath}?tab=centers`}
+                    tint="success"
+                    icon={DoorOpen}
+                    label="Available headroom"
+                    value={formatCount(totalRemainingCapacity)}
+                    footer={`of ${formatCount(totalCapacity)} capacity · ${remainingPercent}% free`}
+                  />
+                )}
               </>
             )}
           </section>
@@ -1521,7 +1525,7 @@ function Dashboard() {
           <CenterArrivalList
             centers={centersProcessed}
             basePath={dashboardBasePath}
-            isLoading={isLoading && !stats}
+            isLoading={isCapacityLoading}
             error={error && !stats ? error : null}
             onRetry={handleRefreshAll}
           />
@@ -1616,19 +1620,20 @@ function Dashboard() {
               }
             />
 
-            {(barangaysLoading || isLoading) && allBarangays.length === 0 ? (
+            {isBarangaysCardLoading ? (
               <div
                 className="dashboard-demographics-grid"
+                role="status"
                 aria-busy="true"
                 aria-label="Loading barangay demographics"
               >
                 {[0, 1, 2, 3, 4, 5].map((slot) => (
                   <div key={slot} className="dashboard-demographic-skeleton" aria-hidden="true">
                     <div className="dashboard-demographic-skeleton__top">
-                      <span className="dashboard-skel-line dashboard-skel-line--mid" />
-                      <span className="dashboard-skel-line dashboard-skel-line--xs" />
+                      <span className="ds-skeleton dashboard-skel-line dashboard-skel-line--mid" />
+                      <span className="ds-skeleton dashboard-skel-line dashboard-skel-line--xs" />
                     </div>
-                    <span className="dashboard-skel-bar dashboard-skel-bar--sm" />
+                    <span className="ds-skeleton dashboard-skel-bar dashboard-skel-bar--sm" />
                   </div>
                 ))}
               </div>

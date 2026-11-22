@@ -16,6 +16,7 @@ import {
   Download,
   ImageOff,
   Layers,
+  Link2,
   MapPin,
   Maximize2,
   Mountain,
@@ -28,6 +29,7 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import { api, BASE_URL } from "../../services/api";
 import { queryKeys, useHazardReports, useRoadSegments } from "../../hooks/useEvacuationQueries";
+import { formatManilaDateTime, parseTimestamp } from "../../utils/dateTime";
 import { Button, StatCard, StatusPill } from "../ui";
 import "./HazardReportReview.css";
 
@@ -41,13 +43,30 @@ const HAZARD_TYPE_FILTERS = [
   { key: "other", label: "Other" },
 ];
 
+const ROAD_CLOSURE_RECHECK_HOURS = 24;
+
 const CANNED_RESPONSES = [
   "Verified by Barangay Tanod",
   "MDRRMO / DPWH clearing crew dispatched",
-  "Duplicate report — linked to existing incident",
   "Hazard cleared — road safely reopened",
   "Inaccurate location / unverifiable photo",
 ];
+
+function doesReportNeedRecheck(report) {
+  if (!report) return false;
+  if (typeof report.needs_recheck === "boolean") {
+    return report.needs_recheck;
+  }
+  if (String(report.status || "").toLowerCase() !== "validated" || !report.blocks_road) {
+    return false;
+  }
+  const sinceRaw = report.validated_at || report.submitted_at;
+  if (!sinceRaw) return false;
+  const since = parseTimestamp(sinceRaw);
+  if (!since) return false;
+  const thresholdHours = Number(report.recheck_threshold_hours) || ROAD_CLOSURE_RECHECK_HOURS;
+  return Date.now() - since.getTime() >= thresholdHours * 60 * 60 * 1000;
+}
 
 const STATUS_META = {
   pending: { label: "Pending", color: "#2563eb", bg: "rgba(37, 99, 235, 0.1)" },
@@ -98,7 +117,8 @@ function reportPhotoUrl(path) {
 
 function formatRelativeTime(dateString) {
   if (!dateString) return "Recently";
-  const date = new Date(dateString);
+  const date = parseTimestamp(dateString);
+  if (!date) return "Recently";
   const now = new Date();
   const diffInMinutes = Math.floor((now - date) / (1000 * 60));
   if (diffInMinutes < 1) return "Just now";
@@ -123,11 +143,32 @@ function distanceInMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-function getReportStreetOrPlace(report, roadSegmentsData) {
-  if (report?.street) return report.street;
-  if (report?.place_name) return report.place_name;
-  if (report?.address?.street) return report.address.street;
-  if (report?.location_name) return report.location_name;
+function isUnnamedRoadName(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return true;
+  return /^unnamed\b/i.test(trimmed);
+}
+
+function getReportBarangay(report, resolvedBarangaysById) {
+  const stored = String(report?.barangay_name || "").trim();
+  if (stored) return stored;
+  const resolved = String(resolvedBarangaysById?.[report?.id] || "").trim();
+  if (resolved) return resolved;
+  return "";
+}
+
+function getReportStreetOrPlace(report, roadSegmentsData, barangayName = "") {
+  const explicitCandidates = [
+    report?.street,
+    report?.place_name,
+    report?.address?.street,
+    report?.location_name,
+  ];
+  for (const candidate of explicitCandidates) {
+    if (!isUnnamedRoadName(candidate)) {
+      return String(candidate).trim();
+    }
+  }
 
   const lat = Number(report?.latitude);
   const lng = Number(report?.longitude);
@@ -139,14 +180,14 @@ function getReportStreetOrPlace(report, roadSegmentsData) {
       const coords = feat.geometry?.coordinates;
       if (!coords) continue;
       const roadName = feat.properties?.road_name || feat.properties?.name;
-      if (!roadName) continue;
+      if (isUnnamedRoadName(roadName)) continue;
       const lines = feat.geometry.type === "MultiLineString" ? coords : [coords];
       for (const line of lines) {
         for (const [pLng, pLat] of line) {
           const d = distanceInMeters(lat, lng, pLat, pLng);
           if (d < minDistance) {
             minDistance = d;
-            closestName = roadName;
+            closestName = String(roadName).trim();
           }
         }
       }
@@ -154,21 +195,13 @@ function getReportStreetOrPlace(report, roadSegmentsData) {
     if (closestName) return closestName;
   }
 
+  const cleanBarangay = String(barangayName || report?.barangay_name || "").trim();
+  if (cleanBarangay) return cleanBarangay;
+
   if (Number.isFinite(lat) && Number.isFinite(lng)) {
     return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
   }
   return "Incident Location";
-}
-
-function getReportBarangay(report, resolvedBarangay) {
-  if (resolvedBarangay) return resolvedBarangay;
-  return (
-    report?.barangay_name ||
-    report?.barangay ||
-    report?.location?.barangay ||
-    report?.address?.barangay ||
-    "Barangay Poblacion"
-  );
 }
 
 function getReportReporter(report, currentUserRole) {
@@ -215,10 +248,25 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
   const [activePhotoIdx, setActivePhotoIdx] = useState(0);
   const [failedImages, setFailedImages] = useState({});
   const [responseNotes, setResponseNotes] = useState("");
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [rejectDuplicateOf, setRejectDuplicateOf] = useState("");
+  const [duplicateOfInput, setDuplicateOfInput] = useState("");
+  const [savingDuplicate, setSavingDuplicate] = useState(false);
+  const [submittingAction, setSubmittingAction] = useState(false);
   const [lightbox, setLightbox] = useState(false);
   const [reopening, setReopening] = useState(false);
-  const [barangayName, setBarangayName] = useState("");
-  const [barangayLoading, setBarangayLoading] = useState(false);
+  const [resolvedBarangaysById, setResolvedBarangaysById] = useState({});
+  const [resolvingBarangayIds, setResolvingBarangayIds] = useState({});
+  const attemptedBarangayLookupIdsRef = useRef(new Set());
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const touchStartXRef = useRef(null);
 
@@ -303,8 +351,17 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
   useEffect(() => {
     if (!selected) return;
     const fresh = reports.find((r) => r.id === selected.id);
-    if (fresh && (fresh.status !== selected.status || fresh.response_notes !== selected.response_notes)) {
+    if (
+      fresh &&
+      (fresh.status !== selected.status ||
+        fresh.response_notes !== selected.response_notes ||
+        fresh.rejection_reason !== selected.rejection_reason ||
+        fresh.duplicate_of !== selected.duplicate_of ||
+        fresh.needs_recheck !== selected.needs_recheck ||
+        fresh.barangay_name !== selected.barangay_name)
+    ) {
       setSelected(fresh);
+      setDuplicateOfInput(fresh.duplicate_of ? String(fresh.duplicate_of) : "");
     }
   }, [reports, selected]);
 
@@ -315,68 +372,6 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
       .catch(() => {});
   }, [selected?.id, queryClient]);
-
-  // Resolve barangay for selected report
-  useEffect(() => {
-    if (!selected) {
-      setBarangayName("");
-      setBarangayLoading(false);
-      return undefined;
-    }
-
-    const knownBarangay =
-      selected.barangay_name ||
-      selected.barangay ||
-      selected.location?.barangay ||
-      selected.address?.barangay;
-
-    if (knownBarangay) {
-      setBarangayName(knownBarangay);
-      setBarangayLoading(false);
-      return undefined;
-    }
-
-    const lat = Number(selected.latitude);
-    const lng = Number(selected.longitude);
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !token) {
-      setBarangayName("");
-      setBarangayLoading(false);
-      return undefined;
-    }
-
-    let cancelled = false;
-    setBarangayLoading(true);
-
-    const url =
-      `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lng}` +
-      `&latitude=${lat}&types=locality,neighborhood,place&access_token=${encodeURIComponent(token)}`;
-
-    fetch(url)
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data) => {
-        if (cancelled) return;
-        const properties = data.features?.[0]?.properties;
-        const context = properties?.context || {};
-        const resolved =
-          context.neighborhood?.name ||
-          context.locality?.name ||
-          context.place?.name ||
-          properties?.name ||
-          "";
-        setBarangayName(resolved);
-      })
-      .catch(() => {
-        if (!cancelled) setBarangayName("");
-      })
-      .finally(() => {
-        if (!cancelled) setBarangayLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selected]);
 
   // Multi-photo normalized list for selected report
   const selectedPhotos = useMemo(() => {
@@ -645,10 +640,18 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     setActivePhotoIdx(0);
     setFailedImages({});
     setResponseNotes(report.response_notes || "");
+    setShowRejectForm(false);
+    setRejectionReason("");
+    setRejectDuplicateOf("");
+    setDuplicateOfInput(report.duplicate_of ? String(report.duplicate_of) : "");
   }
 
   function closeDrawer() {
     setLightbox(false);
+    setShowRejectForm(false);
+    setRejectionReason("");
+    setRejectDuplicateOf("");
+    setDuplicateOfInput("");
     setSelected(null);
     setTimeout(() => {
       lastActiveRowRef.current?.focus();
@@ -672,7 +675,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       params.set("hazard", selected.id);
 
       const hType = selected.report_type || selected.hazard_type || selected.type || "";
-      const bName = barangayName || selected.barangay_name || selected.barangay || "";
+      const bName = getReportBarangay(selected, resolvedBarangaysById);
       if (hType) params.set("type", hType);
       if (bName) params.set("barangay", bName);
       if (selected.status) params.set("status", String(selected.status).toLowerCase());
@@ -691,12 +694,35 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     }
   }
 
-  async function handleValidate(status) {
+  async function handleValidate(status, reasonArg, duplicateOfArg) {
     if (!selected) return;
+    const trimmedReason =
+      status === "rejected" ? String(reasonArg ?? rejectionReason).trim() : undefined;
+    if (status === "rejected" && !trimmedReason) {
+      alert("Please enter a reason before rejecting this incident.");
+      return;
+    }
+
+    const parsedDuplicateOf =
+      status === "rejected" && duplicateOfArg
+        ? Number(duplicateOfArg)
+        : undefined;
+
+    setSubmittingAction(true);
     try {
-      const result = await api.validateHazardReport(selected.id, status, responseNotes);
+      const result = await api.validateHazardReport(
+        selected.id,
+        status,
+        responseNotes,
+        trimmedReason,
+        parsedDuplicateOf
+      );
       setSelected(result);
       setResponseNotes(result.response_notes || "");
+      setDuplicateOfInput(result.duplicate_of ? String(result.duplicate_of) : "");
+      setShowRejectForm(false);
+      setRejectionReason("");
+      setRejectDuplicateOf("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["hazard-reports"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.roadSegments }),
@@ -707,16 +733,45 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       }
     } catch (err) {
       alert(`Failed to update report: ${err.message}`);
+    } finally {
+      setSubmittingAction(false);
     }
+  }
+
+  async function handleSaveDuplicateLink() {
+    if (!selected) return;
+    const nextValue = duplicateOfInput ? Number(duplicateOfInput) : null;
+    setSavingDuplicate(true);
+    try {
+      const result = await api.setHazardReportDuplicate(selected.id, nextValue);
+      setSelected(result);
+      setDuplicateOfInput(result.duplicate_of ? String(result.duplicate_of) : "");
+      await queryClient.invalidateQueries({ queryKey: ["hazard-reports"] });
+    } catch (err) {
+      alert(`Failed to update duplicate link: ${err.message}`);
+    } finally {
+      setSavingDuplicate(false);
+    }
+  }
+
+  function openLinkedIncident(targetId) {
+    const target = reports.find((item) => item.id === Number(targetId));
+    if (target) {
+      openReport(target);
+    } else {
+      alert(`Incident #${targetId} is no longer in the list.`);
+    }
+  }
+
+  function handleOpenRejectForm() {
+    if (!selected || String(selected.status || "pending").toLowerCase() !== "pending") return;
+    setShowRejectForm((prev) => !prev);
   }
 
   async function handleResolve() {
     if (!selected) return;
-    if (selected.status === "validated") {
-      await handleReopenRoad();
-    } else {
-      await handleValidate("resolved");
-    }
+    if (String(selected.status || "pending").toLowerCase() !== "validated") return;
+    await handleReopenRoad();
   }
 
   async function handleReopenRoad() {
@@ -822,8 +877,10 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
+        const barangay = getReportBarangay(r, resolvedBarangaysById);
         const matchesId = String(r.id).includes(q);
-        const matchesStreet = getReportStreetOrPlace(r, roadSegmentsData).toLowerCase().includes(q);
+        const matchesStreet = getReportStreetOrPlace(r, roadSegmentsData, barangay).toLowerCase().includes(q);
+        const matchesBarangay = barangay.toLowerCase().includes(q);
         const matchesReporter = getReportReporter(r, user?.role).text.toLowerCase().includes(q);
         const matchesType = String(r.report_type || "").toLowerCase().includes(q);
         const matchesDesc = String(r.description || "").toLowerCase().includes(q);
@@ -832,6 +889,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
         if (
           !matchesId &&
           !matchesStreet &&
+          !matchesBarangay &&
           !matchesReporter &&
           !matchesType &&
           !matchesDesc &&
@@ -843,7 +901,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       }
       return true;
     });
-  }, [reports, statusFilter, typeFilter, searchQuery, roadSegmentsData, user?.role]);
+  }, [reports, statusFilter, typeFilter, searchQuery, roadSegmentsData, resolvedBarangaysById, user?.role]);
 
   const totalFiltered = filteredReports.length;
   const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
@@ -854,14 +912,94 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     return filteredReports.slice(start, start + pageSize);
   }, [filteredReports, safePage, pageSize]);
 
+  // Legacy fallback ONLY for older reports saved before backend barangay_name existed.
+  // Scoped to the visible page + selected incident; uses isMountedRef so clicking a row
+  // mid-fetch never cancels the update or leaves "Resolving..." stuck.
+  useEffect(() => {
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (!token) return;
+
+    const candidates = selected ? [selected, ...paginatedReports] : paginatedReports;
+    const seen = new Set();
+    const toResolve = [];
+    for (const r of candidates) {
+      if (!r?.id || seen.has(r.id)) continue;
+      seen.add(r.id);
+      if (String(r.barangay_name || "").trim()) continue;
+      if (attemptedBarangayLookupIdsRef.current.has(r.id)) continue;
+      if (!Number.isFinite(Number(r.latitude)) || !Number.isFinite(Number(r.longitude))) continue;
+      toResolve.push(r);
+    }
+
+    if (toResolve.length === 0) return;
+
+    toResolve.forEach((r) => attemptedBarangayLookupIdsRef.current.add(r.id));
+    setResolvingBarangayIds((prev) => {
+      const next = { ...prev };
+      toResolve.forEach((r) => {
+        next[r.id] = true;
+      });
+      return next;
+    });
+
+    toResolve.forEach((r) => {
+      const lat = Number(r.latitude);
+      const lng = Number(r.longitude);
+      const url =
+        `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lng}` +
+        `&latitude=${lat}&types=locality,neighborhood,place&access_token=${encodeURIComponent(token)}`;
+
+      fetch(url)
+        .then((res) => (res.ok ? res.json() : Promise.reject()))
+        .then((data) => {
+          if (!isMountedRef.current) return;
+          const properties = data.features?.[0]?.properties;
+          const context = properties?.context || {};
+          const resolved =
+            context.neighborhood?.name ||
+            context.locality?.name ||
+            context.place?.name ||
+            properties?.name ||
+            "";
+          if (resolved) {
+            setResolvedBarangaysById((prev) => ({ ...prev, [r.id]: resolved }));
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (isMountedRef.current) {
+            setResolvingBarangayIds((prev) => {
+              const next = { ...prev };
+              delete next[r.id];
+              return next;
+            });
+          }
+        });
+    });
+  }, [paginatedReports, selected]);
+
+  const selectedStatus = String(selected?.status || "pending").toLowerCase();
+  const canValidate = selectedStatus === "pending";
+  const canReject = selectedStatus === "pending";
+  const canResolve = selectedStatus === "validated";
+  const selectedNeedsRecheck = doesReportNeedRecheck(selected);
+  const candidateOriginalReports = useMemo(
+    () => (selected ? reports.filter((r) => r.id !== selected.id) : []),
+    [reports, selected]
+  );
+
   const drawerActionButtons = selected ? (
     <>
       <Button
         variant="primary"
         className="hr-modal-action-btn"
         onClick={() => handleValidate("validated")}
-        disabled={selected.status === "validated"}
-        title="Validate hazard report"
+        disabled={!canValidate || submittingAction || reopening}
+        title={
+          canValidate
+            ? "Validate hazard report"
+            : "Only pending incidents can be validated"
+        }
       >
         <Check size={16} strokeWidth={2} aria-hidden="true" />
         <span>Validate</span>
@@ -870,9 +1008,13 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       <Button
         variant="danger-outline"
         className="hr-modal-action-btn hr-modal-action-reject"
-        onClick={() => handleValidate("rejected")}
-        disabled={selected.status === "rejected"}
-        title="Reject report as invalid"
+        onClick={handleOpenRejectForm}
+        disabled={!canReject || submittingAction || reopening}
+        title={
+          canReject
+            ? "Reject report as invalid (reason required)"
+            : "Only pending incidents can be rejected"
+        }
       >
         <X size={16} strokeWidth={2} aria-hidden="true" />
         <span>Reject</span>
@@ -882,8 +1024,12 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
         variant="secondary"
         className="hr-modal-action-btn"
         onClick={handleResolve}
-        disabled={selected.status === "resolved" || reopening}
-        title="Mark incident resolved"
+        disabled={!canResolve || submittingAction || reopening}
+        title={
+          canResolve
+            ? "Mark incident resolved"
+            : "Only validated incidents can be resolved"
+        }
       >
         <CheckCircle2 size={16} strokeWidth={2} aria-hidden="true" />
         <span>{reopening ? "Reopening…" : "Resolve"}</span>
@@ -1107,8 +1253,8 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
                 <div className="hr-table-rows" role="list">
                   {paginatedReports.map((r) => {
                     const isSelected = selected?.id === r.id;
-                    const streetOrPlace = getReportStreetOrPlace(r, roadSegmentsData);
-                    const barangay = getReportBarangay(r, isSelected ? barangayName : null);
+                    const barangay = getReportBarangay(r, resolvedBarangaysById);
+                    const streetOrPlace = getReportStreetOrPlace(r, roadSegmentsData, barangay);
                     const reporter = getReportReporter(r, user?.role);
                     const photoCount =
                       Array.isArray(r.photos) && r.photos.length > 0
@@ -1150,7 +1296,25 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
                               <span className="hr-incident-id">#{r.id}</span>
                             </span>
                             <span className="hr-incident-bottom">
-                              <span className="hr-brgy-chip">{barangay}</span>
+                              <span className="hr-brgy-chip">{barangay || "Unknown barangay"}</span>
+                              {doesReportNeedRecheck(r) && (
+                                <span
+                                  className="hr-recheck-chip"
+                                  title={`Road closed for ${r.recheck_threshold_hours || ROAD_CLOSURE_RECHECK_HOURS}+ hours — needs re-check`}
+                                >
+                                  <AlertTriangle size={12} strokeWidth={2} aria-hidden="true" />
+                                  <span>Needs re-check</span>
+                                </span>
+                              )}
+                              {r.duplicate_of && (
+                                <span
+                                  className="hr-duplicate-chip"
+                                  title={`Marked as duplicate of Incident #${r.duplicate_of}`}
+                                >
+                                  <Link2 size={12} strokeWidth={2} aria-hidden="true" />
+                                  <span>Duplicate of #{r.duplicate_of}</span>
+                                </span>
+                              )}
                               {photoCount > 1 && (
                                 <span
                                   className="hr-photo-chip"
@@ -1273,6 +1437,15 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
                   <h2 id="hr-incident-modal-title" className="hr-modal-title">
                     Incident #{selected.id}
                   </h2>
+                  {selectedNeedsRecheck && (
+                    <span
+                      className="hr-recheck-chip is-modal"
+                      title={`Road has been closed for ${selected.recheck_threshold_hours || ROAD_CLOSURE_RECHECK_HOURS}+ hours — re-check if still blocked`}
+                    >
+                      <AlertTriangle size={13} strokeWidth={2} aria-hidden="true" />
+                      <span>Needs re-check</span>
+                    </span>
+                  )}
                 </div>
 
                 <button
@@ -1290,6 +1463,67 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
               <div className="hr-modal-action-bar">
                 {drawerActionButtons}
               </div>
+
+              {showRejectForm && canReject && (
+                <div className="hr-reject-reason-box" role="region" aria-label="Rejection reason">
+                  <label className="hr-reject-reason-label" htmlFor="hr-reject-reason-input">
+                    Rejection reason <span className="hr-required-mark">*</span>
+                  </label>
+                  <textarea
+                    id="hr-reject-reason-input"
+                    className="hr-reject-reason-textarea"
+                    rows={2}
+                    value={rejectionReason}
+                    onChange={(e) => setRejectionReason(e.target.value)}
+                    placeholder="Explain why this incident report is being rejected…"
+                    disabled={submittingAction}
+                    required
+                  />
+                  <label className="hr-reject-duplicate-label" htmlFor="hr-reject-duplicate-select">
+                    Duplicate of existing incident (optional)
+                  </label>
+                  <select
+                    id="hr-reject-duplicate-select"
+                    className="hr-duplicate-select"
+                    value={rejectDuplicateOf}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setRejectDuplicateOf(val);
+                      if (val && !rejectionReason.trim()) {
+                        setRejectionReason(`Duplicate of Incident #${val}`);
+                      }
+                    }}
+                    disabled={submittingAction}
+                  >
+                    <option value="">None (not a duplicate)</option>
+                    {candidateOriginalReports.map((orig) => (
+                      <option key={orig.id} value={String(orig.id)}>
+                        #{orig.id} — {orig.report_type || "Hazard"} · {getReportStreetOrPlace(orig, roadSegmentsData, getReportBarangay(orig, resolvedBarangaysById))} ({statusMeta(orig.status).label})
+                      </option>
+                    ))}
+                  </select>
+                  <div className="hr-reject-reason-actions">
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setShowRejectForm(false);
+                        setRejectionReason("");
+                        setRejectDuplicateOf("");
+                      }}
+                      disabled={submittingAction}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="danger-outline"
+                      onClick={() => handleValidate("rejected", rejectionReason, rejectDuplicateOf)}
+                      disabled={!rejectionReason.trim() || submittingAction}
+                    >
+                      {submittingAction ? "Rejecting…" : "Confirm Reject"}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* SCROLLABLE MODAL BODY */}
@@ -1504,6 +1738,55 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
                       />
                     </div>
                   </section>
+
+                  {/* DUPLICATE INCIDENT LINK */}
+                  <section className="hr-modal-section" aria-label="Duplicate incident link">
+                    <h3 className="hr-section-label">
+                      <Link2 size={14} aria-hidden="true" />
+                      <span>Duplicate incident link</span>
+                    </h3>
+                    <div className="hr-duplicate-card">
+                      {selected.duplicate_of && (
+                        <div className="hr-duplicate-current">
+                          <span>Linked as duplicate of</span>
+                          <button
+                            type="button"
+                            className="hr-duplicate-link-btn"
+                            onClick={() => openLinkedIncident(selected.duplicate_of)}
+                          >
+                            <Link2 size={13} aria-hidden="true" />
+                            <span>Incident #{selected.duplicate_of}</span>
+                          </button>
+                        </div>
+                      )}
+                      <div className="hr-duplicate-controls">
+                        <select
+                          aria-label="Link as duplicate of existing incident"
+                          className="hr-duplicate-select"
+                          value={duplicateOfInput}
+                          onChange={(e) => setDuplicateOfInput(e.target.value)}
+                          disabled={savingDuplicate}
+                        >
+                          <option value="">Not linked to another incident</option>
+                          {candidateOriginalReports.map((orig) => (
+                            <option key={orig.id} value={String(orig.id)}>
+                              #{orig.id} — {orig.report_type || "Hazard"} · {getReportStreetOrPlace(orig, roadSegmentsData, getReportBarangay(orig, resolvedBarangaysById))} ({statusMeta(orig.status).label})
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="secondary"
+                          onClick={handleSaveDuplicateLink}
+                          disabled={
+                            savingDuplicate ||
+                            String(selected.duplicate_of || "") === duplicateOfInput
+                          }
+                        >
+                          {savingDuplicate ? "Saving…" : "Save link"}
+                        </Button>
+                      </div>
+                    </div>
+                  </section>
                 </div>
 
                 {/* RIGHT COLUMN: LOCATION, VIEW ON MAP, MAP PREVIEW, AFFECTED STREETS, REPORTER & AUDIT */}
@@ -1518,13 +1801,18 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
                       <div className="hr-meta-row">
                         <dt className="hr-meta-term">Street / Place</dt>
                         <dd className="hr-meta-value is-strong">
-                          {getReportStreetOrPlace(selected, roadSegmentsData)}
+                          {getReportStreetOrPlace(
+                            selected,
+                            roadSegmentsData,
+                            getReportBarangay(selected, resolvedBarangaysById)
+                          )}
                         </dd>
                       </div>
                       <div className="hr-meta-row">
                         <dt className="hr-meta-term">Barangay</dt>
                         <dd className="hr-meta-value is-strong">
-                          {barangayLoading ? "Resolving..." : (barangayName || getReportBarangay(selected))}
+                          {getReportBarangay(selected, resolvedBarangaysById) ||
+                            (resolvingBarangayIds[selected.id] ? "Resolving..." : "Unknown barangay")}
                         </dd>
                       </div>
                       <div className="hr-meta-row">
@@ -1595,7 +1883,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
                         <dt className="hr-meta-term">Submitted</dt>
                         <dd className="hr-meta-value">
                           {selected.submitted_at
-                            ? new Date(selected.submitted_at).toLocaleString()
+                            ? formatManilaDateTime(selected.submitted_at, {}, "Unknown")
                             : "Unknown"}{" "}
                           ({formatRelativeTime(selected.submitted_at)})
                         </dd>
@@ -1621,7 +1909,30 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
                         <div className="hr-meta-row">
                           <dt className="hr-meta-term">Verified at</dt>
                           <dd className="hr-meta-value">
-                            {new Date(selected.validated_at).toLocaleString()}
+                            {formatManilaDateTime(selected.validated_at)}
+                          </dd>
+                        </div>
+                      )}
+                      {selected.rejection_reason && (
+                        <div className="hr-meta-row">
+                          <dt className="hr-meta-term">Rejection reason</dt>
+                          <dd className="hr-meta-value hr-rejection-reason-value">
+                            {selected.rejection_reason}
+                          </dd>
+                        </div>
+                      )}
+                      {selected.duplicate_of && (
+                        <div className="hr-meta-row">
+                          <dt className="hr-meta-term">Duplicate of</dt>
+                          <dd className="hr-meta-value">
+                            <button
+                              type="button"
+                              className="hr-duplicate-link-btn"
+                              onClick={() => openLinkedIncident(selected.duplicate_of)}
+                            >
+                              <Link2 size={13} aria-hidden="true" />
+                              <span>Incident #{selected.duplicate_of}</span>
+                            </button>
                           </dd>
                         </div>
                       )}

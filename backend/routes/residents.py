@@ -27,6 +27,7 @@ from models import (
     ResidentAccount,
     User,
     RosterYear,
+    philippines_now,
 )
 
 from utils import get_optional_caller, public_room_payload, role_required
@@ -973,7 +974,7 @@ def parse_birth_date(
 
     if (
         parsed is None
-        or parsed > date.today()
+        or parsed >= philippines_now().date()
         or parsed.year < 1900
     ):
 

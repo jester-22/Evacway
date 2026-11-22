@@ -516,6 +516,68 @@
   color: var(--muted);
 }
 
+.rq-status-pill-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rq-table-row.is-overdue {
+  background-color: var(--danger-bg);
+  box-shadow: inset 3px 0 0 var(--danger-fg);
+}
+
+.rq-table-row.is-overdue:hover {
+  background-color: var(--danger-bg);
+}
+
+.rq-row-icon-tile.is-overdue {
+  background-color: var(--danger-bg);
+  color: var(--danger-fg);
+  border: 1px solid var(--ew-danger-border);
+}
+
+.rq-overdue-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--ew-danger-border);
+  background-color: var(--danger-bg);
+  color: var(--danger-fg);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.rq-status-note.is-overdue {
+  color: var(--danger-fg);
+  font-weight: 600;
+}
+
+.rq-agency-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background-color: var(--neutral-soft);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
 /* CHEVRON column */
 .rq-chevron-cell {
   display: flex;
@@ -796,11 +858,87 @@
   box-sizing: border-box;
 }
 
-.rq-modal-duration-chip.is-urgent {
+.rq-modal-duration-chip.is-urgent,
+.rq-modal-duration-chip.is-overdue {
   border-color: var(--ew-danger-border);
   background-color: var(--danger-bg);
   color: var(--danger-fg);
   font-weight: 600;
+}
+
+.rq-handoff-card {
+  grid-column: 1 / -1;
+}
+
+.rq-handoff-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rq-handoff-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rq-handoff-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.rq-handoff-input,
+.rq-handoff-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--text-body);
+  line-height: 1.45;
+}
+
+.rq-handoff-textarea {
+  resize: vertical;
+  min-height: 76px;
+}
+
+.rq-handoff-input:focus-visible,
+.rq-handoff-textarea:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+
+.rq-handoff-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.rq-handoff-feedback {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rq-handoff-feedback.is-saved {
+  color: var(--success-fg);
+}
+
+.rq-handoff-feedback.is-error {
+  color: var(--danger-fg);
 }
 
 .rq-modal-title {

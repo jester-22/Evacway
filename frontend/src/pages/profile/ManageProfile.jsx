@@ -23,6 +23,7 @@ import { api } from "../../services/api";
 import { queryKeys } from "../../hooks/useEvacuationQueries";
 import { useQueryClient } from "@tanstack/react-query";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import { formatManilaDate } from "../../utils/dateTime";
 import Sidebar from "../../components/Sidebar/Sidebar";
 import "./ManageProfile.css";
 
@@ -308,15 +309,15 @@ export default function ManageProfile() {
 
   const memberSinceFormatted = useMemo(() => {
     if (!user?.created_at) return "Active member";
-    try {
-      return new Date(user.created_at).toLocaleDateString("en-US", {
+    return formatManilaDate(
+      user.created_at,
+      {
         year: "numeric",
         month: "long",
         day: "numeric",
-      });
-    } catch {
-      return "Active member";
-    }
+      },
+      "Active member"
+    );
   }, [user?.created_at]);
 
   const initials = useMemo(() => {

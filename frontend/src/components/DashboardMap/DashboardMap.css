@@ -1341,7 +1341,39 @@
   z-index: 400;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
+  padding: var(--space-1);
+  overflow: visible;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.dashboard-map__control-stack > .ui-map-control-btn {
+  width: var(--control-height-touch);
+  height: var(--control-height-touch);
+  min-width: var(--control-height-touch);
+  min-height: var(--control-height-touch);
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--text);
+}
+
+.dashboard-map__control-stack > .ui-map-control-btn:not(:first-child) {
+  border-top: 1px solid var(--divider);
+}
+
+.dashboard-map__control-stack > .ui-map-control-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--primary);
+}
+
+.dashboard-map__control-stack > .ui-map-control-btn.is-active,
+.dashboard-map__control-stack > .ui-map-control-btn[aria-pressed='true'] {
+  background: var(--primary-50);
+  color: var(--primary);
 }
 
 @keyframes dashboardMapCtrlSpin {
@@ -1358,7 +1390,7 @@
   .dashboard-map__control-stack {
     top: calc(var(--space-3) + env(safe-area-inset-top, 0px));
     right: calc(var(--space-3) + env(safe-area-inset-right, 0px));
-    gap: 10px;
+    gap: 0;
   }
 }
 

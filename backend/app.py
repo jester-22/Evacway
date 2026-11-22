@@ -25,6 +25,7 @@ from routes.resident_registrations import registrations_bp
 from routes.reference_options import reference_options_bp
 from routes.non_registered_evacuees import nre_bp
 from routes.offline_map import offline_map_bp
+from routes.dashboard import dashboard_bp
 
 
 app = Flask(__name__)
@@ -111,6 +112,36 @@ with app.app_context():
     except Exception as e:
         app.logger.warning("Could not ensure hazard_reports reporter columns: %s", e)
 
+    try:
+        from migrate_registration_override_log import ensure_registration_link_override_logs_table
+        ensure_registration_link_override_logs_table(db)
+    except Exception as e:
+        app.logger.warning("Could not ensure registration_link_override_logs table: %s", e)
+
+    try:
+        from migrate_rescue_handoff_notes import ensure_rescue_handoff_notes_columns
+        ensure_rescue_handoff_notes_columns(db)
+    except Exception as e:
+        app.logger.warning("Could not ensure rescue_requests handoff/notes columns: %s", e)
+
+    try:
+        from migrate_hazard_rejection_reason import ensure_hazard_report_rejection_reason_column
+        ensure_hazard_report_rejection_reason_column(db)
+    except Exception as e:
+        app.logger.warning("Could not ensure hazard_reports.rejection_reason: %s", e)
+
+    try:
+        from migrate_hazard_duplicate_of import ensure_hazard_report_duplicate_of_column
+        ensure_hazard_report_duplicate_of_column(db)
+    except Exception as e:
+        app.logger.warning("Could not ensure hazard_reports.duplicate_of: %s", e)
+
+    try:
+        from migrate_hazard_barangay_name import ensure_hazard_report_barangay_name_column
+        ensure_hazard_report_barangay_name_column(db)
+    except Exception as e:
+        app.logger.warning("Could not ensure hazard_reports.barangay_name: %s", e)
+
 
 # =========================================================
 # BLUEPRINTS
@@ -134,6 +165,7 @@ app.register_blueprint(registrations_bp)
 app.register_blueprint(reference_options_bp)
 app.register_blueprint(nre_bp)
 app.register_blueprint(offline_map_bp)
+app.register_blueprint(dashboard_bp)
 
 
 # =========================================================

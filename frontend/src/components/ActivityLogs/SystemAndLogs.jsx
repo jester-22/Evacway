@@ -13,6 +13,13 @@ import {
   faList,
 } from "@fortawesome/free-solid-svg-icons";
 import { useUsers } from "../../hooks/useEvacuationQueries";
+import {
+  formatManilaDate,
+  formatManilaDateTime,
+  formatManilaRelativeDay,
+  formatManilaTime,
+  parseTimestamp,
+} from "../../utils/dateTime";
 import "./SystemAndLogs.css";
 
 const ROLE_LABELS = {
@@ -87,7 +94,8 @@ export function getLogType(action = "") {
 
 function formatRelativeTime(dateString, now = Date.now()) {
   if (!dateString) return "";
-  const date = new Date(dateString);
+  const date = parseTimestamp(dateString);
+  if (!date) return "";
   const diffMs = now - date.getTime();
   if (Number.isNaN(diffMs)) return "";
 
@@ -103,23 +111,11 @@ function formatRelativeTime(dateString, now = Date.now()) {
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays <= 7) return `${diffDays}d ago`;
 
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return formatManilaDate(date);
 }
 
 function getDayLabel(dateString) {
-  if (!dateString) return "";
-  const date = new Date(dateString);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const diffDays = Math.round((today - target) / (1000 * 60 * 60 * 24));
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return target.toLocaleDateString(undefined, {
+  return formatManilaRelativeDay(dateString, {
     month: "long",
     day: "numeric",
     year: "numeric",
@@ -273,17 +269,17 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
         }
       }
 
-      // Date range filter
+      // Date range filter (in Asia/Manila time)
       if (fromDate) {
-        const fromTs = new Date(`${fromDate}T00:00:00`).getTime();
-        const logTs = new Date(log.timestamp).getTime();
-        if (logTs < fromTs) return false;
+        const fromTs = new Date(`${fromDate}T00:00:00+08:00`).getTime();
+        const logDate = parseTimestamp(log.timestamp);
+        if (!logDate || logDate.getTime() < fromTs) return false;
       }
 
       if (toDate) {
-        const toTs = new Date(`${toDate}T23:59:59.999`).getTime();
-        const logTs = new Date(log.timestamp).getTime();
-        if (logTs > toTs) return false;
+        const toTs = new Date(`${toDate}T23:59:59.999+08:00`).getTime();
+        const logDate = parseTimestamp(log.timestamp);
+        if (!logDate || logDate.getTime() > toTs) return false;
       }
 
       return true;
@@ -435,8 +431,8 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
                 {loading ? "Loading..." : latestActivityText}
               </strong>
               {latestTimestamp && (
-                <span className="stat-card-hint" title={new Date(latestTimestamp).toLocaleString()}>
-                  {new Date(latestTimestamp).toLocaleTimeString()}
+                <span className="stat-card-hint" title={formatManilaDateTime(latestTimestamp)}>
+                  {formatManilaTime(latestTimestamp)}
                 </span>
               )}
             </div>
@@ -618,7 +614,7 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
                               className="sal-td-time"
                               title={
                                 log.timestamp
-                                  ? new Date(log.timestamp).toLocaleString()
+                                  ? formatManilaDateTime(log.timestamp)
                                   : ""
                               }
                             >
@@ -682,7 +678,7 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
                               className="sal-entry-time"
                               title={
                                 log.timestamp
-                                  ? new Date(log.timestamp).toLocaleString()
+                                  ? formatManilaDateTime(log.timestamp)
                                   : ""
                               }
                             >

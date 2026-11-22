@@ -59,7 +59,7 @@ def get_public_status_summary(now=None):
             "active_danger_reports": active_hazard_reports_query()
             .with_entities(func.count(HazardReport.id)).scalar() or 0,
         },
-        "last_updated": server_time.astimezone(timezone.utc).isoformat(),
+        "last_updated": server_time.astimezone(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
     }
 
 

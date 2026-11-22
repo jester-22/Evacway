@@ -187,12 +187,25 @@ body:has(.ew) {
   filter: drop-shadow(var(--drop-shadow-xs));
 }
 
+.ew-mdrrmo-logo {
+  border-radius: 0;
+}
+
 .ew-lgu-name {
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--ew-ink);
   opacity: 0.88;
+  line-height: 1.2;
   white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .ew-lgu-name {
+    white-space: normal;
+    max-width: 220px;
+    font-size: 0.75rem;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1002,12 +1015,19 @@ body:has(.ew) {
 
 .ew-footer .ew-logo {
   display: inline-flex;
-  padding: 5px 8px;
+  padding: 0;
   border-radius: 8px;
-  background: #ffffff;
+  background: transparent;
 }
 
 .ew-footer-logos {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ew-footer-partners {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -1034,6 +1054,11 @@ body:has(.ew) {
   border-radius: 50%;
   flex-shrink: 0;
   filter: drop-shadow(var(--drop-shadow-xs));
+}
+
+.ew-mdrrmo-logo-footer {
+  background: #ffffff;
+  padding: 3px;
 }
 
 .ew-footer-lgu-info {

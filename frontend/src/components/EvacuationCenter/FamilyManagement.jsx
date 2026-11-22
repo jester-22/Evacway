@@ -134,12 +134,13 @@ function emptyMember(isHead = false) {
   };
 }
 
-function getLocalTodayIso() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+function getLocalYesterdayIso() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function getLocalMinDobIso() {
@@ -301,8 +302,8 @@ function validateDateOfBirth(
   }
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (dobDate > today) {
-    return "Date of birth cannot be in the future.";
+  if (dobDate >= today) {
+    return "Date of birth must be a past date.";
   }
   const minDobDate = new Date(
     today.getFullYear() - 120,
@@ -3218,7 +3219,7 @@ export default function FamilyManagement({
               id={`${idPrefix}-dob`}
               type="date"
               min={getLocalMinDobIso()}
-              max={getLocalTodayIso()}
+              max={getLocalYesterdayIso()}
               value={memberObj.date_of_birth}
               onChange={(e) => {
                 const nextDob = e.target.value;

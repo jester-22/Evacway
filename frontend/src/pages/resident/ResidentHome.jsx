@@ -21,6 +21,7 @@ import {
   BLOCKED_ROAD_CLEAR_THRESHOLD_METERS,
 } from "../../utils/navigationProximity";
 import { createReportPopup } from "../../components/mapReports/mapReports";
+import { formatManilaDateTime } from "../../utils/dateTime";
 import {
   setOrUpdateSelectedLocationMarker,
   setOrUpdateAccuracyCircle,
@@ -1339,10 +1340,10 @@ function createBlockedRoadPopup(properties, report) {
   const dateValue =
     properties.closed_at || report?.validated_at || report?.created_at;
   if (dateValue) {
-    const date = new Date(dateValue);
-    if (!Number.isNaN(date.getTime())) {
+    const formatted = formatManilaDateTime(dateValue);
+    if (formatted) {
       const dateLine = document.createElement("div");
-      dateLine.textContent = `Closed: ${date.toLocaleString()}`;
+      dateLine.textContent = `Closed: ${formatted}`;
       dateLine.style.marginTop = "4px";
       dateLine.style.fontSize = "12px";
       dateLine.style.opacity = "0.75";
@@ -1703,7 +1704,7 @@ const ResidentHome = () => {
           setFindSomeonePrivacyPromptOpen(true);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => { active = false; };
   }, [isLoggedInResident]);
 
@@ -4274,7 +4275,7 @@ const ResidentHome = () => {
       const isNarrow = isMobile || (typeof window !== "undefined" && window.innerWidth <= 768);
       map.fitBounds(bounds, {
         padding: isNarrow
-          ? { top: 70, bottom: 260, left: 24, right: 24 }
+          ? { top: 240, bottom: 88, left: 24, right: 64 }
           : { top: 120, bottom: 100, left: 60, right: 60 },
         duration: 1000,
         maxZoom: 16,
@@ -6505,82 +6506,144 @@ const ResidentHome = () => {
 
       {/* "Your room" / "Your shelter" card: collapsed bar by default; expanded under search on desktop, bottom sheet on mobile */}
       <div className="assigned-room-overlay" hidden={!isRoomCardVisible}>
-      {hasAssigned && (
-        !(roomCardExpanded && !selectedCenter) ? (
-          <div
-            className={`pinned-your-room-card is-collapsed ${isMobile ? "mobile" : "desktop"}`}
-            role="region"
-            aria-label={`Your assigned ${hasRoom ? "room" : "shelter"}`}
-            onClick={(e) => {
-              if (!e.target.closest("button")) {
-                handleOpenMyRoomBuilding();
-              }
-            }}
-            style={{ cursor: hasBuilding || !hasRoom ? "pointer" : "default" }}
-          >
-            <div className="your-room-collapsed-row">
+        {hasAssigned && (
+          !(roomCardExpanded && !selectedCenter) ? (
+            <div
+              className={`pinned-your-room-card is-collapsed ${isMobile ? "mobile" : "desktop"}`}
+              role="region"
+              aria-label={`Your assigned ${hasRoom ? "room" : "shelter"}`}
+              onClick={(e) => {
+                if (!e.target.closest("button")) {
+                  handleOpenMyRoomBuilding();
+                }
+              }}
+              style={{ cursor: hasBuilding || !hasRoom ? "pointer" : "default" }}
+            >
+              <div className="your-room-collapsed-row">
+                <div
+                  className="your-room-collapsed-left"
+                  onClick={handleOpenMyRoomBuilding}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleOpenMyRoomBuilding();
+                    }
+                  }}
+                  aria-label={hasBuilding ? `View details for ${roomLabel}` : roomLabel}
+                >
+                  <span className="your-room-door-icon" aria-hidden="true">
+                    <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
+                  </span>
+                  <div className="your-room-text-stack">
+                    <div className="your-room-main-title">{roomTitle}</div>
+                    <div className="your-room-sub-title">
+                      {roomSubtitleContent}
+                    </div>
+                  </div>
+                </div>
+                <div className="your-room-collapsed-right">
+                  <button
+                    type="button"
+                    className="your-room-collapsed-nav-btn"
+                    onClick={handleStartWalkingToMyRoom}
+                    title="Start walking navigation"
+                    aria-label="Start walking navigation"
+                  >
+                    <FontAwesomeIcon icon={faPersonWalking} />
+                  </button>
+                  <button
+                    type="button"
+                    className="your-room-collapsed-expand-btn"
+                    onClick={() => setRoomCardExpanded(true)}
+                    title="Expand room details"
+                    aria-label="Expand room details"
+                    aria-expanded="false"
+                  >
+                    <FontAwesomeIcon icon={faChevronDown} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : isMobile ? (
+            <>
               <div
-                className="your-room-collapsed-left"
-                onClick={handleOpenMyRoomBuilding}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleOpenMyRoomBuilding();
-                  }
-                }}
-                aria-label={hasBuilding ? `View details for ${roomLabel}` : roomLabel}
+                className="your-room-backdrop"
+                onClick={() => setRoomCardExpanded(false)}
+                aria-hidden="true"
+              />
+              <div
+                className="pinned-your-room-card is-expanded mobile-sheet"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Your assigned ${hasRoom ? "room" : "shelter"}`}
+                onTouchStart={handleSheetTouchStart}
+                onTouchEnd={handleSheetTouchEnd}
               >
-                <span className="your-room-door-icon" aria-hidden="true">
-                  <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
-                </span>
-                <div className="your-room-text-stack">
-                  <div className="your-room-main-title">{roomTitle}</div>
-                  <div className="your-room-sub-title">
-                    {roomSubtitleContent}
+                <div className="sheet-handle" aria-hidden="true" />
+                <div className="your-room-expanded-header">
+                  <div className="your-room-expanded-title-row">
+                    <span className="your-room-door-icon" aria-hidden="true">
+                      <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
+                    </span>
+                    <div className="your-room-text-stack">
+                      <div className="your-room-main-title">{roomTitle}</div>
+                      <div className="your-room-sub-title">{roomSubtitleContent}</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="your-room-collapsed-expand-btn is-expanded"
+                    onClick={() => setRoomCardExpanded(false)}
+                    title="Collapse room details"
+                    aria-label="Collapse room details"
+                    aria-expanded="true"
+                  >
+                    <FontAwesomeIcon icon={faChevronDown} />
+                  </button>
+                </div>
+                <div className="your-room-divider" aria-hidden="true" />
+                <div className="your-room-expanded-content">
+                  <p className="pinned-room-details-line">
+                    <strong>{myCheckinStatus}</strong>
+                    {" · "}
+                    {hasRoom && myCenter.room ? (
+                      <>
+                        {roomFloorLabel ? `Floor: ${roomFloorLabel}. ` : ""}
+                        Enter via {myCenter.room.recommended_entrance || "Entrance 3"}.
+                      </>
+                    ) : (
+                      "Open space shelter · Report to reception/coordinator upon arrival."
+                    )}
+                  </p>
+                  <div className="pinned-room-actions">
+                    <button
+                      type="button"
+                      className="pinned-room-btn pinned-show-map-btn"
+                      onClick={handleShowMyRoomOnMap}
+                    >
+                      <FontAwesomeIcon icon={faMapPin} />
+                      <span>Show on map</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="pinned-room-btn pinned-navigate-btn"
+                      onClick={handleStartWalkingToMyRoom}
+                    >
+                      <FontAwesomeIcon icon={faPersonWalking} />
+                      <span>Start walking navigation</span>
+                    </button>
                   </div>
                 </div>
               </div>
-              <div className="your-room-collapsed-right">
-                <button
-                  type="button"
-                  className="your-room-collapsed-nav-btn"
-                  onClick={handleStartWalkingToMyRoom}
-                  title="Start walking navigation"
-                  aria-label="Start walking navigation"
-                >
-                  <FontAwesomeIcon icon={faPersonWalking} />
-                </button>
-                <button
-                  type="button"
-                  className="your-room-collapsed-expand-btn"
-                  onClick={() => setRoomCardExpanded(true)}
-                  title="Expand room details"
-                  aria-label="Expand room details"
-                  aria-expanded="false"
-                >
-                  <FontAwesomeIcon icon={faChevronDown} />
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : isMobile ? (
-          <>
+            </>
+          ) : (
             <div
-              className="your-room-backdrop"
-              onClick={() => setRoomCardExpanded(false)}
-              aria-hidden="true"
-            />
-            <div
-              className="pinned-your-room-card is-expanded mobile-sheet"
-              role="dialog"
-              aria-modal="true"
+              className="pinned-your-room-card is-expanded desktop"
+              role="region"
               aria-label={`Your assigned ${hasRoom ? "room" : "shelter"}`}
-              onTouchStart={handleSheetTouchStart}
-              onTouchEnd={handleSheetTouchEnd}
             >
-              <div className="sheet-handle" aria-hidden="true" />
               <div className="your-room-expanded-header">
                 <div className="your-room-expanded-title-row">
                   <span className="your-room-door-icon" aria-hidden="true">
@@ -6636,70 +6699,8 @@ const ResidentHome = () => {
                 </div>
               </div>
             </div>
-          </>
-        ) : (
-          <div
-            className="pinned-your-room-card is-expanded desktop"
-            role="region"
-            aria-label={`Your assigned ${hasRoom ? "room" : "shelter"}`}
-          >
-            <div className="your-room-expanded-header">
-              <div className="your-room-expanded-title-row">
-                <span className="your-room-door-icon" aria-hidden="true">
-                  <FontAwesomeIcon icon={hasRoom ? faDoorOpen : faHouseFlag} />
-                </span>
-                <div className="your-room-text-stack">
-                  <div className="your-room-main-title">{roomTitle}</div>
-                  <div className="your-room-sub-title">{roomSubtitleContent}</div>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="your-room-collapsed-expand-btn is-expanded"
-                onClick={() => setRoomCardExpanded(false)}
-                title="Collapse room details"
-                aria-label="Collapse room details"
-                aria-expanded="true"
-              >
-                <FontAwesomeIcon icon={faChevronDown} />
-              </button>
-            </div>
-            <div className="your-room-divider" aria-hidden="true" />
-            <div className="your-room-expanded-content">
-              <p className="pinned-room-details-line">
-                <strong>{myCheckinStatus}</strong>
-                {" · "}
-                {hasRoom && myCenter.room ? (
-                  <>
-                    {roomFloorLabel ? `Floor: ${roomFloorLabel}. ` : ""}
-                    Enter via {myCenter.room.recommended_entrance || "Entrance 3"}.
-                  </>
-                ) : (
-                  "Open space shelter · Report to reception/coordinator upon arrival."
-                )}
-              </p>
-              <div className="pinned-room-actions">
-                <button
-                  type="button"
-                  className="pinned-room-btn pinned-show-map-btn"
-                  onClick={handleShowMyRoomOnMap}
-                >
-                  <FontAwesomeIcon icon={faMapPin} />
-                  <span>Show on map</span>
-                </button>
-                <button
-                  type="button"
-                  className="pinned-room-btn pinned-navigate-btn"
-                  onClick={handleStartWalkingToMyRoom}
-                >
-                  <FontAwesomeIcon icon={faPersonWalking} />
-                  <span>Start walking navigation</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )
-      )}
+          )
+        )}
       </div>
 
       {/* Right control stack: "My location", "Street / Satellite", and "Help" */}
@@ -6831,18 +6832,18 @@ const ResidentHome = () => {
         {(offlineMapDownload.status === "downloading"
           || offlineMapDownload.status === "saved"
           || offlineMapDownload.status === "error") && (
-          <div
-            className={`offline-map-download-status ${offlineMapDownload.status === "saved" ? "is-saved" : ""}`}
-            role="status"
-            aria-live="polite"
-          >
-            {offlineMapDownload.status === "downloading"
-              ? `Saving Sogod map: ${offlineMapDownload.completed} of ${offlineMapDownload.total} tiles`
-              : offlineMapDownload.status === "saved"
-                ? "Sogod map saved for offline use."
-                : offlineMapDownload.error}
-          </div>
-        )}
+            <div
+              className={`offline-map-download-status ${offlineMapDownload.status === "saved" ? "is-saved" : ""}`}
+              role="status"
+              aria-live="polite"
+            >
+              {offlineMapDownload.status === "downloading"
+                ? `Saving Sogod map: ${offlineMapDownload.completed} of ${offlineMapDownload.total} tiles`
+                : offlineMapDownload.status === "saved"
+                  ? "Sogod map saved for offline use."
+                  : offlineMapDownload.error}
+            </div>
+          )}
 
         <button
           type="button"
@@ -6919,327 +6920,327 @@ const ResidentHome = () => {
       {selectedCenter && (
         <PublicMapDialogShell onClose={closeCenterDetails} labelledBy="center-card-title" hasHandle>
           <div className={`center-bottom-card ${isMobile ? "mobile" : ""}`}>
-          {/* Fixed Top Section: Header, Quick Stats, My Room, Primary Action */}
-          <div className={`center-card-top-fixed ${centerPanelScrolled ? "is-scrolled" : ""}`}>
-            {isMobile && <div className="sheet-handle" aria-hidden="true" />}
+            {/* Fixed Top Section: Header, Quick Stats, My Room, Primary Action */}
+            <div className={`center-card-top-fixed ${centerPanelScrolled ? "is-scrolled" : ""}`}>
+              {isMobile && <div className="sheet-handle" aria-hidden="true" />}
 
-            {/* Header */}
-            <div className="center-card-header">
-              <div className="center-card-header-main">
-                <div className="center-card-name-row">
-                  <h3 id="center-card-title" className="center-card-title">{selectedCenterName}</h3>
-                  {selectedCenterIsMine ? (
-                    <span className="center-status-badge mine">
-                      <span className="center-status-dot" />
-                      Your Assigned Center
-                    </span>
-                  ) : (
-                    <span className="center-status-badge open">
-                      <span className="center-status-dot" />
-                      Open Center
-                    </span>
-                  )}
-                </div>
-                {selectedCenterAddress && (
-                  <div className="center-card-address" title={selectedCenterAddress}>
-                    {selectedCenterAddress}
+              {/* Header */}
+              <div className="center-card-header">
+                <div className="center-card-header-main">
+                  <div className="center-card-name-row">
+                    <h3 id="center-card-title" className="center-card-title">{selectedCenterName}</h3>
+                    {selectedCenterIsMine ? (
+                      <span className="center-status-badge mine">
+                        <span className="center-status-dot" />
+                        Your Assigned Center
+                      </span>
+                    ) : (
+                      <span className="center-status-badge open">
+                        <span className="center-status-dot" />
+                        Open Center
+                      </span>
+                    )}
                   </div>
-                )}
-              </div>
-
-              <button
-                type="button"
-                className="center-card-close-btn"
-                onClick={closeCenterDetails}
-                aria-label="Close details"
-                title="Close"
-              >
-                <FontAwesomeIcon icon={faXmark} />
-              </button>
-            </div>
-
-            {/* Quick stats: 3 small stat tiles */}
-            <div className="center-stat-tiles-row">
-              {/* Distance */}
-              <div className="center-stat-tile">
-                <div className="center-stat-val-row">
-                  <FontAwesomeIcon icon={faLocationDot} className="center-stat-pin-icon" />
-                  <span className="center-stat-num">{selectedCenterDistance || "Nearby"}</span>
-                </div>
-                <span className="center-stat-lbl">distance</span>
-              </div>
-
-              {/* Here */}
-              <div className="center-stat-tile">
-                <div className="center-stat-val-row">
-                  <span className="center-stat-num">{selectedCenterOccupied ?? 0}</span>
-                </div>
-                <span className="center-stat-lbl">here</span>
-              </div>
-
-              {/* Assigned */}
-              <div className="center-stat-tile">
-                <div className="center-stat-val-row">
-                  <span className="center-stat-num">{selectedCenterAssigned ?? 0}</span>
-                  {selectedCenterCapacity != null && (
-                    <span className="center-stat-sub">of {selectedCenterCapacity}</span>
+                  {selectedCenterAddress && (
+                    <div className="center-card-address" title={selectedCenterAddress}>
+                      {selectedCenterAddress}
+                    </div>
                   )}
                 </div>
-                <span className="center-stat-lbl">assigned</span>
+
+                <button
+                  type="button"
+                  className="center-card-close-btn"
+                  onClick={closeCenterDetails}
+                  aria-label="Close details"
+                  title="Close"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+
+              {/* Quick stats: 3 small stat tiles */}
+              <div className="center-stat-tiles-row">
+                {/* Distance */}
+                <div className="center-stat-tile">
+                  <div className="center-stat-val-row">
+                    <FontAwesomeIcon icon={faLocationDot} className="center-stat-pin-icon" />
+                    <span className="center-stat-num">{selectedCenterDistance || "Nearby"}</span>
+                  </div>
+                  <span className="center-stat-lbl">distance</span>
+                </div>
+
+                {/* Here */}
+                <div className="center-stat-tile">
+                  <div className="center-stat-val-row">
+                    <span className="center-stat-num">{selectedCenterOccupied ?? 0}</span>
+                  </div>
+                  <span className="center-stat-lbl">here</span>
+                </div>
+
+                {/* Assigned */}
+                <div className="center-stat-tile">
+                  <div className="center-stat-val-row">
+                    <span className="center-stat-num">{selectedCenterAssigned ?? 0}</span>
+                    {selectedCenterCapacity != null && (
+                      <span className="center-stat-sub">of {selectedCenterCapacity}</span>
+                    )}
+                  </div>
+                  <span className="center-stat-lbl">assigned</span>
+                </div>
+              </div>
+
+              {/* Assigned Room Callout (if this is the resident's assigned center) */}
+              {selectedCenterIsMine && (
+                <div className="cd-your-room">
+                  <FontAwesomeIcon icon={faCircleCheck} />
+                  <span>
+                    {myCenter?.room?.room_number ? (
+                      <>
+                        Your assigned room: <strong>{myCenter.room.room_number}</strong>{roomFloorLabel ? ` · ${roomFloorLabel}` : ""} · {myCheckinStatus}
+                      </>
+                    ) : (
+                      <>
+                        Your assigned shelter (1 space) · {myCheckinStatus}
+                      </>
+                    )}
+                  </span>
+                </div>
+              )}
+
+              {/* Primary Action Button: Navigate to this Center */}
+              {foundPersonLocation?.room && (
+                <div className="cd-your-room found-person-room-text">
+                  {[foundPersonLocation.room.building_name, formatFloorLabel(foundPersonLocation.room.floor), foundPersonLocation.room.room_number || "Room assigned"].filter(Boolean).join(" · ")}
+                </div>
+              )}
+              <div className="center-card-actions">
+                <button
+                  type="button"
+                  className="center-navigate-btn"
+                  onClick={() => {
+                    handleFindRoute(selectedCenterId);
+                    closeCenterDetails();
+                  }}
+                  disabled={findingRoute || locationPermission === "denied"}
+                >
+                  <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
+                  <span>Navigate to this Center</span>
+                </button>
               </div>
             </div>
 
-            {/* Assigned Room Callout (if this is the resident's assigned center) */}
-            {selectedCenterIsMine && (
-              <div className="cd-your-room">
-                <FontAwesomeIcon icon={faCircleCheck} />
-                <span>
-                  {myCenter?.room?.room_number ? (
-                    <>
-                      Your assigned room: <strong>{myCenter.room.room_number}</strong>{roomFloorLabel ? ` · ${roomFloorLabel}` : ""} · {myCheckinStatus}
-                    </>
-                  ) : (
-                    <>
-                      Your assigned shelter (1 space) · {myCheckinStatus}
-                    </>
-                  )}
-                </span>
-              </div>
-            )}
+            {/* Scrollable Body: Buildings List Only */}
+            <div
+              className="center-card-scroll-body"
+              onScroll={(e) => setCenterPanelScrolled(e.currentTarget.scrollTop > 4)}
+            >
+              {/* BUILDINGS LIST (for campus) OR OPEN SHELTER SPACE (for single venue / private property) */}
+              {(() => {
+                const cType =
+                  selectedCenter.properties?.center_type ||
+                  selectedCenter.center_type ||
+                  "campus";
+                const isSingleVenueOrHouse = cType !== "campus";
 
-            {/* Primary Action Button: Navigate to this Center */}
-            {foundPersonLocation?.room && (
-              <div className="cd-your-room found-person-room-text">
-                {[foundPersonLocation.room.building_name, formatFloorLabel(foundPersonLocation.room.floor), foundPersonLocation.room.room_number || "Room assigned"].filter(Boolean).join(" · ")}
-              </div>
-            )}
-            <div className="center-card-actions">
-              <button
-                type="button"
-                className="center-navigate-btn"
-                onClick={() => {
-                  handleFindRoute(selectedCenterId);
-                  closeCenterDetails();
-                }}
-                disabled={findingRoute || locationPermission === "denied"}
-              >
-                <FontAwesomeIcon icon={faRoute} spin={findingRoute} />
-                <span>Navigate to this Center</span>
-              </button>
-            </div>
-          </div>
+                if (isSingleVenueOrHouse) {
+                  const cap = Number(selectedCenterCapacity || 0);
+                  const occ = Number(selectedCenterOccupied || 0);
+                  const spaceLeft = Math.max(0, cap - occ);
 
-          {/* Scrollable Body: Buildings List Only */}
-          <div
-            className="center-card-scroll-body"
-            onScroll={(e) => setCenterPanelScrolled(e.currentTarget.scrollTop > 4)}
-          >
-            {/* BUILDINGS LIST (for campus) OR OPEN SHELTER SPACE (for single venue / private property) */}
-            {(() => {
-              const cType =
-                selectedCenter.properties?.center_type ||
-                selectedCenter.center_type ||
-                "campus";
-              const isSingleVenueOrHouse = cType !== "campus";
-
-              if (isSingleVenueOrHouse) {
-                const cap = Number(selectedCenterCapacity || 0);
-                const occ = Number(selectedCenterOccupied || 0);
-                const spaceLeft = Math.max(0, cap - occ);
+                  return (
+                    <div className="center-card-buildings-section">
+                      <div className="center-card-buildings-header">
+                        <span className="buildings-header-title">Shelter Space</span>
+                        <span className="buildings-header-sub">
+                          {cType === "private_property"
+                            ? "Private Property"
+                            : "Single Open Space"}
+                        </span>
+                      </div>
+                      <div className="center-shelter-space-card">
+                        <div className="center-shelter-row">
+                          <span className="center-shelter-label">Capacity</span>
+                          <strong className="center-shelter-val">{cap} people</strong>
+                        </div>
+                        <div className="center-shelter-row">
+                          <span className="center-shelter-label">Space remaining</span>
+                          <strong
+                            className="center-shelter-val"
+                            style={{
+                              color: spaceLeft > 0 ? "#16a34a" : "#dc2626",
+                            }}
+                          >
+                            {spaceLeft} space{spaceLeft === 1 ? "" : "s"} left
+                          </strong>
+                        </div>
+                        {selectedCenter.properties?.building_material && (
+                          <div className="center-shelter-row">
+                            <span className="center-shelter-label">
+                              Building material
+                            </span>
+                            <span className="center-shelter-val">
+                              {selectedCenter.properties.building_material}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
 
                 return (
                   <div className="center-card-buildings-section">
                     <div className="center-card-buildings-header">
-                      <span className="buildings-header-title">Shelter Space</span>
+                      <span className="buildings-header-title">
+                        Buildings ({selectedCenterBuildings.length})
+                      </span>
                       <span className="buildings-header-sub">
-                        {cType === "private_property"
-                          ? "Private Property"
-                          : "Single Open Space"}
+                        Tap building to view rooms
                       </span>
                     </div>
-                    <div className="center-shelter-space-card">
-                      <div className="center-shelter-row">
-                        <span className="center-shelter-label">Capacity</span>
-                        <strong className="center-shelter-val">{cap} people</strong>
-                      </div>
-                      <div className="center-shelter-row">
-                        <span className="center-shelter-label">Space remaining</span>
-                        <strong
-                          className="center-shelter-val"
-                          style={{
-                            color: spaceLeft > 0 ? "#16a34a" : "#dc2626",
-                          }}
-                        >
-                          {spaceLeft} space{spaceLeft === 1 ? "" : "s"} left
-                        </strong>
-                      </div>
-                      {selectedCenter.properties?.building_material && (
-                        <div className="center-shelter-row">
-                          <span className="center-shelter-label">
-                            Building material
-                          </span>
-                          <span className="center-shelter-val">
-                            {selectedCenter.properties.building_material}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              }
+                    {selectedCenterBuildings.length > 0 ? (
+                      <div className="center-card-buildings-list" role="list">
+                        {selectedCenterBuildings.map((b) => {
+                          const bOcc = b.occupied || 0;
+                          const bAssigned = b.assigned ?? 0;
+                          const bCap = b.capacity || 0;
+                          const bPct =
+                            bCap > 0
+                              ? Math.min(100, Math.round((bOcc / bCap) * 100))
+                              : 0;
+                          const bAssignedPct =
+                            bCap > 0
+                              ? Math.min(100, Math.round((bAssigned / bCap) * 100))
+                              : 0;
 
-              return (
-                <div className="center-card-buildings-section">
-                  <div className="center-card-buildings-header">
-                    <span className="buildings-header-title">
-                      Buildings ({selectedCenterBuildings.length})
-                    </span>
-                    <span className="buildings-header-sub">
-                      Tap building to view rooms
-                    </span>
-                  </div>
-                  {selectedCenterBuildings.length > 0 ? (
-                    <div className="center-card-buildings-list" role="list">
-                      {selectedCenterBuildings.map((b) => {
-                        const bOcc = b.occupied || 0;
-                        const bAssigned = b.assigned ?? 0;
-                        const bCap = b.capacity || 0;
-                        const bPct =
-                          bCap > 0
-                            ? Math.min(100, Math.round((bOcc / bCap) * 100))
-                            : 0;
-                        const bAssignedPct =
-                          bCap > 0
-                            ? Math.min(100, Math.round((bAssigned / bCap) * 100))
-                            : 0;
+                          // Unified status colors
+                          let statusKey = "available";
+                          let statusLabel = "Available";
+                          let statusDotColor = "#16a34a";
+                          let bColor = "#16a34a";
 
-                        // Unified status colors
-                        let statusKey = "available";
-                        let statusLabel = "Available";
-                        let statusDotColor = "#16a34a";
-                        let bColor = "#16a34a";
+                          if (bCap === 0) {
+                            statusKey = "no-data";
+                            statusLabel = "No data";
+                            statusDotColor = "#94a3b8";
+                            bColor = "#94a3b8";
+                          } else if (bOcc >= bCap) {
+                            statusKey = "full";
+                            statusLabel = "Full";
+                            statusDotColor = "#dc2626";
+                            bColor = "#dc2626";
+                          } else if (bAssigned >= bCap) {
+                            statusKey = "fully-assigned";
+                            statusLabel = "Fully assigned";
+                            statusDotColor = "#d97706";
+                            bColor = "#d97706";
+                          } else if (bPct >= 70) {
+                            statusKey = "filling";
+                            statusLabel = "Filling";
+                            statusDotColor = "#d97706";
+                            bColor = "#d97706";
+                          }
 
-                        if (bCap === 0) {
-                          statusKey = "no-data";
-                          statusLabel = "No data";
-                          statusDotColor = "#94a3b8";
-                          bColor = "#94a3b8";
-                        } else if (bOcc >= bCap) {
-                          statusKey = "full";
-                          statusLabel = "Full";
-                          statusDotColor = "#dc2626";
-                          bColor = "#dc2626";
-                        } else if (bAssigned >= bCap) {
-                          statusKey = "fully-assigned";
-                          statusLabel = "Fully assigned";
-                          statusDotColor = "#d97706";
-                          bColor = "#d97706";
-                        } else if (bPct >= 70) {
-                          statusKey = "filling";
-                          statusLabel = "Filling";
-                          statusDotColor = "#d97706";
-                          bColor = "#d97706";
-                        }
+                          const isUserBuilding =
+                            myCenter?.room?.building_id != null &&
+                            String(myCenter.room.building_id) === String(b.id);
 
-                        const isUserBuilding =
-                          myCenter?.room?.building_id != null &&
-                          String(myCenter.room.building_id) === String(b.id);
+                          return (
+                            <button
+                              type="button"
+                              key={b.id}
+                              className={`center-building-card ${isUserBuilding ? "is-user-building" : ""
+                                }`}
+                              onClick={() => {
+                                setPrivateBuildingView(false);
+                                setSelectedBuildingId(b.id);
+                                setSelectedBuildingData(b);
+                                setBuildingModalOpen(true);
+                                closeCenterDetails();
+                              }}
+                              role="listitem"
+                              aria-label={`${b.name || "Building"}, ${b.room_count || 0} rooms, ${statusLabel}, ${bOcc} of ${bCap} here, ${bAssigned} assigned`}
+                            >
+                              <div className="center-building-card-main">
+                                {/* 40px soft-tinted rounded icon square */}
+                                <div className="center-building-icon-square" aria-hidden="true">
+                                  <FontAwesomeIcon icon={faBuilding} />
+                                </div>
 
-                        return (
-                          <button
-                            type="button"
-                            key={b.id}
-                            className={`center-building-card ${isUserBuilding ? "is-user-building" : ""
-                              }`}
-                            onClick={() => {
-                              setPrivateBuildingView(false);
-                              setSelectedBuildingId(b.id);
-                              setSelectedBuildingData(b);
-                              setBuildingModalOpen(true);
-                              closeCenterDetails();
-                            }}
-                            role="listitem"
-                            aria-label={`${b.name || "Building"}, ${b.room_count || 0} rooms, ${statusLabel}, ${bOcc} of ${bCap} here, ${bAssigned} assigned`}
-                          >
-                            <div className="center-building-card-main">
-                              {/* 40px soft-tinted rounded icon square */}
-                              <div className="center-building-icon-square" aria-hidden="true">
-                                <FontAwesomeIcon icon={faBuilding} />
-                              </div>
-
-                              {/* Building Name & Subtitle */}
-                              <div className="center-building-card-info">
-                                <div className="center-building-name-line">
-                                  <span className="center-building-card-name">
-                                    {b.name || `Building #${b.id}`}
-                                  </span>
-                                  {isUserBuilding && (
-                                    <span className="bldg-badge-yours">
-                                      Your building
+                                {/* Building Name & Subtitle */}
+                                <div className="center-building-card-info">
+                                  <div className="center-building-name-line">
+                                    <span className="center-building-card-name">
+                                      {b.name || `Building #${b.id}`}
                                     </span>
-                                  )}
+                                    {isUserBuilding && (
+                                      <span className="bldg-badge-yours">
+                                        Your building
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="center-building-card-sub">
+                                    {bOcc} of {bCap} here · {bAssigned} assigned
+                                  </div>
                                 </div>
-                                <div className="center-building-card-sub">
-                                  {bOcc} of {bCap} here · {bAssigned} assigned
+
+                                {/* Right: room count + chevron and status pill */}
+                                <div className="center-building-card-right">
+                                  <div className="center-building-rooms-wrap">
+                                    <span className="center-building-rooms-text">
+                                      {b.room_count || 0}{" "}
+                                      {b.room_count === 1 ? "room" : "rooms"}
+                                    </span>
+                                    <FontAwesomeIcon
+                                      icon={faChevronRight}
+                                      className="center-building-chevron"
+                                    />
+                                  </div>
+                                  <span className={`center-bldg-badge is-${statusKey}`}>
+                                    <span
+                                      className="center-bldg-dot"
+                                      style={{ backgroundColor: statusDotColor }}
+                                    />
+                                    {statusLabel}
+                                  </span>
                                 </div>
                               </div>
 
-                              {/* Right: room count + chevron and status pill */}
-                              <div className="center-building-card-right">
-                                <div className="center-building-rooms-wrap">
-                                  <span className="center-building-rooms-text">
-                                    {b.room_count || 0}{" "}
-                                    {b.room_count === 1 ? "room" : "rooms"}
-                                  </span>
-                                  <FontAwesomeIcon
-                                    icon={faChevronRight}
-                                    className="center-building-chevron"
+                              {/* Thin 4px progress bar with percentage */}
+                              <div className="center-building-bar-row">
+                                <div className="center-building-bar-track" aria-hidden="true">
+                                  {bAssignedPct > 0 && (
+                                    <div
+                                      className="center-building-bar-assigned"
+                                      style={{ width: `${Math.min(100, bAssignedPct)}%` }}
+                                    />
+                                  )}
+                                  <div
+                                    className="center-building-bar-fill"
+                                    style={{
+                                      width: `${Math.min(100, bPct)}%`,
+                                      backgroundColor: bColor,
+                                    }}
                                   />
                                 </div>
-                                <span className={`center-bldg-badge is-${statusKey}`}>
-                                  <span
-                                    className="center-bldg-dot"
-                                    style={{ backgroundColor: statusDotColor }}
-                                  />
-                                  {statusLabel}
+                                <span className="center-building-pct-text">
+                                  {bPct}%
                                 </span>
                               </div>
-                            </div>
-
-                            {/* Thin 4px progress bar with percentage */}
-                            <div className="center-building-bar-row">
-                              <div className="center-building-bar-track" aria-hidden="true">
-                                {bAssignedPct > 0 && (
-                                  <div
-                                    className="center-building-bar-assigned"
-                                    style={{ width: `${Math.min(100, bAssignedPct)}%` }}
-                                  />
-                                )}
-                                <div
-                                  className="center-building-bar-fill"
-                                  style={{
-                                    width: `${Math.min(100, bPct)}%`,
-                                    backgroundColor: bColor,
-                                  }}
-                                />
-                              </div>
-                              <span className="center-building-pct-text">
-                                {bPct}%
-                              </span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="center-buildings-empty">
-                      <span>No buildings mapped for this center yet.</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="center-buildings-empty">
+                        <span>No buildings mapped for this center yet.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </PublicMapDialogShell>
       )}
@@ -7411,33 +7412,33 @@ const ResidentHome = () => {
         </button>
 
         {isLoggedInResident && (
-        <button
-          type="button"
-          onClick={openFindSomeone}
-          className="action-btn-circle action-btn-secondary"
-          title="Find someone"
-          aria-label="Find someone"
-        >
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+          <button
+            type="button"
+            onClick={openFindSomeone}
+            className="action-btn-circle action-btn-secondary"
+            title="Find someone"
+            aria-label="Find someone"
           >
-            <circle cx="10" cy="7" r="4" />
-            <path d="M10.3 15H7a4 4 0 0 0-4 4v2" />
-            <circle cx="17" cy="17" r="3" />
-            <line x1="19.2" y1="19.2" x2="22" y2="22" />
-          </svg>
-          <span className="action-tooltip" role="tooltip">
-            Find someone
-          </span>
-        </button>
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="10" cy="7" r="4" />
+              <path d="M10.3 15H7a4 4 0 0 0-4 4v2" />
+              <circle cx="17" cy="17" r="3" />
+              <line x1="19.2" y1="19.2" x2="22" y2="22" />
+            </svg>
+            <span className="action-tooltip" role="tooltip">
+              Find someone
+            </span>
+          </button>
         )}
 
         <button
@@ -7625,7 +7626,7 @@ const ResidentHome = () => {
       {/* Route preview stays below the header, clear of the map controls and bottom dock. */}
       {route && !navigationActive && (
         <div
-          className={`route-preview-card ${route.no_roads_available ? "route-blocked-card" : "route-card-compact"} ${isMobile ? (route.no_roads_available ? "mobile-top-card" : "mobile-bottom-sheet") : ""} ${routeDetailsOpen && !route.no_roads_available ? "is-expanded" : ""}`}
+          className={`route-preview-card ${route.no_roads_available ? "route-blocked-card" : "route-card-compact"} ${isMobile ? "mobile-top-card" : ""} ${routeDetailsOpen && !route.no_roads_available ? "is-expanded" : ""}`}
           role="region"
           aria-label={route.no_roads_available ? "Roads blocked notice" : "Route preview"}
         >
@@ -7707,21 +7708,21 @@ const ResidentHome = () => {
                 </div>
               ) : (
                 <>
-                {assistanceLocationConfirmation === myLocation && needsLocationConfirmation(myLocation) && (
-                  <p className="route-location-confirmation" role="status">Check your location on the map, then confirm to send help.</p>
-                )}
-                <button
-                  type="button"
-                  className="route-request-assistance-btn"
-                  onClick={handleRequestAssistance}
-                  disabled={requestingAssistance}
-                >
-                  <FontAwesomeIcon
-                    icon={requestingAssistance ? faSpinner : faTriangleExclamation}
-                    spin={requestingAssistance}
-                  />
-                  <span>{requestingAssistance ? "Sending request..." : assistanceLocationConfirmation === myLocation && needsLocationConfirmation(myLocation) ? "Confirm and send" : "Request assistance"}</span>
-                </button>
+                  {assistanceLocationConfirmation === myLocation && needsLocationConfirmation(myLocation) && (
+                    <p className="route-location-confirmation" role="status">Check your location on the map, then confirm to send help.</p>
+                  )}
+                  <button
+                    type="button"
+                    className="route-request-assistance-btn"
+                    onClick={handleRequestAssistance}
+                    disabled={requestingAssistance}
+                  >
+                    <FontAwesomeIcon
+                      icon={requestingAssistance ? faSpinner : faTriangleExclamation}
+                      spin={requestingAssistance}
+                    />
+                    <span>{requestingAssistance ? "Sending request..." : assistanceLocationConfirmation === myLocation && needsLocationConfirmation(myLocation) ? "Confirm and send" : "Request assistance"}</span>
+                  </button>
                 </>
               ))}
             </div>

@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify, current_app
 from werkzeug.utils import secure_filename
 from models import (
     db,
+    Barangay,
     HazardReport,
     HazardReportPhoto,
     SystemLog,
@@ -12,6 +13,8 @@ from models import (
     User,
     ResidentAccount,
     Resident,
+    utc_now,
+    to_utc_iso,
 )
 from sqlalchemy import func
 from sqlalchemy.orm import aliased
@@ -20,7 +23,7 @@ from geoalchemy2.shape import to_shape, from_shape
 from shapely.geometry import mapping, Point
 from flask_jwt_extended import get_jwt_identity, jwt_required, get_jwt
 from utils import role_required
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from services.notifications import (
     create_staff_notifications,
     send_staff_push_notifications,
@@ -42,6 +45,59 @@ from services.public_status import (
 reports_bp = Blueprint('reports', __name__)
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+
+ALLOWED_HAZARD_TRANSITIONS = {
+    'pending': {'validated', 'rejected'},
+    'validated': {'resolved'},
+    'rejected': set(),
+    'resolved': set(),
+}
+
+MAX_REJECTION_REASON_LENGTH = 2000
+
+ROAD_CLOSURE_RECHECK_HOURS = 24
+
+
+def hazard_needs_recheck(
+    report,
+    blocks_road,
+    now=None,
+    threshold_hours=ROAD_CLOSURE_RECHECK_HOURS,
+):
+    """Return True if a validated hazard closing road(s) has exceeded the re-check threshold."""
+    status = str(getattr(report, 'status', '') or '').strip().lower()
+    if status != 'validated' or not blocks_road:
+        return False
+
+    since = getattr(report, 'validated_at', None) or getattr(report, 'submitted_at', None)
+    if since is None:
+        return False
+    current_time = now if now is not None else utc_now()
+
+    if getattr(since, 'tzinfo', None) is not None and getattr(current_time, 'tzinfo', None) is None:
+        since = since.astimezone(timezone.utc).replace(tzinfo=None)
+    elif getattr(since, 'tzinfo', None) is None and getattr(current_time, 'tzinfo', None) is not None:
+        current_time = current_time.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return (current_time - since) >= timedelta(hours=threshold_hours)
+
+
+def _parse_duplicate_of(raw_value, report_id):
+    """Validate an optional duplicate_of incident ID. Returns (int_or_None, error_message_or_None)."""
+    if raw_value is None or raw_value == '':
+        return None, None
+    try:
+        dup_id = int(raw_value)
+    except (TypeError, ValueError):
+        return None, "duplicate_of must be a valid incident ID."
+    if dup_id <= 0:
+        return None, "duplicate_of must be a valid incident ID."
+    if dup_id == report_id:
+        return None, "An incident cannot be marked as a duplicate of itself."
+    target = HazardReport.query.get(dup_id)
+    if not target:
+        return None, f"Original incident #{dup_id} was not found."
+    return dup_id, None
 
 # system_logs.action is varchar(255). A single road is usually made up of
 # several RoadSegment rows sharing the same road_name, so any list built
@@ -84,6 +140,69 @@ def resolve_report_reporter_username(report):
     return None
 
 
+def _clean_barangay_name(value):
+    """Trim and normalize a barangay name; return None for blank/placeholder values."""
+    cleaned = " ".join(str(value or "").split()).strip()
+    if not cleaned or cleaned.lower() in {"unknown", "unknown barangay", "n/a", "none"}:
+        return None
+    return cleaned[:100]
+
+
+def resolve_barangay_name_for_point(point, fallback_name=None):
+    """Resolve the authoritative barangay name for a hazard point.
+
+    1. Prefer a PostGIS Barangay polygon containing the point (when Barangay.geom exists).
+    2. Otherwise use the cleaned barangay_name supplied at submission time.
+    """
+    if point is not None:
+        try:
+            dialect = db.engine.dialect.name
+            if dialect == 'postgresql':
+                pt_geom = func.ST_SetSRID(func.ST_MakePoint(point.x, point.y), 4326)
+                matched = (
+                    db.session.query(Barangay.name)
+                    .filter(Barangay.geom.isnot(None))
+                    .filter(func.ST_Covers(Barangay.geom, pt_geom))
+                    .first()
+                )
+                if matched and matched[0]:
+                    return _clean_barangay_name(matched[0])
+        except Exception:
+            current_app.logger.debug("Spatial barangay lookup unavailable for hazard report point")
+    return _clean_barangay_name(fallback_name)
+
+
+def _spatial_barangay_names_for_reports(reports):
+    """Batch-resolve barangay names from Barangay.geom for legacy reports missing barangay_name."""
+    missing_ids = [r.id for r in reports if not _clean_barangay_name(getattr(r, 'barangay_name', None))]
+    if not missing_ids:
+        return {}
+    try:
+        if db.engine.dialect.name != 'postgresql':
+            return {}
+        rows = (
+            db.session.query(HazardReport.id, Barangay.name)
+            .join(Barangay, func.ST_Covers(Barangay.geom, HazardReport.geom))
+            .filter(HazardReport.id.in_(missing_ids), Barangay.geom.isnot(None))
+            .all()
+        )
+        resolved = {}
+        for report_id, b_name in rows:
+            cleaned = _clean_barangay_name(b_name)
+            if cleaned and report_id not in resolved:
+                resolved[report_id] = cleaned
+        return resolved
+    except Exception:
+        return {}
+
+
+def _resolved_barangay_for_report(report):
+    stored = _clean_barangay_name(getattr(report, 'barangay_name', None))
+    if stored:
+        return stored
+    return _spatial_barangay_names_for_reports([report]).get(report.id)
+
+
 def report_to_dict(
     report,
     lat=None,
@@ -91,6 +210,8 @@ def report_to_dict(
     include_reporter=False,
     reporter_username=None,
     validated_by_name=None,
+    closed_roads=None,
+    barangay_name=None,
 ):
     if lat is None or lng is None:
         if report and getattr(report, 'geom', None) is not None:
@@ -106,19 +227,32 @@ def report_to_dict(
         photos = [report.photo_url]
     photo_url = photos[0] if photos else getattr(report, 'photo_url', None)
 
+    closed_list = list(closed_roads) if closed_roads is not None else []
+    blocks_road = len(closed_list) > 0
+    resolved_barangay = _clean_barangay_name(
+        barangay_name if barangay_name is not None else getattr(report, 'barangay_name', None)
+    )
+
     payload = {
         "id": report.id,
         "description": report.description,
         "photo_url": photo_url,
         "photos": photos,
         "report_type": report.report_type,
+        "barangay_name": resolved_barangay,
         "status": report.status,
         "status_group": hazard_status_group(report.status),
         "response_notes": report.response_notes,
+        "rejection_reason": getattr(report, 'rejection_reason', None),
+        "duplicate_of": getattr(report, 'duplicate_of', None),
+        "blocks_road": blocks_road,
+        "closed_roads": closed_list,
+        "needs_recheck": hazard_needs_recheck(report, blocks_road),
+        "recheck_threshold_hours": ROAD_CLOSURE_RECHECK_HOURS,
         "latitude": float(lat) if lat is not None else None,
         "longitude": float(lng) if lng is not None else None,
-        "submitted_at": report.submitted_at.isoformat() if report.submitted_at else None,
-        "validated_at": report.validated_at.isoformat() if report.validated_at else None,
+        "submitted_at": to_utc_iso(report.submitted_at),
+        "validated_at": to_utc_iso(report.validated_at),
         "validated_by": report.validated_by,
     }
     if include_reporter:
@@ -447,6 +581,10 @@ def submit_hazard_report():
                     current_app.logger.warning("Could not remove rejected hazard report photo: %s", saved_path)
             return jsonify({"error": "The nearest reportable road is outside Sogod. Choose a location inside the boundary."}), 400
         point = Point(snap_pt[1], snap_pt[0])
+        resolved_barangay = resolve_barangay_name_for_point(
+            point,
+            fallback_name=request.form.get('barangay_name') or request.form.get('barangay'),
+        )
 
         first_photo_url = saved_photo_urls[0] if saved_photo_urls else ''
 
@@ -454,6 +592,7 @@ def submit_hazard_report():
             description=description,
             photo_url=first_photo_url,
             report_type=report_type,
+            barangay_name=resolved_barangay,
             status='pending',
             reported_by_user_id=reported_by_user_id,
             reported_by_resident_account_id=reported_by_resident_account_id,
@@ -524,6 +663,21 @@ def list_hazard_reports():
         else:
             query = query.filter(HazardReport.status == status_filter)
     rows = query.order_by(HazardReport.submitted_at.desc()).all()
+    spatial_barangays = _spatial_barangay_names_for_reports([row[0] for row in rows])
+
+    closed_segments = (
+        RoadSegment.query
+        .filter(
+            RoadSegment.is_closed.is_(True),
+            RoadSegment.closed_by_report_id.isnot(None),
+        )
+        .all()
+    )
+    closed_roads_by_report = defaultdict(list)
+    for seg in closed_segments:
+        closed_roads_by_report[seg.closed_by_report_id].append(
+            seg.road_name or f"Road #{seg.id}"
+        )
 
     results = []
     for (
@@ -541,6 +695,11 @@ def list_hazard_reports():
             (reporter_user_name or '').strip()
             or _format_resident_username(res_first, res_middle, res_last, res_suffix)
         )
+        closed_roads = dedupe(closed_roads_by_report.get(report.id, []))
+        resolved_barangay = (
+            _clean_barangay_name(getattr(report, 'barangay_name', None))
+            or spatial_barangays.get(report.id)
+        )
         results.append(
             report_to_dict(
                 report,
@@ -549,6 +708,8 @@ def list_hazard_reports():
                 include_reporter=True,
                 reporter_username=reporter_username,
                 validated_by_name=(validated_by_name or '').strip() or None,
+                closed_roads=closed_roads,
+                barangay_name=resolved_barangay,
             )
         )
     return jsonify(results)
@@ -592,11 +753,7 @@ def list_public_hazard_reports():
             "status": report.status,
             "latitude": float(lat) if lat is not None else None,
             "longitude": float(lng) if lng is not None else None,
-            "validated_at": (
-                report.validated_at.isoformat()
-                if report.validated_at
-                else None
-            ),
+            "validated_at": to_utc_iso(report.validated_at),
             "blocks_road": len(closed_roads) > 0,
             "closed_roads": closed_roads
         })
@@ -624,14 +781,55 @@ def validate_hazard_report(report_id):
     report = HazardReport.query.get_or_404(report_id)
     data = request.get_json() or {}
 
-    new_status = data.get('status')  # 'validated', 'rejected', or 'resolved'
+    new_status = str(data.get('status') or '').strip().lower()  # 'validated', 'rejected', or 'resolved'
     if new_status not in ['validated', 'rejected', 'resolved']:
         return jsonify({"error": "status must be 'validated', 'rejected', or 'resolved'"}), 400
 
+    current_status = str(report.status or 'pending').strip().lower()
+    allowed_next = ALLOWED_HAZARD_TRANSITIONS.get(current_status, set())
+    if new_status not in allowed_next:
+        if not allowed_next:
+            error_msg = (
+                f"Cannot change a {current_status} incident to {new_status}. "
+                f"No further status changes are allowed after {current_status}."
+            )
+        else:
+            allowed_display = " or ".join(sorted(allowed_next))
+            error_msg = (
+                f"Cannot change a {current_status} incident to {new_status}. "
+                f"Allowed next status: {allowed_display}."
+            )
+        return jsonify({"error": error_msg}), 400
+
+    rejection_reason = None
+    if new_status == 'rejected':
+        raw_reason = data.get('rejection_reason')
+        if raw_reason is None:
+            raw_reason = data.get('reason')
+        rejection_reason = str(raw_reason).strip() if raw_reason is not None else ''
+        if not rejection_reason:
+            return jsonify({"error": "A rejection reason is required."}), 400
+        if len(rejection_reason) > MAX_REJECTION_REASON_LENGTH:
+            return jsonify({
+                "error": f"Rejection reason must be {MAX_REJECTION_REASON_LENGTH} characters or fewer."
+            }), 400
+
+    duplicate_of_provided = 'duplicate_of' in data
+    duplicate_of_id = None
+    if duplicate_of_provided:
+        duplicate_of_id, dup_error = _parse_duplicate_of(data.get('duplicate_of'), report.id)
+        if dup_error:
+            return jsonify({"error": dup_error}), 400
+
     report.status = new_status
-    report.response_notes = data.get('response_notes')
+    if 'response_notes' in data:
+        report.response_notes = data.get('response_notes')
+    if new_status == 'rejected':
+        report.rejection_reason = rejection_reason
+    if duplicate_of_provided:
+        report.duplicate_of = duplicate_of_id
     report.validated_by = get_jwt_identity()
-    report.validated_at = datetime.utcnow()
+    report.validated_at = utc_now()
 
     closed_roads = []
     reopened_roads = []
@@ -643,6 +841,10 @@ def validate_hazard_report(report_id):
     db.session.commit()
 
     log_action = f"{new_status.capitalize()} hazard report #{report.id}"
+    if duplicate_of_provided and duplicate_of_id:
+        log_action += f" (duplicate of #{duplicate_of_id})"
+    if new_status == 'rejected' and rejection_reason:
+        log_action += f" — reason: {rejection_reason}"
     if closed_roads:
         log_action += f" — auto-closed road(s): {', '.join(closed_roads)}"
     elif reopened_roads:
@@ -656,12 +858,50 @@ def validate_hazard_report(report_id):
         include_reporter=True,
         reporter_username=resolve_report_reporter_username(report),
         validated_by_name=(report.validator_user.name.strip() if report.validator_user and report.validator_user.name else None),
+        closed_roads=closed_roads,
+        barangay_name=_resolved_barangay_for_report(report),
     )
-    result['closed_roads'] = closed_roads
-    result['blocks_road'] = len(closed_roads) > 0
     if reopened_roads:
         result['reopened_roads'] = reopened_roads
     return jsonify(result)
+
+
+@reports_bp.route('/api/hazard-reports/<int:report_id>/duplicate', methods=['PATCH'])
+@role_required('admin', 'lgu_personnel')
+def update_hazard_report_duplicate(report_id):
+    report = HazardReport.query.get_or_404(report_id)
+    data = request.get_json() or {}
+
+    duplicate_of_id, dup_error = _parse_duplicate_of(data.get('duplicate_of'), report.id)
+    if dup_error:
+        return jsonify({"error": dup_error}), 400
+
+    report.duplicate_of = duplicate_of_id
+    db.session.commit()
+
+    if duplicate_of_id:
+        log_action = f"Linked hazard report #{report.id} as duplicate of #{duplicate_of_id}"
+    else:
+        log_action = f"Cleared duplicate link on hazard report #{report.id}"
+    db.session.add(SystemLog(user_id=get_jwt_identity(), action=safe_log_action(log_action)))
+    db.session.commit()
+
+    closed_segments = RoadSegment.query.filter_by(
+        closed_by_report_id=report.id,
+        is_closed=True,
+    ).all()
+    closed_roads = dedupe([s.road_name or f"Road #{s.id}" for s in closed_segments])
+
+    return jsonify(
+        report_to_dict(
+            report,
+            include_reporter=True,
+            reporter_username=resolve_report_reporter_username(report),
+            validated_by_name=(report.validator_user.name.strip() if report.validator_user and report.validator_user.name else None),
+            closed_roads=closed_roads,
+            barangay_name=_resolved_barangay_for_report(report),
+        )
+    )
 
 
 @reports_bp.route('/api/hazard-reports/<int:report_id>/reopen-road', methods=['POST'])
@@ -669,7 +909,8 @@ def validate_hazard_report(report_id):
 def reopen_road(report_id):
     report = HazardReport.query.get_or_404(report_id)
 
-    if report.status != 'validated':
+    current_status = str(report.status or 'pending').strip().lower()
+    if 'resolved' not in ALLOWED_HAZARD_TRANSITIONS.get(current_status, set()):
         return jsonify({"error": "Only validated reports can trigger a road reopen"}), 400
 
     reopened_names, still_closed = reopen_roads_for_report(report)
@@ -691,11 +932,11 @@ def reopen_road(report_id):
         include_reporter=True,
         reporter_username=resolve_report_reporter_username(report),
         validated_by_name=(report.validator_user.name.strip() if report.validator_user and report.validator_user.name else None),
+        closed_roads=still_closed,
+        barangay_name=_resolved_barangay_for_report(report),
     )
     result['reopened_roads'] = reopened_names
     result['still_closed'] = still_closed
-    result['blocks_road'] = len(still_closed) > 0
-    result['closed_roads'] = still_closed
     return jsonify(result)
 
 

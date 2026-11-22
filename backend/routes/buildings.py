@@ -15,6 +15,7 @@ from models import (
     Family,
     Resident,
     SystemLog,
+    to_utc_iso,
 )
 from geoalchemy2.shape import to_shape, from_shape
 from shapely.geometry import mapping, Polygon, shape, Point
@@ -855,7 +856,7 @@ def get_building_details(building_id):
                 "contact_number": contact_num,
                 "special_needs": flags,
                 "is_checked_in": a.checked_in_at is not None,
-                "checked_in_at": a.checked_in_at.isoformat() if a.checked_in_at else None,
+                "checked_in_at": to_utc_iso(a.checked_in_at),
                 "checkin_status": "Checked in" if a.checked_in_at is not None else "Not yet arrived",
             })
 

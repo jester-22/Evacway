@@ -12,14 +12,17 @@ import {
   Mail,
   Pencil,
   Search,
+  Unlink,
   UserCheck,
   UserPlus,
   X,
   XCircle,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
 import { queryKeys, useBarangays } from "../../hooks/useEvacuationQueries";
+import { formatManilaDate } from "../../utils/dateTime";
 import { Button, StatCard, StatusPill } from "../ui";
 import CreateResidentAccountModal from "./CreateResidentAccountModal";
 import "./ResidentRegistrations.css";
@@ -33,6 +36,8 @@ const COMPARISON_FIELDS = [
   { id: "address", label: "Address / purok", flag: "address", format: (record) => record.address || "Not provided" },
   { id: "contact_number", label: "Contact number", flag: "contact_number", format: (record) => record.contact_number || "Not provided" },
 ];
+const NAME_FIELD = COMPARISON_FIELDS[0];
+const BARANGAY_FIELD = COMPARISON_FIELDS[2];
 
 function joinName(record) {
   return [record.first_name, record.middle_name, record.last_name].filter(Boolean).join(" ");
@@ -47,12 +52,18 @@ function normalizedName(value) {
     .trim();
 }
 
+function getLocalYesterdayIso() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function formatDate(value) {
   if (!value) return "Not provided";
-  const parsed = new Date(`${value}T00:00:00`);
-  return Number.isNaN(parsed.getTime())
-    ? value
-    : new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(parsed);
+  return formatManilaDate(value, { dateStyle: "medium" }, value);
 }
 
 function getRosterRecord(resident) {
@@ -135,6 +146,8 @@ function matchesAutosuggestRecord(resident, suggestion) {
 }
 
 export default function ResidentRegistrations({ focusRegistrationId = null }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
   const barangaysQuery = useBarangays();
   const barangayOptions = useMemo(() => {
@@ -165,6 +178,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
   const [manualLoading, setManualLoading] = useState(false);
   const [manualError, setManualError] = useState("");
   const [confirmModal, setConfirmModal] = useState(null);
+  const [overrideReason, setOverrideReason] = useState("");
   const [rejectionReason, setRejectionReason] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -441,6 +455,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
     setManualResults([]);
     setDecisionResult(null);
     setConfirmModal(null);
+    setOverrideReason("");
     setActionError("");
     setIsEditingInfo(false);
     setEditError("");
@@ -466,6 +481,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
     setManualResults([]);
     setManualError("");
     setConfirmModal(options.openReject ? "reject" : null);
+    setOverrideReason("");
     setRejectionReason("");
     setIsEditingInfo(false);
     setEditError("");
@@ -543,6 +559,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
   function selectMatch(match) {
     if (!match.available || match.already_linked) return;
     setSelectedResident(match);
+    setOverrideReason("");
     setActionError("");
   }
 
@@ -583,16 +600,27 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
     }
   }
 
-  async function approveRequest() {
+  async function approveRequest(event) {
+    if (event) event.preventDefault();
     const matchedResidentId = getMatchResidentId(selectedResident);
     if (!selectedRequest || !matchedResidentId || actionLockRef.current || decisionResult) return;
+    const trimmedOverrideReason = overrideReason.trim();
+    if (hasRequiredMismatch && !trimmedOverrideReason) {
+      setActionError("An override reason is required to link a mismatched record.");
+      return;
+    }
     actionLockRef.current = true;
     setActionLoading(true);
     setActionError("");
     try {
-      const result = await api.approveResidentRegistration(selectedRequest.id, matchedResidentId);
+      const result = await api.approveResidentRegistration(
+        selectedRequest.id,
+        matchedResidentId,
+        hasRequiredMismatch ? trimmedOverrideReason : ""
+      );
       setDecisionResult({ status: "approved", result });
       setConfirmModal(null);
+      setOverrideReason("");
       setSelectedRequest((current) =>
         current
           ? {
@@ -662,6 +690,45 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
       setRefreshKey((current) => current + 1);
     } catch (error) {
       const message = error.message || "The registration could not be rejected.";
+      setActionError(message);
+      setConfirmModal(null);
+      showToast(message, "error");
+    } finally {
+      actionLockRef.current = false;
+      setActionLoading(false);
+    }
+  }
+
+  async function unlinkRequest() {
+    if (!selectedRequest || actionLockRef.current) return;
+    actionLockRef.current = true;
+    setActionLoading(true);
+    setActionError("");
+    try {
+      const result = await api.unlinkResidentRegistration(selectedRequest.id);
+      const updatedReq = result.request || {
+        ...selectedRequest,
+        status: "pending",
+        matched_resident_id: null,
+        has_account: false,
+        account_email: null,
+      };
+      setConfirmModal(null);
+      setDecisionResult(null);
+      setSelectedResident(null);
+      setOverrideReason("");
+      setSelectedRequest(updatedReq);
+      if (result.matches) {
+        setMatchResult(result.matches);
+        setMatchError("");
+      }
+      setRefreshKey((current) => current + 1);
+      showToast(
+        result.message || "Registration unlinked from roster record.",
+        "success"
+      );
+    } catch (error) {
+      const message = error.message || "The registration could not be unlinked.";
       setActionError(message);
       setConfirmModal(null);
       showToast(message, "error");
@@ -851,13 +918,31 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
       selectedRequest.status === "approved" &&
       (selectedRequest.has_account || decisionResult?.status === "approved")
   );
+  const selectedMismatchedRequired = useMemo(() => {
+    if (!selectedRequest || !selectedResident) return [];
+    const missing = [];
+    if (!isFieldMatched(selectedRequest, selectedResident, NAME_FIELD)) missing.push("name");
+    if (!isFieldMatched(selectedRequest, selectedResident, BARANGAY_FIELD)) missing.push("barangay");
+    return missing;
+  }, [selectedRequest, selectedResident]);
+  const hasRequiredMismatch = selectedMismatchedRequired.length > 0;
   const canApprove = Boolean(
     isPendingRequest &&
       !actionLoading &&
       !matchLoading &&
       selectedResident &&
       !selectedResident.already_linked &&
-      (selectedResident.available || !selectedResident.resident)
+      (selectedResident.available || !selectedResident.resident) &&
+      (!hasRequiredMismatch || isAdmin)
+  );
+  const canUnlink = Boolean(
+    isAdmin &&
+      selectedRequest &&
+      selectedRequest.status === "approved" &&
+      selectedRequest.matched_resident_id != null &&
+      !actionLoading &&
+      !resetLoading &&
+      !editSaving
   );
 
   return (
@@ -1343,6 +1428,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                       <input
                         type="date"
                         required
+                        max={getLocalYesterdayIso()}
                         value={editForm.birthdate}
                         onChange={(e) => setEditForm((f) => ({ ...f, birthdate: e.target.value }))}
                         disabled={editSaving}
@@ -1527,6 +1613,16 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                 </p>
               )}
 
+              {isPendingRequest && selectedResident && !selectedResident.already_linked && hasRequiredMismatch && !isAdmin && (
+                <p className="rr-registration-warning" role="alert">
+                  <AlertTriangle size={16} strokeWidth={2} aria-hidden="true" />
+                  <span>
+                    Cannot link because {selectedMismatchedRequired.join(" and ")}{" "}
+                    {selectedMismatchedRequired.length === 2 ? "do" : "does"} not match. Only an admin can override a mismatch.
+                  </span>
+                </p>
+              )}
+
               {selectedRequest.status === "rejected" && selectedRequest.rejection_reason && (
                 <div className="rr-reviewed-notice" role="status">
                   <strong>Rejection reason</strong>
@@ -1610,7 +1706,10 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                   <Button
                     variant="primary"
                     className="rr-review-footer-btn"
-                    onClick={() => setConfirmModal("approve")}
+                    onClick={() => {
+                      setOverrideReason("");
+                      setConfirmModal("approve");
+                    }}
                     disabled={!canApprove}
                   >
                     {actionLoading ? (
@@ -1622,14 +1721,27 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                   </Button>
                 </>
               ) : (
-                <Button
-                  variant="secondary"
-                  className="rr-review-footer-btn"
-                  onClick={closeReview}
-                  disabled={actionLoading || resetLoading}
-                >
-                  Close
-                </Button>
+                <>
+                  {canUnlink && (
+                    <Button
+                      variant="danger-outline"
+                      className="rr-review-footer-btn rr-review-reject-btn"
+                      onClick={() => setConfirmModal("unlink")}
+                      disabled={actionLoading || resetLoading}
+                    >
+                      <Unlink size={15} strokeWidth={2} aria-hidden="true" />
+                      <span>Unlink</span>
+                    </Button>
+                  )}
+                  <Button
+                    variant="secondary"
+                    className="rr-review-footer-btn"
+                    onClick={closeReview}
+                    disabled={actionLoading || resetLoading}
+                  >
+                    Close
+                  </Button>
+                </>
               )}
             </footer>
 
@@ -1648,7 +1760,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                 }}
               >
                 {confirmModal === "approve" && (
-                  <div className="resident-confirm-card">
+                  <form className="resident-confirm-card" onSubmit={approveRequest}>
                     <h3 id="resident-confirm-title">Approve resident registration?</h3>
                     <p>
                       Create an active resident account for{" "}
@@ -1662,9 +1774,36 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                         : ""}
                       ?
                     </p>
+                    {hasRequiredMismatch && isAdmin && (
+                      <>
+                        <p className="rr-registration-warning" role="alert">
+                          <AlertTriangle size={16} strokeWidth={2} aria-hidden="true" />
+                          <span>
+                            Mismatch detected ({selectedMismatchedRequired.join(" & ")}). Enter an override reason to link anyway.
+                          </span>
+                        </p>
+                        <label className="resident-confirm-label" htmlFor="resident-override-reason">
+                          Override reason <span aria-hidden="true">*</span>
+                        </label>
+                        <textarea
+                          id="resident-override-reason"
+                          value={overrideReason}
+                          onChange={(event) => {
+                            setOverrideReason(event.target.value);
+                            if (event.target.value.trim()) setActionError("");
+                          }}
+                          placeholder="Explain why this mismatched roster record is being linked..."
+                          maxLength={2000}
+                          rows={3}
+                          required
+                          disabled={actionLoading}
+                        />
+                      </>
+                    )}
                     <div className="resident-confirm-actions">
                       <Button
                         variant="secondary"
+                        type="button"
                         onClick={() => setConfirmModal(null)}
                         disabled={actionLoading}
                       >
@@ -1672,8 +1811,8 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                       </Button>
                       <Button
                         variant="primary"
-                        onClick={approveRequest}
-                        disabled={actionLoading}
+                        type="submit"
+                        disabled={actionLoading || (hasRequiredMismatch && !overrideReason.trim())}
                       >
                         {actionLoading && (
                           <Loader2 size={15} strokeWidth={2} className="rr-spin" aria-hidden="true" />
@@ -1681,7 +1820,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                         <span>{actionLoading ? "Approving..." : "Approve"}</span>
                       </Button>
                     </div>
-                  </div>
+                  </form>
                 )}
 
                 {confirmModal === "reject" && (
@@ -1727,6 +1866,41 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                       </Button>
                     </div>
                   </form>
+                )}
+
+                {confirmModal === "unlink" && (
+                  <div className="resident-confirm-card">
+                    <h3 id="resident-confirm-title">Unlink resident registration?</h3>
+                    <p>
+                      Remove the roster link for{" "}
+                      <strong>{selectedRequest.full_name || joinName(selectedRequest)}</strong>
+                      {selectedRequest.matched_resident_id != null
+                        ? ` (currently linked to Roster #${selectedRequest.matched_resident_id})`
+                        : ""}
+                      ? This revokes the linked resident account and removes any evacuation center
+                      and room assignment it inherited from that roster family, returning the
+                      request to pending review.
+                    </p>
+                    <div className="resident-confirm-actions">
+                      <Button
+                        variant="secondary"
+                        onClick={() => setConfirmModal(null)}
+                        disabled={actionLoading}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="danger"
+                        onClick={unlinkRequest}
+                        disabled={actionLoading}
+                      >
+                        {actionLoading && (
+                          <Loader2 size={15} strokeWidth={2} className="rr-spin" aria-hidden="true" />
+                        )}
+                        <span>{actionLoading ? "Unlinking..." : "Unlink"}</span>
+                      </Button>
+                    </div>
+                  </div>
                 )}
 
                 {confirmModal === "reset_password" && (

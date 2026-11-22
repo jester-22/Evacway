@@ -27,6 +27,9 @@ from models import (
     EvacuationCheckInRecord,
     ResidentAccount,
     philippines_now,
+    utc_now,
+    to_utc_iso,
+    to_philippines_dt,
 )
 from geoalchemy2.shape import to_shape, from_shape
 from shapely.geometry import mapping, Polygon, MultiPoint, Point
@@ -354,6 +357,378 @@ def _center_metrics(center):
     }
 
 
+def _bulk_center_metrics(centers):
+    """Batch-compute `_center_metrics` for many centers in a small fixed number of SQL queries."""
+    centers_list = [c for c in (centers or []) if c is not None]
+    if not centers_list:
+        return {}
+
+    center_ids = [c.id for c in centers_list]
+    center_id_set = set(center_ids)
+
+    # 1. All active rooms for these centers
+    all_rooms = (
+        EvacuationCenterRoom.query
+        .filter(
+            EvacuationCenterRoom.evacuation_center_id.in_(center_ids),
+            EvacuationCenterRoom.is_active.is_(True),
+        )
+        .all()
+    )
+    rooms_by_center = defaultdict(list)
+    room_to_center_id = {}
+    all_room_ids = []
+    for room in all_rooms:
+        rooms_by_center[room.evacuation_center_id].append(room)
+        room_to_center_id[room.id] = room.evacuation_center_id
+        all_room_ids.append(room.id)
+
+    # 2. All buildings for these centers
+    all_buildings = (
+        EvacuationCenterBuilding.query
+        .filter(EvacuationCenterBuilding.evacuation_center_id.in_(center_ids))
+        .order_by(EvacuationCenterBuilding.name.asc())
+        .all()
+    )
+    buildings_by_center = defaultdict(list)
+    for bld in all_buildings:
+        buildings_by_center[bld.evacuation_center_id].append(bld)
+
+    # 3. Single lightweight tuple query for all assignments touching any center or room
+    assignment_filter = or_(
+        EvacuationAssignment.evacuation_center_id.in_(center_ids),
+        EvacuationAssignment.room_id.in_(all_room_ids) if all_room_ids else False,
+    )
+    assignment_tuples = (
+        db.session.query(
+            EvacuationAssignment.evacuation_center_id,
+            EvacuationAssignment.room_id,
+            EvacuationAssignment.resident_id,
+            EvacuationAssignment.checked_in_at,
+            Resident.family_id,
+            Family.barangay_id,
+        )
+        .outerjoin(Resident, Resident.id == EvacuationAssignment.resident_id)
+        .outerjoin(Family, Family.id == Resident.family_id)
+        .filter(assignment_filter)
+        .all()
+    )
+
+    total_assigned_map = defaultdict(int)
+    total_occupied_map = defaultdict(int)
+    assigned_families_map = defaultdict(set)
+    arrived_families_map = defaultdict(set)
+    checked_in_residents_map = defaultdict(set)
+    assigned_by_brgy_map = defaultdict(lambda: defaultdict(int))
+    occupied_by_brgy_map = defaultdict(lambda: defaultdict(int))
+    families_by_brgy_map = defaultdict(lambda: defaultdict(set))
+    rooms_by_brgy_map = defaultdict(lambda: defaultdict(set))
+    assigned_by_room = {rid: {} for rid in all_room_ids}
+
+    for a_cid, r_id, res_id, checked_in_at, fam_id, brgy_id in assignment_tuples:
+        if r_id in assigned_by_room and res_id is not None:
+            assigned_by_room[r_id][res_id] = fam_id
+
+        matched_cids = set()
+        if a_cid in center_id_set:
+            matched_cids.add(a_cid)
+        room_cid = room_to_center_id.get(r_id)
+        if room_cid is not None:
+            matched_cids.add(room_cid)
+
+        is_checked = checked_in_at is not None
+        for cid in matched_cids:
+            total_assigned_map[cid] += 1
+            if is_checked:
+                total_occupied_map[cid] += 1
+                if res_id is not None:
+                    checked_in_residents_map[cid].add(res_id)
+            if fam_id is not None:
+                assigned_families_map[cid].add(fam_id)
+                if is_checked:
+                    arrived_families_map[cid].add(fam_id)
+                if brgy_id is not None:
+                    assigned_by_brgy_map[cid][brgy_id] += 1
+                    if is_checked:
+                        occupied_by_brgy_map[cid][brgy_id] += 1
+                    families_by_brgy_map[cid][brgy_id].add(fam_id)
+            if room_cid == cid and r_id is not None and fam_id is not None and brgy_id is not None:
+                rooms_by_brgy_map[cid][brgy_id].add(r_id)
+
+    # 4. Linked barangays & weighted average household size in 1 SQL query
+    linked_barangays_by_center = {c.id: _center_barangays(c) for c in centers_list}
+    all_linked_brgy_ids = {
+        item["id"]
+        for items in linked_barangays_by_center.values()
+        for item in items
+    }
+    hh_stats_by_brgy = {}
+    if all_linked_brgy_ids:
+        hh_rows = (
+            db.session.query(
+                Family.barangay_id,
+                func.sum(Family.member_count),
+                func.count(Family.id),
+            )
+            .filter(
+                Family.barangay_id.in_(all_linked_brgy_ids),
+                Family.member_count > 0,
+            )
+            .group_by(Family.barangay_id)
+            .all()
+        )
+        for bid, member_sum, fam_count in hh_rows:
+            hh_stats_by_brgy[bid] = (int(member_sum or 0), int(fam_count or 0))
+
+    # 5. Batched walk-in room usage + non-registered occupancy when table_ready()
+    nre_ready = table_ready()
+    walkin_by_room = {}
+    op_scope = {}
+    op_order = []
+    walkin_by_op_center = {}
+    if nre_ready:
+        from models import NonRegisteredEvacuee
+        if all_room_ids:
+            try:
+                room_walkin_rows = (
+                    db.session.query(
+                        NonRegisteredEvacuee.room_id,
+                        func.count(func.distinct(NonRegisteredEvacuee.group_code)),
+                        func.count(NonRegisteredEvacuee.id),
+                    )
+                    .filter(
+                        NonRegisteredEvacuee.room_id.in_(all_room_ids),
+                        NonRegisteredEvacuee.departed_at.is_(None),
+                    )
+                    .group_by(NonRegisteredEvacuee.room_id)
+                    .all()
+                )
+                for rid, w_slots, w_spaces in room_walkin_rows:
+                    walkin_by_room[rid] = (int(w_slots or 0), int(w_spaces or 0))
+            except Exception:
+                db.session.rollback()
+
+        op_walkin_rows = (
+            db.session.query(
+                EvacuationOperation.id,
+                EvacuationOperation.center_id,
+                NonRegisteredEvacuee.center_id,
+                func.count(NonRegisteredEvacuee.id),
+            )
+            .outerjoin(
+                NonRegisteredEvacuee,
+                (NonRegisteredEvacuee.operation_id == EvacuationOperation.id)
+                & (NonRegisteredEvacuee.departed_at.is_(None))
+                & (NonRegisteredEvacuee.center_id.in_(center_ids)),
+            )
+            .filter(EvacuationOperation.status == 'active')
+            .group_by(
+                EvacuationOperation.id,
+                EvacuationOperation.center_id,
+                NonRegisteredEvacuee.center_id,
+            )
+            .order_by(EvacuationOperation.id.desc())
+            .all()
+        )
+        for op_id, op_cid, nre_cid, cnt in op_walkin_rows:
+            if op_id not in op_scope:
+                op_scope[op_id] = op_cid
+                op_order.append(op_id)
+            if nre_cid is not None:
+                walkin_by_op_center[(op_id, nre_cid)] = int(cnt or 0)
+
+    all_room_usage = {}
+    for room in all_rooms:
+        assigned_residents = assigned_by_room.get(room.id, {})
+        slot_keys = {
+            ('family', fam_id) if fam_id is not None else ('resident', res_id)
+            for res_id, fam_id in assigned_residents.items()
+        }
+        walk_in_slots, walk_in_spaces = walkin_by_room.get(room.id, (0, 0))
+        used_slots = len(slot_keys) + walk_in_slots
+        used_spaces = len(assigned_residents) + walk_in_spaces
+        family_slots = int(room.family_slots or 0)
+        people_spaces = int(room.people_spaces or 0)
+        all_room_usage[room.id] = {
+            'used_slots': used_slots,
+            'used_spaces': used_spaces,
+            'available_slots': max(family_slots - used_slots, 0),
+            'available_spaces': max(people_spaces - used_spaces, 0),
+            'is_full': used_slots >= family_slots or used_spaces >= people_spaces,
+            'is_over_capacity': used_slots > family_slots or used_spaces > people_spaces,
+        }
+
+    metrics_by_center = {}
+    capacity_dirty = False
+
+    for center in centers_list:
+        cid = center.id
+        rooms = rooms_by_center.get(cid, [])
+        rooms_by_id = {room.id: room for room in rooms}
+
+        total_assigned = total_assigned_map.get(cid, 0)
+        total_occupied = total_occupied_map.get(cid, 0)
+        total_assigned_households = len(assigned_families_map.get(cid, ()))
+        total_arrived_households = len(arrived_families_map.get(cid, ()))
+        assigned_by_barangay = assigned_by_brgy_map.get(cid, {})
+        occupied_by_barangay = occupied_by_brgy_map.get(cid, {})
+        family_count_by_barangay = {
+            bid: len(fids) for bid, fids in families_by_brgy_map.get(cid, {}).items()
+        }
+        rooms_by_barangay = rooms_by_brgy_map.get(cid, {})
+
+        linked_barangays = linked_barangays_by_center[cid]
+        structure_mode = getattr(center, 'structure_mode', None) or 'buildings_and_rooms'
+        room_usage_list = [all_room_usage[r.id] for r in rooms if r.id in all_room_usage]
+        total_room_family_slots = sum(int(room.family_slots or 0) for room in rooms)
+        total_room_people_spaces = sum(int(room.people_spaces or 0) for room in rooms)
+        total_room_used_slots = sum(usage['used_slots'] for usage in room_usage_list)
+        total_room_used_spaces = sum(usage['used_spaces'] for usage in room_usage_list)
+        full_room_count = sum(1 for usage in room_usage_list if usage['is_full'])
+
+        if structure_mode == 'open_area':
+            total_capacity = center.capacity if center.capacity is not None else 0
+        elif len(rooms) > 0:
+            total_capacity = total_room_people_spaces
+            if center.capacity != total_capacity:
+                center.capacity = total_capacity
+                capacity_dirty = True
+        else:
+            total_capacity = center.capacity if center.capacity is not None else 0
+
+        effective_capacity = total_capacity
+        center_available = max(effective_capacity - total_occupied, 0)
+        center_unassigned = max(effective_capacity - total_assigned, 0)
+
+        linked_barangay_ids = [item["id"] for item in linked_barangays]
+        average_household_size = None
+        if linked_barangay_ids:
+            sum_members = sum(hh_stats_by_brgy.get(bid, (0, 0))[0] for bid in linked_barangay_ids)
+            cnt_families = sum(hh_stats_by_brgy.get(bid, (0, 0))[1] for bid in linked_barangay_ids)
+            if cnt_families > 0:
+                average_household_size = sum_members / cnt_families
+        if average_household_size is None and total_assigned_households > 0:
+            average_household_size = total_assigned / total_assigned_households
+
+        household_capacity = (
+            int(effective_capacity // float(average_household_size))
+            if effective_capacity > 0 and average_household_size is not None
+            else None
+        )
+        household_space_left = (
+            max(household_capacity - total_assigned_households, 0)
+            if household_capacity is not None
+            else None
+        )
+
+        breakdown = []
+        for barangay in linked_barangays:
+            barangay_id = barangay["id"]
+            used_room_ids = rooms_by_barangay.get(barangay_id, set())
+            used_room_capacity = sum(
+                rooms_by_id[rid].people_spaces or 0
+                for rid in used_room_ids
+                if rid in rooms_by_id
+            )
+            assigned = assigned_by_barangay.get(barangay_id, 0)
+            occupied = occupied_by_barangay.get(barangay_id, 0)
+            breakdown.append({
+                **barangay,
+                "rooms": len(used_room_ids) if used_room_ids else len(rooms),
+                "assigned": assigned,
+                "occupied": occupied,
+                "assigned_families": family_count_by_barangay.get(barangay_id, 0),
+                "available": (
+                    max(used_room_capacity - occupied, 0)
+                    if used_room_ids
+                    else center_available
+                ),
+                "unassigned": (
+                    max(used_room_capacity - assigned, 0)
+                    if used_room_ids
+                    else center_unassigned
+                ),
+            })
+
+        center_buildings = buildings_by_center.get(cid, [])
+        is_venue_or_private = structure_mode in ("open_area", "rooms_only")
+        building_count = len(center_buildings)
+        unmapped_room_count = 0 if is_venue_or_private else sum(1 for room in rooms if room.building_id is None)
+        mapped_room_count = 0 if is_venue_or_private else sum(1 for room in rooms if room.building_id is not None)
+
+        if nre_ready:
+            matched_op_id = next(
+                (oid for oid in op_order if op_scope[oid] is None or op_scope[oid] == cid),
+                None,
+            )
+            if matched_op_id is None:
+                total_occupied = 0
+            else:
+                total_occupied = (
+                    len(checked_in_residents_map.get(cid, ()))
+                    + walkin_by_op_center.get((matched_op_id, cid), 0)
+                )
+            center_available = max(effective_capacity - total_occupied, 0)
+
+        metrics_by_center[cid] = {
+            "center_type": center.center_type or "campus",
+            "structure_mode": structure_mode,
+            "owner_name": center.owner_name,
+            "barangays": linked_barangays,
+            "barangay": ", ".join(item["name"] for item in linked_barangays) or None,
+            "barangay_ids": [item["id"] for item in linked_barangays],
+            "barangay_id": linked_barangays[0]["id"] if linked_barangays else None,
+            "barangay_breakdown": breakdown,
+            "capacity": total_capacity,
+            "family_slots": total_room_family_slots if rooms else None,
+            "people_spaces": total_room_people_spaces if rooms else total_capacity,
+            "used_slots": total_room_used_slots if rooms else total_assigned_households,
+            "used_spaces": total_room_used_spaces if rooms else total_assigned,
+            "available_slots": max(total_room_family_slots - total_room_used_slots, 0) if rooms else None,
+            "available_spaces": max(total_room_people_spaces - total_room_used_spaces, 0) if rooms else max(total_capacity - total_assigned, 0),
+            "full_room_count": full_room_count,
+            "available_room_count": max(len(rooms) - full_room_count, 0),
+            "occupied": total_occupied,
+            "current_occupancy": total_occupied,
+            "assigned": total_assigned,
+            "total_assigned": total_assigned,
+            "available": center_available,
+            "unassigned": center_unassigned,
+            "household_capacity": household_capacity,
+            "household_assigned": total_assigned_households,
+            "household_arrived": total_arrived_households,
+            "household_space_left": household_space_left,
+            "is_fully_assigned": bool(
+                (rooms and (total_room_used_slots >= total_room_family_slots or total_room_used_spaces >= total_room_people_spaces))
+                or (not rooms and effective_capacity > 0 and total_assigned >= effective_capacity)
+            ),
+            "building_count": building_count,
+            "buildings": [
+                {
+                    "id": b.id,
+                    "name": b.name,
+                    "status": b.status or "open",
+                    "evacuation_center_id": cid,
+                    "center_name": center.name,
+                    "is_mapped": b.geom is not None,
+                }
+                for b in center_buildings
+            ],
+            "room_count": len(rooms),
+            "total_rooms": len(rooms),
+            "unmapped_room_count": unmapped_room_count,
+            "mapped_room_count": mapped_room_count,
+        }
+
+    if capacity_dirty:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    return metrics_by_center
+
+
 # =========================================================
 # CENTER TYPE CHANGE VALIDATION
 # =========================================================
@@ -519,7 +894,7 @@ def get_allowed_center_types(center):
     return blocked
 
 
-def center_to_feature(center):
+def center_to_feature(center, metrics=None, include_entrance_snap=True):
     geometry = None
 
     # Imported centers may not have a map polygon yet.
@@ -535,8 +910,6 @@ def center_to_feature(center):
     # Imported centers may also have no entrance yet.
     if center.entrance_geom is not None:
         try:
-            from services.pathfinding import snap_point_to_road, MAX_ENTRANCE_SNAP_DISTANCE_METERS
-
             entrance_shape = to_shape(center.entrance_geom)
             raw_pts = []
             if hasattr(entrance_shape, "geoms"):
@@ -544,30 +917,40 @@ def center_to_feature(center):
             elif hasattr(entrance_shape, "y") and hasattr(entrance_shape, "x"):
                 raw_pts = [entrance_shape]
 
-            for idx, point in enumerate(raw_pts):
-                snap_pt, edge_dist_m, sub_info, is_conn = snap_point_to_road(point.y, point.x)
-                reasons = []
-                if edge_dist_m > MAX_ENTRANCE_SNAP_DISTANCE_METERS:
-                    reasons.append(f"Snap distance is {edge_dist_m:.1f}m (> 25m threshold)")
-                if not is_conn:
-                    reasons.append("Road segment is not connected to the walkable network")
+            if include_entrance_snap and raw_pts:
+                from services.pathfinding import snap_point_to_road, MAX_ENTRANCE_SNAP_DISTANCE_METERS
+                for idx, point in enumerate(raw_pts):
+                    snap_pt, edge_dist_m, sub_info, is_conn = snap_point_to_road(point.y, point.x)
+                    reasons = []
+                    if edge_dist_m > MAX_ENTRANCE_SNAP_DISTANCE_METERS:
+                        reasons.append(f"Snap distance is {edge_dist_m:.1f}m (> 25m threshold)")
+                    if not is_conn:
+                        reasons.append("Road segment is not connected to the walkable network")
 
-                entrances.append({
-                    "index": idx + 1,
-                    "name": f"Entrance {idx + 1}",
-                    "lat": point.y,
-                    "lng": point.x,
-                    "snap_distance_m": round(edge_dist_m, 1),
-                    "nearest_road": sub_info["road_name"] if sub_info else "Unknown",
-                    "is_connected": is_conn,
-                    "has_warning": bool(reasons),
-                    "warning": "; ".join(reasons) if reasons else None,
-                })
+                    entrances.append({
+                        "index": idx + 1,
+                        "name": f"Entrance {idx + 1}",
+                        "lat": point.y,
+                        "lng": point.x,
+                        "snap_distance_m": round(edge_dist_m, 1),
+                        "nearest_road": sub_info["road_name"] if sub_info else "Unknown",
+                        "is_connected": is_conn,
+                        "has_warning": bool(reasons),
+                        "warning": "; ".join(reasons) if reasons else None,
+                    })
+            else:
+                for idx, point in enumerate(raw_pts):
+                    entrances.append({
+                        "index": idx + 1,
+                        "name": f"Entrance {idx + 1}",
+                        "lat": point.y,
+                        "lng": point.x,
+                    })
 
         except (TypeError, ValueError):
             entrances = []
 
-    metrics = _center_metrics(center)
+    metrics = _center_metrics(center) if metrics is None else metrics
 
     amenity_names = [a.name for a in sorted(center.amenities, key=lambda x: (getattr(x, 'display_order', 0), x.id))] if hasattr(center, 'amenities') and center.amenities else []
     return {
@@ -1025,9 +1408,9 @@ def get_evacuation_centers():
 
     query = EvacuationCenter.query.options(
         db.selectinload(EvacuationCenter.amenities),
-        db.selectinload(EvacuationCenter.barangay_links).selectinload(CenterBarangay.barangay),
-        db.selectinload(EvacuationCenter.center_type_ref),
-        db.selectinload(EvacuationCenter.building_material_ref)
+        db.selectinload(EvacuationCenter.barangay_links).joinedload(CenterBarangay.barangay),
+        joinedload(EvacuationCenter.center_type_ref),
+        joinedload(EvacuationCenter.building_material_ref)
     )
 
     if status == 'active':
@@ -1062,10 +1445,14 @@ def get_evacuation_centers():
         )
 
     centers = query.order_by(EvacuationCenter.name.asc()).all()
+    metrics_by_center = _bulk_center_metrics(centers)
 
     return jsonify({
         "type": "FeatureCollection",
-        "features": [center_to_feature(c) for c in centers]
+        "features": [
+            center_to_feature(c, metrics=metrics_by_center.get(c.id), include_entrance_snap=False)
+            for c in centers
+        ]
     })
 
 
@@ -1115,7 +1502,7 @@ def get_public_offline_centers():
     response = jsonify({
         "type": "FeatureCollection",
         "features": features,
-        "last_updated": datetime.now(timezone.utc).isoformat(),
+        "last_updated": to_utc_iso(datetime.now(timezone.utc)),
     })
     response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
     return response
@@ -2028,7 +2415,7 @@ def update_evacuee_check_in(center_id):
     except Exception:
         pass
 
-    now = philippines_now()
+    now = utc_now()
     head_name = family.head_name if family else f"Resident #{resident_id}"
     fam_code = f" ({family.family_code})" if family and family.family_code else ""
 
@@ -2090,7 +2477,7 @@ def update_evacuee_check_in(center_id):
             "checkin_state": "full",
             "checked_in_members": len(assignments),
             "assigned_members": len(assignments),
-            "checked_in_at": now.isoformat(),
+            "checked_in_at": to_utc_iso(now),
             "family_id": family_id,
             "resident_id": resident_id,
             "action": "check_in"
@@ -2222,7 +2609,7 @@ def auto_geofence_check_in():
     if not assignments:
         return jsonify({"error": "No assignment found for this center"}), 404
 
-    now = philippines_now()
+    now = utc_now()
     already_checked_in = all(a.checked_in_at is not None for a in assignments)
     if not already_checked_in:
         for a in assignments:
@@ -2252,7 +2639,7 @@ def auto_geofence_check_in():
         "already_checked_in": already_checked_in,
         "message": f"Welcome! You have arrived at {center.name}." + (f" Your assigned room is {room_number}" + (f", floor {room_floor}" if room_floor is not None else "") + "." if room_number else ""),
         "is_checked_in": True,
-        "checked_in_at": now.isoformat(),
+        "checked_in_at": to_utc_iso(now),
         "center_name": center.name,
         "room_number": room_number,
         "floor": room_floor
@@ -2380,7 +2767,7 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
             "remaining_seconds": 0,
             "can_check_in": False,
             "is_historical": True,
-            "concluded_at": target_op.concluded_at.isoformat() if target_op.concluded_at else None,
+            "concluded_at": to_utc_iso(target_op.concluded_at),
         }
     else:
         target_c = None
@@ -2577,7 +2964,7 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
                 "relationship": res.relationship_to_head or ("Head" if res.is_head_of_family else "Member"),
                 "is_head": bool(res.is_head_of_family),
                 "is_checked_in": chk_time is not None,
-                "checked_in_at": chk_time.isoformat() if chk_time else None,
+                "checked_in_at": to_utc_iso(chk_time),
                 "checked_in_dt": chk_time,
                 "special_needs": flags,
             })
@@ -2593,7 +2980,7 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
         m_list = members_map.get(r.family_id, [])
         m_count = len(m_list) if m_list else int(r.assigned_members or r.member_count or 1)
         chk_count = sum(1 for m in m_list if m["is_checked_in"]) if m_list else int(r.checked_in_members or 0)
-        latest_at = r.latest_checked_in_at.isoformat() if r.latest_checked_in_at else None
+        latest_at = to_utc_iso(r.latest_checked_in_at)
 
         if chk_count >= m_count and m_count > 0:
             checkin_state = "full"
@@ -2616,7 +3003,8 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
             has_date_match = False
             for m in m_list:
                 dt_val = m.get("checked_in_dt")
-                if dt_val and dt_val.strftime("%Y-%m-%d") == date_filter:
+                dt_local = to_philippines_dt(dt_val)
+                if dt_local and dt_local.strftime("%Y-%m-%d") == date_filter:
                     has_date_match = True
                     break
 
@@ -2652,17 +3040,18 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
                     continue
 
         for m in m_list:
-            m_dt = m.get("checked_in_dt")
+            m_dt = to_philippines_dt(m.get("checked_in_dt"))
             m["checked_in_time_formatted"] = m_dt.strftime("%I:%M %p") if m_dt else None
             m["checked_in_date_formatted"] = m_dt.strftime("%b %d, %Y") if m_dt else None
             m["checked_in_full_formatted"] = m_dt.strftime("%b %d, %Y %I:%M %p") if m_dt else None
 
         m_checked_times = [m["checked_in_dt"] for m in m_list if m.get("checked_in_dt")]
         latest_dt = max(m_checked_times) if m_checked_times else (r.latest_checked_in_at if not is_historical else None)
-        latest_at = latest_dt.isoformat() if latest_dt else None
-        latest_formatted = latest_dt.strftime("%b %d, %Y %I:%M %p") if latest_dt else None
-        latest_time_only = latest_dt.strftime("%I:%M %p") if latest_dt else None
-        latest_date_only = latest_dt.strftime("%b %d, %Y") if latest_dt else None
+        latest_local_dt = to_philippines_dt(latest_dt)
+        latest_at = to_utc_iso(latest_dt)
+        latest_formatted = latest_local_dt.strftime("%b %d, %Y %I:%M %p") if latest_local_dt else None
+        latest_time_only = latest_local_dt.strftime("%I:%M %p") if latest_local_dt else None
+        latest_date_only = latest_local_dt.strftime("%b %d, %Y") if latest_local_dt else None
 
         c_type_code = (getattr(r, 'center_type_code', None) or 'campus').strip().lower()
         s_mode_raw = (getattr(r, 'center_structure_mode', None) or '').strip().lower()
@@ -2914,7 +3303,7 @@ def manage_evacuation_schedule():
         db.session.add(SystemLog(
             user_id=current_uid,
             action=f"Set evacuation schedule for {log_center}: {parsed_date} {raw_open_time} - {parsed_cutoff_date} {raw_cutoff_time} ({evac_status})",
-            timestamp=philippines_now()
+            timestamp=utc_now()
         ))
 
     def _snapshot_active_checkins_to_operation(operation):
@@ -2931,7 +3320,7 @@ def manage_evacuation_schedule():
             rec.resident_id: rec
             for rec in EvacuationCheckInRecord.query.filter_by(operation_id=operation.id).all()
         }
-        now_ts = philippines_now()
+        now_ts = utc_now()
         for a in checked_assignments:
             res = Resident.query.get(a.resident_id)
             cid_val = a.evacuation_center_id
@@ -2972,7 +3361,7 @@ def manage_evacuation_schedule():
             for old_op in non_concluded_ops:
                 _snapshot_active_checkins_to_operation(old_op)
                 old_op.status = 'concluded'
-                old_op.concluded_at = philippines_now()
+                old_op.concluded_at = utc_now()
         elif prior_snapshot:
             archived_op = EvacuationOperation(
                 center_id=prior_snapshot["center_id"],
@@ -2983,7 +3372,7 @@ def manage_evacuation_schedule():
                 cutoff_time=prior_snapshot["cutoff_time"],
                 status='concluded',
                 created_by_user_id=current_uid,
-                concluded_at=philippines_now(),
+                concluded_at=utc_now(),
             )
             db.session.add(archived_op)
             db.session.flush()
@@ -3016,7 +3405,7 @@ def manage_evacuation_schedule():
             for old_op in non_concluded_ops:
                 _snapshot_active_checkins_to_operation(old_op)
                 old_op.status = 'concluded'
-                old_op.concluded_at = philippines_now()
+                old_op.concluded_at = utc_now()
         else:
             fallback_open = parsed_date or (prior_snapshot["open_date"] if prior_snapshot else date.today())
             fallback_cutoff = parsed_cutoff_date or fallback_open
@@ -3029,7 +3418,7 @@ def manage_evacuation_schedule():
                 cutoff_time=raw_cutoff_time,
                 status='concluded',
                 created_by_user_id=current_uid,
-                concluded_at=philippines_now(),
+                concluded_at=utc_now(),
             )
             db.session.add(archived_op)
             db.session.flush()
@@ -3293,7 +3682,8 @@ def export_check_in_report():
             for m in members:
                 is_chk = m.get("is_checked_in")
                 chk_dt = m.get("checked_in_dt")
-                time_str = chk_dt.strftime("%Y-%m-%d %I:%M %p") if chk_dt else "—"
+                chk_local = to_philippines_dt(chk_dt)
+                time_str = chk_local.strftime("%Y-%m-%d %I:%M %p") if chk_local else "—"
                 needs_str = ", ".join(m.get("special_needs") or []) or "—"
 
                 row_values = [

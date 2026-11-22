@@ -167,16 +167,26 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  approveResidentRegistration: (requestId, matchedResidentId) =>
-    request(`/api/resident-registrations/${requestId}/approve`, {
+  approveResidentRegistration: (requestId, matchedResidentId, overrideReason = "") => {
+    const payload = { matched_resident_id: matchedResidentId };
+    if (overrideReason && overrideReason.trim()) {
+      payload.override_reason = overrideReason.trim();
+    }
+    return request(`/api/resident-registrations/${requestId}/approve`, {
       method: "POST",
-      body: JSON.stringify({ matched_resident_id: matchedResidentId }),
-    }),
+      body: JSON.stringify(payload),
+    });
+  },
 
   rejectResidentRegistration: (requestId, reason) =>
     request(`/api/resident-registrations/${requestId}/reject`, {
       method: "POST",
       body: JSON.stringify({ reason }),
+    }),
+
+  unlinkResidentRegistration: (requestId) =>
+    request(`/api/resident-registrations/${requestId}/unlink`, {
+      method: "POST",
     }),
 
   resendResidentRegistrationEmail: (requestId) =>
@@ -248,11 +258,16 @@ export const api = {
 
   getRescueRequests: () => request("/api/rescue-requests"),
 
-  updateRescueRequest: (id, status) =>
-    request(`/api/rescue-requests/${id}`, {
+  updateRescueRequest: (id, payloadOrStatus) => {
+    const body =
+      typeof payloadOrStatus === "string"
+        ? { status: payloadOrStatus }
+        : payloadOrStatus || {};
+    return request(`/api/rescue-requests/${id}`, {
       method: "PATCH",
-      body: JSON.stringify({ status }),
-    }),
+      body: JSON.stringify(body),
+    });
+  },
 
 
   // -------------------------------------------------------
@@ -275,6 +290,9 @@ export const api = {
 
   getPublicOperationAlert: () =>
     request("/api/public-operation-alert"),
+
+  getDashboardSummary: () =>
+    request("/api/dashboard/summary"),
 
   snapCoordinate: (lat, lng, { snapToIntersection = true } = {}) =>
     request(`/api/routing/snap?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}&snap_intersection=${snapToIntersection}`),
@@ -428,16 +446,35 @@ export const api = {
   validateHazardReport: (
     id,
     status,
-    response_notes
-  ) =>
-    request(
+    response_notes,
+    rejection_reason,
+    duplicate_of
+  ) => {
+    const payload = {
+      status,
+      response_notes,
+    };
+    if (rejection_reason !== undefined) {
+      payload.rejection_reason = rejection_reason;
+    }
+    if (duplicate_of !== undefined) {
+      payload.duplicate_of = duplicate_of;
+    }
+    return request(
       `/api/hazard-reports/${id}/validate`,
       {
         method: "PATCH",
-        body: JSON.stringify({
-          status,
-          response_notes,
-        }),
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  setHazardReportDuplicate: (id, duplicate_of) =>
+    request(
+      `/api/hazard-reports/${id}/duplicate`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ duplicate_of }),
       }
     ),
 

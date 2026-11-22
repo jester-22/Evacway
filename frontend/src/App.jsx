@@ -41,137 +41,137 @@ function ResidentOrGuestRoute({ children }) {
 
 function App() {
   return (
-    
+
     <BrowserRouter>
       <AuthProvider>
         <NetworkStatus />
         <ErrorBoundary>
           <Routes>
-          {/* Public — no login required, per the proposal */}
-          <Route
-            path="/"
-            element={
-              <GuestOnlyRoute>
-                <LandingPage />
-              </GuestOnlyRoute>
-            }
-          />
-          <Route
-            path="/map"
-            element={
-              <ResidentOrGuestRoute>
-                <ResidentHome />
-              </ResidentOrGuestRoute>
-            }
-          />
-          <Route path="/login" element={<Login />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/set-password" element={<PasswordSetup />} />
-          <Route path="/data-privacy-notice" element={<DataPrivacyNotice />} />
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
+            {/* Public — no login required, per the proposal */}
+            <Route
+              path="/"
+              element={
+                <GuestOnlyRoute>
+                  <LandingPage />
+                </GuestOnlyRoute>
+              }
+            />
+            <Route
+              path="/map"
+              element={
+                <ResidentOrGuestRoute>
+                  <ResidentHome />
+                </ResidentOrGuestRoute>
+              }
+            />
+            <Route path="/login" element={<Login />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/set-password" element={<PasswordSetup />} />
+            <Route path="/data-privacy-notice" element={<DataPrivacyNotice />} />
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
+                  <Dashboard />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route
-            path="/profile"
-            element={
-              <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
-                <ManageProfile />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/profile"
+              element={
+                <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
+                  <ManageProfile />
+                </ProtectedRoute>
+              }
+            />
 
-          {/* Admin and LGU Map page */}
-          <Route
-            path="/admin/map"
-            element={
-              <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
-                <AdminMap />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/lgu/map"
-            element={
-              <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
-                <AdminMap />
-              </ProtectedRoute>
-            }
-          />
+            {/* Admin and LGU Map page */}
+            <Route
+              path="/admin/map"
+              element={
+                <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
+                  <AdminMap />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/lgu/map"
+              element={
+                <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
+                  <AdminMap />
+                </ProtectedRoute>
+              }
+            />
 
-          {/* LGU Personnel only */}
-          <Route
-            path="/lgu"
-            element={
-              <ProtectedRoute allowedRoles={["lgu_personnel"]}>
-                <LguDashboard />
-              </ProtectedRoute>
-            }
-          />
+            {/* LGU Personnel only */}
+            <Route
+              path="/lgu"
+              element={
+                <ProtectedRoute allowedRoles={["lgu_personnel"]}>
+                  <LguDashboard />
+                </ProtectedRoute>
+              }
+            />
 
-          {/* Admin only */}
-          <Route
-            path="/admin"
-            element={
-              <ProtectedRoute allowedRoles={["admin"]}>
-                <AdminDashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/admin/evacuation-centers/:centerId"
-            element={
-              <ProtectedRoute allowedRoles={["admin"]}>
-                <AdminDashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/admin/evacuation-centers/:centerId/buildings/:buildingId"
-            element={
-              <ProtectedRoute allowedRoles={["admin"]}>
-                <AdminDashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/admin/evacuation-centers/:centerId/rooms/:roomId"
-            element={
-              <ProtectedRoute allowedRoles={["admin"]}>
-                <AdminDashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/lgu/evacuation-centers/:centerId/buildings/:buildingId"
-            element={
-              <ProtectedRoute allowedRoles={["lgu_personnel"]}>
-                <LguDashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/lgu/evacuation-centers/:centerId"
-            element={
-              <ProtectedRoute allowedRoles={["lgu_personnel"]}>
-                <LguDashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/lgu/evacuation-centers/:centerId/rooms/:roomId"
-            element={
-              <ProtectedRoute allowedRoles={["lgu_personnel"]}>
-                <LguDashboard />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
+            {/* Admin only */}
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute allowedRoles={["admin"]}>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/evacuation-centers/:centerId"
+              element={
+                <ProtectedRoute allowedRoles={["admin"]}>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/evacuation-centers/:centerId/buildings/:buildingId"
+              element={
+                <ProtectedRoute allowedRoles={["admin"]}>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/evacuation-centers/:centerId/rooms/:roomId"
+              element={
+                <ProtectedRoute allowedRoles={["admin"]}>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/lgu/evacuation-centers/:centerId/buildings/:buildingId"
+              element={
+                <ProtectedRoute allowedRoles={["lgu_personnel"]}>
+                  <LguDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/lgu/evacuation-centers/:centerId"
+              element={
+                <ProtectedRoute allowedRoles={["lgu_personnel"]}>
+                  <LguDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/lgu/evacuation-centers/:centerId/rooms/:roomId"
+              element={
+                <ProtectedRoute allowedRoles={["lgu_personnel"]}>
+                  <LguDashboard />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
         </ErrorBoundary>
       </AuthProvider>
     </BrowserRouter>

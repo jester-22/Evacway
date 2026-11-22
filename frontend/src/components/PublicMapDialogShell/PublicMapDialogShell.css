@@ -32,13 +32,14 @@ dialog.public-map-dialog-panel[open] {
 
 dialog.public-map-dialog-panel[open] {
   position: fixed;
-  inset: 50% auto auto 50%;
-  margin: 0;
-  transform: translate(-50%, -50%);
+  inset: 0;
+  margin: auto;
+  transform: none;
 }
 
 dialog.public-map-dialog-panel::backdrop {
   background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
 }
 
 .public-map-dialog-handle {
@@ -171,6 +172,24 @@ dialog.public-map-dialog-panel::backdrop {
 
   dialog.public-map-dialog-panel[open] .ew-signup-actions {
     padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  }
+
+  dialog.ew-login-modal.public-map-dialog-panel[open] {
+    position: fixed;
+    inset: 0;
+    width: min(460px, calc(100vw - 2rem));
+    max-width: calc(100vw - 2rem);
+    height: fit-content;
+    max-height: calc(100dvh - 2rem);
+    margin: auto;
+    padding-bottom: 0;
+    border-radius: 20px;
+    transform: none;
+    animation: ew-dialog-fade-scale 150ms ease-out;
+  }
+
+  dialog.ew-login-modal.public-map-dialog-panel[open] > .public-map-dialog-handle {
+    display: none;
   }
 }
 

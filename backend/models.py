@@ -1,6 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from geoalchemy2 import Geometry
-from datetime import datetime, date, date
+from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
 
 
@@ -38,6 +38,35 @@ PHILIPPINES_TZ = ZoneInfo("Asia/Manila")
 
 def philippines_now():
     return datetime.now(PHILIPPINES_TZ).replace(tzinfo=None)
+
+
+def utc_now():
+    """Return current UTC time as a naive datetime (for DB DateTime columns)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def to_utc_iso(value):
+    """Serialize a datetime as an ISO 8601 UTC string ending with 'Z'.
+
+    Naive datetimes are treated as UTC (matching utc_now()).
+    Plain date objects (e.g. birthdate) remain YYYY-MM-DD.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.isoformat() + "Z"
+    return value.isoformat()
+
+
+def to_philippines_dt(value):
+    """Convert a stored UTC datetime (naive or aware) to Asia/Manila time."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(PHILIPPINES_TZ)
 
 
 # ---------------------------------------------------------
@@ -101,7 +130,7 @@ class User(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     last_login_at = db.Column(
@@ -132,12 +161,12 @@ class User(BaseModel):
             "role": self.role,
             "is_active": self.is_active,
             "created_at": (
-                self.created_at.isoformat()
+                to_utc_iso(self.created_at)
                 if self.created_at
                 else None
             ),
             "last_login_at": (
-                self.last_login_at.isoformat()
+                to_utc_iso(self.last_login_at)
                 if self.last_login_at
                 else None
             )
@@ -185,7 +214,7 @@ class HazardZone(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     def __repr__(self):
@@ -214,8 +243,8 @@ class CenterType(BaseModel):
     )
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     display_order = db.Column(db.Integer, default=0, nullable=False)
-    created_at = db.Column(db.DateTime, default=philippines_now)
-    updated_at = db.Column(db.DateTime, default=philippines_now, onupdate=philippines_now)
+    created_at = db.Column(db.DateTime, default=utc_now)
+    updated_at = db.Column(db.DateTime, default=utc_now, onupdate=utc_now)
 
     def resolve_structure_mode(self):
         val = (self.structure_mode or '').strip().lower()
@@ -237,8 +266,8 @@ class CenterType(BaseModel):
             'structure_mode': self.resolve_structure_mode(),
             'is_active': self.is_active,
             'display_order': self.display_order,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'created_at': to_utc_iso(self.created_at) if self.created_at else None,
+            'updated_at': to_utc_iso(self.updated_at) if self.updated_at else None,
         }
 
     def __repr__(self):
@@ -254,8 +283,8 @@ class BuildingMaterial(BaseModel):
     description = db.Column(db.Text, nullable=True)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     display_order = db.Column(db.Integer, default=0, nullable=False)
-    created_at = db.Column(db.DateTime, default=philippines_now)
-    updated_at = db.Column(db.DateTime, default=philippines_now, onupdate=philippines_now)
+    created_at = db.Column(db.DateTime, default=utc_now)
+    updated_at = db.Column(db.DateTime, default=utc_now, onupdate=utc_now)
 
     def to_dict(self):
         return {
@@ -265,8 +294,8 @@ class BuildingMaterial(BaseModel):
             'description': self.description,
             'is_active': self.is_active,
             'display_order': self.display_order,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'created_at': to_utc_iso(self.created_at) if self.created_at else None,
+            'updated_at': to_utc_iso(self.updated_at) if self.updated_at else None,
         }
 
     def __repr__(self):
@@ -282,8 +311,8 @@ class Amenity(BaseModel):
     description = db.Column(db.Text, nullable=True)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     display_order = db.Column(db.Integer, default=0, nullable=False)
-    created_at = db.Column(db.DateTime, default=philippines_now)
-    updated_at = db.Column(db.DateTime, default=philippines_now, onupdate=philippines_now)
+    created_at = db.Column(db.DateTime, default=utc_now)
+    updated_at = db.Column(db.DateTime, default=utc_now, onupdate=utc_now)
 
     def to_dict(self):
         return {
@@ -293,8 +322,8 @@ class Amenity(BaseModel):
             'description': self.description,
             'is_active': self.is_active,
             'display_order': self.display_order,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'created_at': to_utc_iso(self.created_at) if self.created_at else None,
+            'updated_at': to_utc_iso(self.updated_at) if self.updated_at else None,
         }
 
     def __repr__(self):
@@ -446,7 +475,7 @@ class EvacuationCenter(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     barangay_links = db.relationship(
@@ -609,7 +638,7 @@ class EvacuationCenter(BaseModel):
             "evacuation_event_name": self.evacuation_event_name,
 
             "created_at": (
-                self.created_at.isoformat()
+                to_utc_iso(self.created_at)
                 if self.created_at
                 else None
             )
@@ -634,7 +663,7 @@ class CenterBarangay(BaseModel):
     )
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     center = db.relationship(
@@ -727,6 +756,11 @@ class HazardReport(BaseModel):
         db.String(50)
     )
 
+    barangay_name = db.Column(
+        db.String(100),
+        nullable=True
+    )
+
     status = db.Column(
         db.String(20),
         default='pending'
@@ -734,6 +768,18 @@ class HazardReport(BaseModel):
 
     response_notes = db.Column(
         db.Text
+    )
+
+    rejection_reason = db.Column(
+        db.Text,
+        nullable=True
+    )
+
+    duplicate_of = db.Column(
+        db.Integer,
+        db.ForeignKey('hazard_reports.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True
     )
 
     validated_by = db.Column(
@@ -781,7 +827,7 @@ class HazardReport(BaseModel):
 
     submitted_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     validated_at = db.Column(
@@ -832,7 +878,7 @@ class HazardReportPhoto(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now,
+        default=utc_now,
         nullable=False
     )
 
@@ -842,7 +888,7 @@ class HazardReportPhoto(BaseModel):
             'hazard_report_id': self.hazard_report_id,
             'photo_path': self.photo_path,
             'sort_order': self.sort_order,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'created_at': to_utc_iso(self.created_at) if self.created_at else None
         }
 
     def __repr__(self):
@@ -873,7 +919,7 @@ class SystemLog(BaseModel):
 
     timestamp = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     def __init__(self, user_id=None, action=None, timestamp=None, **kwargs):
@@ -900,7 +946,7 @@ class ResidentLookupLog(BaseModel):
     query_extra_masked = db.Column(db.String(150), nullable=True)
     query_birthdate_masked = db.Column(db.String(16), nullable=True)
     found = db.Column(db.Boolean, nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False, default=philippines_now, index=True)
+    timestamp = db.Column(db.DateTime, nullable=False, default=utc_now, index=True)
 
 
 class AdminMfaRecoveryRequest(BaseModel):
@@ -914,7 +960,7 @@ class AdminMfaRecoveryRequest(BaseModel):
         index=True,
     )
     status = db.Column(db.String(20), nullable=False, default='pending', server_default='pending', index=True)
-    requested_at = db.Column(db.DateTime, nullable=False, default=philippines_now)
+    requested_at = db.Column(db.DateTime, nullable=False, default=utc_now)
     expires_at = db.Column(db.DateTime, nullable=False, index=True)
     approved_by_user_id = db.Column(
         db.Integer,
@@ -939,7 +985,7 @@ class StaffNotification(BaseModel):
     message = db.Column(db.String(240), nullable=False)
     is_emergency = db.Column(db.Boolean, nullable=False, default=False)
     is_read = db.Column(db.Boolean, nullable=False, default=False, index=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=philippines_now, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now, index=True)
 
 
 # ---------------------------------------------------------
@@ -955,6 +1001,9 @@ class RescueRequest(BaseModel):
     longitude = db.Column(db.Float)
     status = db.Column(db.String(20), nullable=False, default='pending', index=True)
     status_updated_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    status_updated_at = db.Column(db.DateTime, nullable=True, default=utc_now)
+    handed_to_agency = db.Column(db.String(150), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
     requester_name = db.Column(db.String(100), nullable=False, default='')
     requester_contact = db.Column(db.String(20), nullable=False, default='')
     proof_images = db.Column(db.Text, nullable=True)
@@ -964,8 +1013,8 @@ class RescueRequest(BaseModel):
     accuracy = db.Column(db.Float, nullable=True)
     is_manual_pin = db.Column(db.Boolean, default=False)
     location_source = db.Column(db.String(50), nullable=True, default='gps')
-    created_at = db.Column(db.DateTime, nullable=False, default=philippines_now, index=True)
-    updated_at = db.Column(db.DateTime, nullable=False, default=philippines_now, onupdate=philippines_now)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now, index=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 # ---------------------------------------------------------
@@ -979,7 +1028,7 @@ class PushSubscription(BaseModel):
     endpoint = db.Column(db.String(2048), nullable=False, unique=True)
     p256dh = db.Column(db.String(255), nullable=False)
     auth = db.Column(db.String(255), nullable=False)
-    created_at = db.Column(db.DateTime, nullable=False, default=philippines_now)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
 
 
 # ---------------------------------------------------------
@@ -1046,7 +1095,7 @@ class RosterYear(BaseModel):
             "year": self.year,
             "is_active": self.is_active,
             "created_at": (
-                self.created_at.isoformat()
+                to_utc_iso(self.created_at)
                 if self.created_at
                 else None
             )
@@ -1139,13 +1188,13 @@ class Family(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     updated_at = db.Column(
         db.DateTime,
-        default=philippines_now,
-        onupdate=philippines_now
+        default=utc_now,
+        onupdate=utc_now
     )
 
     roster_year = db.relationship(
@@ -1175,12 +1224,12 @@ class Family(BaseModel):
             "remarks": self.remarks,
             "uploaded_by": self.uploaded_by,
             "created_at": (
-                self.created_at.isoformat()
+                to_utc_iso(self.created_at)
                 if self.created_at
                 else None
             ),
             "updated_at": (
-                self.updated_at.isoformat()
+                to_utc_iso(self.updated_at)
                 if self.updated_at
                 else None
             )
@@ -1295,7 +1344,7 @@ class Resident(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     assignments = db.relationship(
@@ -1399,7 +1448,7 @@ class Resident(BaseModel):
             "notes": self.notes,
 
             "created_at": (
-                self.created_at.isoformat()
+                to_utc_iso(self.created_at)
                 if self.created_at
                 else None
             )
@@ -1463,13 +1512,13 @@ class ResidentAccount(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     updated_at = db.Column(
         db.DateTime,
-        default=philippines_now,
-        onupdate=philippines_now
+        default=utc_now,
+        onupdate=utc_now
     )
 
     last_login_at = db.Column(
@@ -1499,17 +1548,17 @@ class ResidentAccount(BaseModel):
             "email": self.email,
             "is_active": self.is_active,
             "created_at": (
-                self.created_at.isoformat()
+                to_utc_iso(self.created_at)
                 if self.created_at
                 else None
             ),
             "updated_at": (
-                self.updated_at.isoformat()
+                to_utc_iso(self.updated_at)
                 if self.updated_at
                 else None
             ),
             "last_login_at": (
-                self.last_login_at.isoformat()
+                to_utc_iso(self.last_login_at)
                 if self.last_login_at
                 else None
             )
@@ -1555,7 +1604,7 @@ class ResidentRegistrationRequest(BaseModel):
     )
     reviewed_at = db.Column(db.DateTime)
     rejection_reason = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=philippines_now, nullable=False)
+    created_at = db.Column(db.DateTime, default=utc_now, nullable=False)
 
     def to_dict(self):
         return {
@@ -1572,14 +1621,50 @@ class ResidentRegistrationRequest(BaseModel):
             "contact_number": self.contact_number,
             "email": self.email,
             "privacy_consent": self.privacy_consent,
-            "privacy_consent_at": self.privacy_consent_at.isoformat() if self.privacy_consent_at else None,
+            "privacy_consent_at": to_utc_iso(self.privacy_consent_at) if self.privacy_consent_at else None,
             "privacy_notice_version": self.privacy_notice_version,
             "status": self.status,
             "matched_resident_id": self.matched_resident_id,
             "reviewed_by": self.reviewed_by,
-            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+            "reviewed_at": to_utc_iso(self.reviewed_at) if self.reviewed_at else None,
             "rejection_reason": self.rejection_reason,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": to_utc_iso(self.created_at) if self.created_at else None,
+        }
+
+
+class RegistrationLinkOverrideLog(BaseModel):
+    __tablename__ = 'registration_link_override_logs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    request_id = db.Column(
+        db.Integer,
+        db.ForeignKey('resident_registration_requests.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    roster_id = db.Column(
+        db.Integer,
+        db.ForeignKey('residents.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    reason = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=utc_now, nullable=False, index=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "admin_id": self.admin_id,
+            "request_id": self.request_id,
+            "roster_id": self.roster_id,
+            "reason": self.reason,
+            "timestamp": to_utc_iso(self.timestamp),
         }
 
 
@@ -1644,13 +1729,13 @@ class EvacuationCenterBuilding(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     updated_at = db.Column(
         db.DateTime,
-        default=philippines_now,
-        onupdate=philippines_now
+        default=utc_now,
+        onupdate=utc_now
     )
 
     evacuation_center = db.relationship(
@@ -1692,8 +1777,8 @@ class EvacuationCenterBuilding(BaseModel):
             "floor_summary": floor_summary,
             "status": self.status,
             "notes": self.notes,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": to_utc_iso(self.created_at) if self.created_at else None,
+            "updated_at": to_utc_iso(self.updated_at) if self.updated_at else None,
             "is_mapped": self.geom is not None,
         }
 
@@ -1773,7 +1858,7 @@ class EvacuationCenterRoom(BaseModel):
 
     created_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     assignments = db.relationship(
@@ -1870,7 +1955,8 @@ class EvacuationCenterRoom(BaseModel):
             'is_over_capacity': False,
         }
 
-    def to_dict(self):
+    def to_dict(self, usage=None):
+        resolved_usage = self.capacity_usage() if usage is None else usage
         return {
             "id": self.id,
             "evacuation_center_id": self.evacuation_center_id,
@@ -1885,7 +1971,7 @@ class EvacuationCenterRoom(BaseModel):
             "room_number": self.room_number,
             "family_slots": self.family_slots,
             "people_spaces": self.people_spaces,
-            **self.capacity_usage(),
+            **resolved_usage,
             "floor": self.floor,
             "is_active": self.is_active,
 
@@ -1893,7 +1979,7 @@ class EvacuationCenterRoom(BaseModel):
             "longitude": None,
 
             "created_at": (
-                self.created_at.isoformat()
+                to_utc_iso(self.created_at)
                 if self.created_at
                 else None
             )
@@ -1938,7 +2024,7 @@ class EvacuationAssignment(BaseModel):
 
     assigned_at = db.Column(
         db.DateTime,
-        default=philippines_now
+        default=utc_now
     )
 
     checked_in_at = db.Column(
@@ -1960,12 +2046,12 @@ class EvacuationAssignment(BaseModel):
             "evacuation_center_id": self.evacuation_center_id,
             "room_id": self.room_id,
             "assigned_at": (
-                self.assigned_at.isoformat()
+                to_utc_iso(self.assigned_at)
                 if self.assigned_at
                 else None
             ),
             "checked_in_at": (
-                self.checked_in_at.isoformat()
+                to_utc_iso(self.checked_in_at)
                 if self.checked_in_at
                 else None
             ),
@@ -1995,7 +2081,7 @@ class EvacuationOperation(BaseModel):
     extension_count = db.Column(db.Integer, default=0)
     extended_until = db.Column(db.DateTime(timezone=True), nullable=True)
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
-    created_at = db.Column(db.DateTime, default=philippines_now)
+    created_at = db.Column(db.DateTime, default=utc_now)
     concluded_at = db.Column(db.DateTime, nullable=True)
 
     center = db.relationship('EvacuationCenter', foreign_keys=[center_id], lazy=True)
@@ -2016,8 +2102,8 @@ class EvacuationOperation(BaseModel):
             "extension_count": self.extension_count or 0,
             "extended_until": self.extended_until.isoformat() if self.extended_until else None,
             "created_by_user_id": self.created_by_user_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "concluded_at": self.concluded_at.isoformat() if self.concluded_at else None,
+            "created_at": to_utc_iso(self.created_at) if self.created_at else None,
+            "concluded_at": to_utc_iso(self.concluded_at) if self.concluded_at else None,
             "is_active": self.status == 'active',
         }
 
@@ -2034,7 +2120,7 @@ class EvacuationCheckInRecord(BaseModel):
     family_id = db.Column(db.Integer, db.ForeignKey('families.id', ondelete='SET NULL'), nullable=True, index=True)
     center_id = db.Column(db.Integer, db.ForeignKey('evacuation_centers.id', ondelete='CASCADE'), nullable=False, index=True)
     room_id = db.Column(db.Integer, db.ForeignKey('evacuation_center_rooms.id', ondelete='SET NULL'), nullable=True)
-    checked_in_at = db.Column(db.DateTime, default=philippines_now, nullable=False)
+    checked_in_at = db.Column(db.DateTime, default=utc_now, nullable=False)
     checked_in_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     method = db.Column(db.String(30), default='manual')
     status = db.Column(db.String(20), default='checked_in')  # 'checked_in', 'checked_out'
@@ -2053,11 +2139,11 @@ class EvacuationCheckInRecord(BaseModel):
             "family_id": self.family_id,
             "center_id": self.center_id,
             "room_id": self.room_id,
-            "checked_in_at": self.checked_in_at.isoformat() if self.checked_in_at else None,
+            "checked_in_at": to_utc_iso(self.checked_in_at) if self.checked_in_at else None,
             "checked_in_by_user_id": self.checked_in_by_user_id,
             "method": self.method,
             "status": self.status,
-            "checked_out_at": self.checked_out_at.isoformat() if self.checked_out_at else None,
+            "checked_out_at": to_utc_iso(self.checked_out_at) if self.checked_out_at else None,
         }
 
     def __repr__(self):
@@ -2087,7 +2173,7 @@ class NonRegisteredEvacuee(BaseModel):
     operation_id = db.Column(db.Integer, db.ForeignKey('evacuation_operations.id', ondelete='RESTRICT'), nullable=False)
     center_id = db.Column(db.Integer, db.ForeignKey('evacuation_centers.id', ondelete='RESTRICT'), nullable=False)
     room_id = db.Column(db.Integer, db.ForeignKey('evacuation_center_rooms.id', ondelete='SET NULL'), nullable=True, index=True)
-    arrived_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(PHILIPPINES_TZ))
+    arrived_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     departed_at = db.Column(db.DateTime(timezone=True))
     recorded_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='RESTRICT'), nullable=False)
     center = db.relationship('EvacuationCenter', foreign_keys=[center_id])
@@ -2115,7 +2201,7 @@ class NonRegisteredEvacuee(BaseModel):
         result['name'] = ' '.join(filter(None, (self.first_name, self.middle_name, self.last_name)))
         for key in ('birthdate', 'arrived_at', 'departed_at'):
             value = getattr(self, key)
-            result[key] = value.isoformat() if value else None
+            result[key] = to_utc_iso(value)
         if include_sensitive:
             result.update({key: getattr(self, key) for key in (
                 'contact_number', 'is_pwd', 'is_pregnant', 'is_lactating', 'is_solo_parent',

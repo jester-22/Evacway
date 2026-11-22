@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  Building2,
   Camera,
   Check,
   CheckCircle2,
@@ -10,6 +11,7 @@ import {
   ChevronRight,
   Clock,
   Compass,
+  FileText,
   ImageOff,
   Inbox,
   MapPin,
@@ -21,8 +23,15 @@ import {
   X,
 } from "lucide-react";
 import { api, BASE_URL } from "../../services/api";
+import { formatManilaDateTime, formatManilaTime, parseTimestamp } from "../../utils/dateTime";
 import { useAuth } from "../../context/AuthContext";
 import { queryKeys, useRescueRequests } from "../../hooks/useEvacuationQueries";
+import {
+  RESCUE_OVERDUE_THRESHOLD_HOURS,
+  countOpenRescueRequests,
+  isOpenRescueStatus,
+  isRescueOverdue,
+} from "../../utils/rescueStatus";
 import {
   Button,
   LocationAccuracyPill,
@@ -35,6 +44,15 @@ const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
 const STATUS_OPTIONS = ["pending", "acknowledged", "responding", "resolved"];
 
+const AGENCY_SUGGESTIONS = [
+  "MDRRMO Sogod",
+  "BFP Sogod",
+  "PNP Sogod",
+  "Philippine Coast Guard",
+  "Barangay Tanod / BDRRMC",
+  "RHU / Medical Team",
+];
+
 const STATUS_LABELS = {
   pending: "Pending",
   acknowledged: "Acknowledged",
@@ -42,20 +60,21 @@ const STATUS_LABELS = {
   resolved: "Resolved",
 };
 
-function isOpenStatus(status) {
-  return status === "pending" || status === "open";
+function isOpenStatus(statusOrItem) {
+  return isOpenRescueStatus(statusOrItem);
 }
 
 function isInProgressStatus(status) {
+  const s = String(status || "").trim().toLowerCase();
   return (
-    status === "acknowledged" ||
-    status === "responding" ||
-    status === "in_progress"
+    s === "acknowledged" ||
+    s === "responding" ||
+    s === "in_progress"
   );
 }
 
-function isResolvedStatus(status) {
-  return status === "resolved";
+function isResolvedStatus(statusOrItem) {
+  return !isOpenRescueStatus(statusOrItem);
 }
 
 function getRescueStatusPillVariant(status) {
@@ -129,15 +148,16 @@ function resolveProofImageUrl(img) {
  */
 function getAlertTimeStatus(item, now = Date.now()) {
   const status = item?.status;
-  const createdAt = item?.created_at;
+  const statusSince = item?.status_updated_at || item?.updated_at || item?.created_at;
   const updatedAt = item?.updated_at || item?.resolved_at || item?.created_at;
+  const overdue = isRescueOverdue(item, now);
 
   if (isResolvedStatus(status)) {
     if (!updatedAt) {
-      return { text: "Resolved", icon: CheckCircle2, statusClass: "is-resolved", isUrgent: false };
+      return { text: "Resolved", icon: CheckCircle2, statusClass: "is-resolved", isUrgent: false, isOverdue: false };
     }
-    const date = new Date(updatedAt);
-    const diffMs = Math.max(0, now - (Number.isNaN(date.getTime()) ? now : date.getTime()));
+    const date = parseTimestamp(updatedAt);
+    const diffMs = Math.max(0, now - (date ? date.getTime() : now));
     const minutes = Math.floor(diffMs / (1000 * 60));
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
@@ -147,43 +167,47 @@ function getAlertTimeStatus(item, now = Date.now()) {
     else if (hours >= 1) text = `Resolved · ${hours}h ago`;
     else text = `Resolved · ${Math.max(1, minutes)}m ago`;
 
-    return { text, icon: CheckCircle2, statusClass: "is-resolved", isUrgent: false };
+    return { text, icon: CheckCircle2, statusClass: "is-resolved", isUrgent: false, isOverdue: false };
   }
 
   if (isInProgressStatus(status)) {
-    if (!createdAt) {
-      return { text: "Responding", icon: Truck, statusClass: "is-in-progress", isUrgent: false };
+    const labelPrefix = status === "acknowledged" ? "Acknowledged" : "Responding";
+    if (!statusSince) {
+      return { text: labelPrefix, icon: Truck, statusClass: "is-in-progress", isUrgent: overdue, isOverdue: overdue };
     }
-    const date = new Date(createdAt);
-    const diffMs = Math.max(0, now - (Number.isNaN(date.getTime()) ? now : date.getTime()));
+    const date = parseTimestamp(statusSince);
+    const diffMs = Math.max(0, now - (date ? date.getTime() : now));
     const minutes = Math.floor(diffMs / (1000 * 60));
     const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
     const remMinutes = minutes % 60;
 
-    let text = "Responding";
-    if (hours >= 1) {
-      text = remMinutes > 0 ? `Responding · ${hours}h ${remMinutes}m` : `Responding · ${hours}h`;
+    let text = labelPrefix;
+    if (days >= 1) {
+      text = `${labelPrefix} · ${days}d`;
+    } else if (hours >= 1) {
+      text = remMinutes > 0 ? `${labelPrefix} · ${hours}h ${remMinutes}m` : `${labelPrefix} · ${hours}h`;
     } else {
-      text = `Responding · ${Math.max(1, minutes)}m`;
+      text = `${labelPrefix} · ${Math.max(1, minutes)}m`;
     }
 
-    return { text, icon: Truck, statusClass: "is-in-progress", isUrgent: false };
+    return { text, icon: Truck, statusClass: "is-in-progress", isUrgent: overdue, isOverdue: overdue };
   }
 
   // Open / Pending
-  if (!createdAt) {
-    return { text: "Waiting for response", icon: Clock, statusClass: "is-waiting", isUrgent: false };
+  if (!statusSince) {
+    return { text: "Waiting for response", icon: Clock, statusClass: "is-waiting", isUrgent: overdue, isOverdue: overdue };
   }
-  const date = new Date(createdAt);
-  const diffMs = Math.max(0, now - (Number.isNaN(date.getTime()) ? now : date.getTime()));
+  const date = parseTimestamp(statusSince);
+  const diffMs = Math.max(0, now - (date ? date.getTime() : now));
   const minutes = Math.floor(diffMs / (1000 * 60));
-  const isUrgent = minutes >= 30;
+  const isUrgent = overdue || minutes >= 30;
 
   if (minutes < 1) {
-    return { text: "Waiting < 1 min", icon: Clock, statusClass: "is-waiting", isUrgent: false };
+    return { text: "Waiting < 1 min", icon: Clock, statusClass: "is-waiting", isUrgent: false, isOverdue: false };
   }
   if (minutes < 60) {
-    return { text: `Waiting ${minutes} min`, icon: Clock, statusClass: "is-waiting", isUrgent };
+    return { text: `Waiting ${minutes} min`, icon: Clock, statusClass: "is-waiting", isUrgent, isOverdue: overdue };
   }
   const hours = Math.floor(minutes / 60);
   const remMinutes = minutes % 60;
@@ -193,10 +217,11 @@ function getAlertTimeStatus(item, now = Date.now()) {
       icon: Clock,
       statusClass: "is-waiting",
       isUrgent: true,
+      isOverdue: overdue,
     };
   }
   const days = Math.floor(hours / 24);
-  return { text: `Waiting ${days}d`, icon: Clock, statusClass: "is-waiting", isUrgent: true };
+  return { text: `Waiting ${days}d`, icon: Clock, statusClass: "is-waiting", isUrgent: true, isOverdue: overdue };
 }
 
 export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
@@ -213,6 +238,11 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
   const [error, setError] = useState("");
   const [updatingId, setUpdatingId] = useState(null);
   const [selectedId, setSelectedId] = useState(initialRequestId || null);
+  const [agencyDraft, setAgencyDraft] = useState("");
+  const [notesDraft, setNotesDraft] = useState("");
+  const [savingDetails, setSavingDetails] = useState(false);
+  const [detailsSaved, setDetailsSaved] = useState(false);
+  const [detailsError, setDetailsError] = useState("");
   const [lightboxImage, setLightboxImage] = useState(null);
   const [activeProofIdx, setActiveProofIdx] = useState(0);
   const [failedProofImages, setFailedProofImages] = useState({});
@@ -392,7 +422,10 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
       queryClient.setQueryData(queryKeys.rescueRequests, (current = []) =>
         current.map((item) => (item.id === updated.id ? updated : item))
       );
-      await queryClient.invalidateQueries({ queryKey: queryKeys.rescueRequests });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.rescueRequests }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary }),
+      ]);
     } catch (requestError) {
       setError(requestError.message || "Rescue request status could not be updated.");
     } finally {
@@ -400,9 +433,33 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     }
   }
 
+  async function saveRescueDetails(event) {
+    event.preventDefault();
+    if (!selected || savingDetails) return;
+    setSavingDetails(true);
+    setDetailsError("");
+    setDetailsSaved(false);
+    try {
+      const updated = await api.updateRescueRequest(selected.id, {
+        handed_to_agency: agencyDraft.trim(),
+        notes: notesDraft.trim(),
+      });
+      queryClient.setQueryData(queryKeys.rescueRequests, (current = []) =>
+        current.map((item) => (item.id === updated.id ? updated : item))
+      );
+      setAgencyDraft(updated.handed_to_agency || "");
+      setNotesDraft(updated.notes || "");
+      setDetailsSaved(true);
+    } catch (requestError) {
+      setDetailsError(requestError.message || "Could not save rescue handoff details.");
+    } finally {
+      setSavingDetails(false);
+    }
+  }
+
   // Calculate status counts
   const openCount = useMemo(
-    () => requests.filter((r) => isOpenStatus(r.status)).length,
+    () => countOpenRescueRequests(requests),
     [requests]
   );
   const inProgressCount = useMemo(
@@ -410,7 +467,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     [requests]
   );
   const resolvedCount = useMemo(
-    () => requests.filter((r) => isResolvedStatus(r.status)).length,
+    () => requests.filter((r) => isResolvedStatus(r)).length,
     [requests]
   );
   const totalCount = requests.length;
@@ -421,8 +478,8 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     const cleanQ = q.replace(/^#/, "").replace(/^rescue alert\s*#?/i, "").trim();
 
     return requests.filter((item) => {
-      if (filterStatus === "open" && !isOpenStatus(item.status)) return false;
-      if (filterStatus === "pending" && !isOpenStatus(item.status)) return false;
+      if (filterStatus === "open" && !isOpenStatus(item)) return false;
+      if (filterStatus === "pending" && String(item.status || "").toLowerCase() !== "pending") return false;
       if (filterStatus === "in_progress" && !isInProgressStatus(item.status)) return false;
       if (filterStatus === "acknowledged" && item.status !== "acknowledged") return false;
       if (
@@ -432,7 +489,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
       ) {
         return false;
       }
-      if (filterStatus === "resolved" && !isResolvedStatus(item.status)) return false;
+      if (filterStatus === "resolved" && !isResolvedStatus(item)) return false;
 
       if (q) {
         const idStr = String(item.id || "");
@@ -458,6 +515,10 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
         const matchLoc = locDesc.includes(q);
         const desc = (item.description || "").toLowerCase();
         const matchDesc = desc.includes(q);
+        const agency = (item.handed_to_agency || "").toLowerCase();
+        const matchAgency = agency.includes(q);
+        const notes = (item.notes || "").toLowerCase();
+        const matchNotes = notes.includes(q);
 
         if (
           !matchId &&
@@ -465,7 +526,9 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
           !matchContact &&
           !matchBarangay &&
           !matchLoc &&
-          !matchDesc
+          !matchDesc &&
+          !matchAgency &&
+          !matchNotes
         ) {
           return false;
         }
@@ -505,6 +568,19 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
 
   const selected = requests.find((item) => item.id === selectedId);
   const visibleError = error || requestsQuery.error?.message || "";
+
+  useEffect(() => {
+    setAgencyDraft(selected?.handed_to_agency || "");
+    setNotesDraft(selected?.notes || "");
+    setDetailsError("");
+    setDetailsSaved(false);
+  }, [selected?.id, selected?.handed_to_agency, selected?.notes]);
+
+  const isDetailsDirty = Boolean(
+    selected &&
+      (agencyDraft.trim() !== (selected.handed_to_agency || "").trim() ||
+        notesDraft.trim() !== (selected.notes || "").trim())
+  );
 
   function handleSearchChange(nextQuery) {
     setSearchQuery(nextQuery);
@@ -879,24 +955,27 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                   : 0;
                 const timeStatus = getAlertTimeStatus(item, now);
                 const timeText = item.created_at
-                  ? new Date(item.created_at).toLocaleTimeString([], {
+                  ? formatManilaTime(item.created_at, {
                       hour: "2-digit",
                       minute: "2-digit",
                     })
                   : "";
-                const isStillOpen = isOpenStatus(item.status);
-                const isResolved = isResolvedStatus(item.status);
+                const isStillOpen = isOpenStatus(item);
+                const isResolved = isResolvedStatus(item);
+                const isOverdue = Boolean(timeStatus.isOverdue);
                 const isSelected = selectedId === item.id;
                 const TileIcon = isStillOpen
                   ? AlertTriangle
                   : isResolved
                     ? CheckCircle2
                     : Truck;
-                const tileToneClass = isStillOpen
-                  ? "is-pending"
-                  : isResolved
-                    ? "is-resolved"
-                    : "is-progress";
+                const tileToneClass = isOverdue
+                  ? "is-overdue"
+                  : isStillOpen
+                    ? "is-pending"
+                    : isResolved
+                      ? "is-resolved"
+                      : "is-progress";
                 const locSource = getLocationSourceInfo(item);
 
                 return (
@@ -904,9 +983,9 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                     type="button"
                     key={item.id}
                     role="listitem"
-                    className={`rq-table-grid rq-table-row ${isSelected ? "is-selected" : ""}`}
+                    className={`rq-table-grid rq-table-row ${isSelected ? "is-selected" : ""} ${isOverdue ? "is-overdue" : ""}`}
                     onClick={(e) => openRequest(item.id, e)}
-                    aria-label={`View details for Rescue Alert #${item.id}, requested by ${requesterName}`}
+                    aria-label={`View details for Rescue Alert #${item.id}, requested by ${requesterName}${isOverdue ? ", overdue" : ""}`}
                   >
                     {/* REQUESTER */}
                     <div className="rq-requester-cell">
@@ -945,6 +1024,12 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                           </span>
                         </span>
                       )}
+                      {item.handed_to_agency && (
+                        <span className="rq-agency-chip" title={`Handed to ${item.handed_to_agency}`}>
+                          <Building2 size={12} aria-hidden="true" />
+                          <span>{item.handed_to_agency}</span>
+                        </span>
+                      )}
                     </div>
 
                     {/* TIME */}
@@ -955,9 +1040,21 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
 
                     {/* STATUS */}
                     <div className="rq-status-cell">
-                      <StatusPill variant={getRescueStatusPillVariant(item.status)} />
+                      <div className="rq-status-pill-row">
+                        <StatusPill variant={getRescueStatusPillVariant(item.status)} />
+                        {isOverdue && (
+                          <span
+                            className="rq-overdue-chip"
+                            title={`In current status longer than ${RESCUE_OVERDUE_THRESHOLD_HOURS} hours`}
+                          >
+                            Overdue
+                          </span>
+                        )}
+                      </div>
                       {timeStatus.text && (
-                        <span className="rq-status-note">{timeStatus.text}</span>
+                        <span className={`rq-status-note ${isOverdue ? "is-overdue" : ""}`}>
+                          {timeStatus.text}
+                        </span>
                       )}
                     </div>
 
@@ -1049,19 +1146,25 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                   {selectedTimeStatus && (
                     <span
                       className={`rq-modal-duration-chip ${
-                        isOpenStatus(selected.status) && selectedTimeStatus.isUrgent
-                          ? "is-urgent"
-                          : ""
+                        selectedTimeStatus.isOverdue
+                          ? "is-overdue"
+                          : isOpenStatus(selected) && selectedTimeStatus.isUrgent
+                            ? "is-urgent"
+                            : ""
                       }`}
                     >
-                      {isResolvedStatus(selected.status) ? (
+                      {isResolvedStatus(selected) ? (
                         <CheckCircle2 size={13} aria-hidden="true" />
                       ) : isInProgressStatus(selected.status) ? (
                         <Truck size={13} aria-hidden="true" />
                       ) : (
                         <Clock size={13} aria-hidden="true" />
                       )}
-                      <span>{selectedTimeStatus.text}</span>
+                      <span>
+                        {selectedTimeStatus.isOverdue
+                          ? `Overdue · ${selectedTimeStatus.text}`
+                          : selectedTimeStatus.text}
+                      </span>
                     </span>
                   )}
                 </div>
@@ -1224,7 +1327,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                         <dt className="rq-contact-label">Reported time</dt>
                         <dd className="rq-contact-value">
                           {selected.created_at
-                            ? new Date(selected.created_at).toLocaleString()
+                            ? formatManilaDateTime(selected.created_at, {}, "Unknown")
                             : "Unknown"}
                         </dd>
                       </div>
@@ -1445,6 +1548,82 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                       />
                     </div>
                   )}
+                </section>
+
+                {/* 5. FULL-WIDTH: DISPATCH HANDOFF & NOTES */}
+                <section className="rq-modal-card rq-handoff-card" aria-label="Dispatch handoff and notes">
+                  <div className="rq-card-head">
+                    <h3 className="rq-card-title">Dispatch handoff &amp; notes</h3>
+                  </div>
+                  <form className="rq-handoff-form" onSubmit={saveRescueDetails}>
+                    <div className="rq-handoff-field">
+                      <label className="rq-handoff-label" htmlFor="rq-handed-to-agency">
+                        <Building2 size={14} aria-hidden="true" />
+                        <span>Handed to (agency)</span>
+                      </label>
+                      <input
+                        id="rq-handed-to-agency"
+                        type="text"
+                        className="rq-handoff-input"
+                        list="rq-agency-suggestions"
+                        maxLength={150}
+                        value={agencyDraft}
+                        onChange={(e) => {
+                          setAgencyDraft(e.target.value);
+                          setDetailsSaved(false);
+                        }}
+                        placeholder="e.g. MDRRMO Sogod, BFP Sogod, PNP, Coast Guard"
+                        disabled={savingDetails}
+                      />
+                      <datalist id="rq-agency-suggestions">
+                        {AGENCY_SUGGESTIONS.map((agency) => (
+                          <option key={agency} value={agency} />
+                        ))}
+                      </datalist>
+                    </div>
+
+                    <div className="rq-handoff-field">
+                      <label className="rq-handoff-label" htmlFor="rq-dispatch-notes">
+                        <FileText size={14} aria-hidden="true" />
+                        <span>Notes</span>
+                      </label>
+                      <textarea
+                        id="rq-dispatch-notes"
+                        className="rq-handoff-textarea"
+                        rows={3}
+                        maxLength={2000}
+                        value={notesDraft}
+                        onChange={(e) => {
+                          setNotesDraft(e.target.value);
+                          setDetailsSaved(false);
+                        }}
+                        placeholder="Add responder updates, handoff details, or follow-up notes..."
+                        disabled={savingDetails}
+                      />
+                    </div>
+
+                    {detailsError && (
+                      <p className="rq-handoff-feedback is-error" role="alert">
+                        {detailsError}
+                      </p>
+                    )}
+
+                    <div className="rq-handoff-actions">
+                      {detailsSaved && !isDetailsDirty && (
+                        <span className="rq-handoff-feedback is-saved" role="status">
+                          <Check size={14} aria-hidden="true" />
+                          <span>Saved</span>
+                        </span>
+                      )}
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        disabled={savingDetails || !isDetailsDirty}
+                      >
+                        <span>{savingDetails ? "Saving..." : "Save details"}</span>
+                      </Button>
+                    </div>
+                  </form>
                 </section>
               </div>
             </div>

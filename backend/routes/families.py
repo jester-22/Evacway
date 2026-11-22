@@ -31,6 +31,8 @@ from models import (
     BuildingMaterial,
     SystemLog,
     RosterYear,
+    philippines_now,
+    to_utc_iso,
 )
 
 from utils import role_required
@@ -868,6 +870,28 @@ def _normalize_dob(val):
     return s
 
 
+def _parse_past_dob(val):
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        parsed = val.date()
+    elif isinstance(val, date):
+        parsed = val
+    elif isinstance(val, str):
+        text = val.strip().split('T')[0].split(' ')[0]
+        if not text:
+            return None
+        try:
+            parsed = date.fromisoformat(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed >= philippines_now().date() or parsed.year < 1900:
+        return None
+    return parsed
+
+
 def _member_matches(m1, m2):
     """
     Compare two members within the same household:
@@ -1039,14 +1063,7 @@ def _compute_resident_fill(dm, fm):
 def _make_resident_model(member, family, head_name, barangay_name, default_address, uploaded_by):
     """Instantiate a new Resident model populated with all supported personal and vulnerability fields."""
     is_head = _normalize_text(member.get('full_name', '')) == _normalize_text(head_name)
-    dob_val = member.get('date_of_birth')
-    if isinstance(dob_val, str):
-        try:
-            dob_val = datetime.strptime(dob_val, '%Y-%m-%d').date()
-        except Exception:
-            dob_val = None
-    elif not isinstance(dob_val, (date, type(None))):
-        dob_val = None
+    dob_val = _parse_past_dob(member.get('date_of_birth'))
 
     rel = member.get('relationship_to_head')
     if not rel and is_head:
@@ -1229,7 +1246,16 @@ def _preview_family_workbook(file_storage, target_barangay=None):
         middle_name = cell_at(row, idx_middle_name)
         last_name = cell_at(row, idx_last_name)
         suffix = cell_at(row, idx_suffix) or None
-        dob = _normalize_dob(cell_raw_at(row, idx_dob))
+        raw_dob = cell_raw_at(row, idx_dob)
+        dob = None
+        if raw_dob is not None and str(raw_dob).strip():
+            parsed_dob = _parse_past_dob(raw_dob)
+            if parsed_dob is None:
+                warnings.append(
+                    f'Row {row_number}: Invalid or non-past date of birth "{raw_dob}", left blank.'
+                )
+            else:
+                dob = parsed_dob.isoformat()
         raw_fam_count = cell_at(row, idx_fam_members)
 
         if target_barangay is not None:
@@ -1631,11 +1657,8 @@ def import_families():
                     res = db.session.get(Resident, fill['resident_id'])
                     if res:
                         for field, val in fill.get('updates', {}).items():
-                            if field == 'date_of_birth' and isinstance(val, str):
-                                try:
-                                    val = datetime.strptime(val, '%Y-%m-%d').date()
-                                except Exception:
-                                    val = None
+                            if field == 'date_of_birth':
+                                val = _parse_past_dob(val)
                             setattr(res, field, val)
                         members_filled_count += 1
 
@@ -1895,11 +1918,8 @@ def commit_family_import():
                     res = db.session.get(Resident, fill['resident_id'])
                     if res:
                         for field, val in fill.get('updates', {}).items():
-                            if field == 'date_of_birth' and isinstance(val, str):
-                                try:
-                                    val = datetime.strptime(val, '%Y-%m-%d').date()
-                                except Exception:
-                                    val = None
+                            if field == 'date_of_birth':
+                                val = _parse_past_dob(val)
                             setattr(res, field, val)
                         members_filled_count += 1
 
@@ -1973,8 +1993,8 @@ def _serialize_family_detail(family):
                     'floor': room.floor,
                     'center_id': center.id,
                     'center_name': center.name,
-                    'assigned_at': assignment.assigned_at.isoformat() if assignment.assigned_at else None,
-                    'checked_in_at': assignment.checked_in_at.isoformat() if assignment.checked_in_at else None,
+                    'assigned_at': to_utc_iso(assignment.assigned_at),
+                    'checked_in_at': to_utc_iso(assignment.checked_in_at),
                     'is_checked_in': assignment.checked_in_at is not None,
                 }
     members_list = []
@@ -2100,8 +2120,10 @@ def add_family():
             }
         except (TypeError, ValueError) as error:
             return jsonify({'error': f'Member {index}: {error}'}), 400
-        if dob and dob > date.today():
-            return jsonify({'error': f'Member {index} date of birth cannot be in the future'}), 400
+        if dob and dob >= philippines_now().date():
+            return jsonify({'error': f'Member {index} date of birth must be a past date'}), 400
+        if dob and dob.year < 1900:
+            return jsonify({'error': f'Member {index} date of birth must be in or after 1900'}), 400
 
         member_data = {
             'first_name': first_name,
@@ -2349,8 +2371,8 @@ def _parse_member_payload(data, default_is_head=False):
             dob = date.fromisoformat(str(raw_dob))
         except (TypeError, ValueError):
             raise ValueError('Date of birth must be a valid YYYY-MM-DD date')
-        if dob > date.today():
-            raise ValueError('Date of birth cannot be in the future')
+        if dob >= philippines_now().date():
+            raise ValueError('Date of birth must be a past date')
         if dob.year < 1900:
             raise ValueError('Date of birth must be in or after 1900')
 

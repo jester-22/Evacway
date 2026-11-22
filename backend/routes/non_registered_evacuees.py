@@ -1,6 +1,6 @@
 import io
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 
 from flask import Blueprint, jsonify, request, Response
@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
-from models import db, NonRegisteredEvacuee, EvacuationCenter, EvacuationCenterRoom, Resident, SystemLog, PHILIPPINES_TZ
+from models import db, NonRegisteredEvacuee, EvacuationCenter, EvacuationCenterRoom, Resident, SystemLog, PHILIPPINES_TZ, to_utc_iso
 from services.non_registered_evacuees import (
     PERSON_FIELDS, table_ready, resolve_operation, validate_person, parse_timestamp, center_occupancy,
 )
@@ -95,7 +95,7 @@ def serialize_group(rows, sensitive=False):
         'building_name': head.room.building.name if head.room and head.room.building else None,
         'floor': head.room.floor if head.room else None,
         'operation_id': head.operation_id, 'operation_name': head.operation.event_name,
-        'arrived_at': min(row.arrived_at for row in rows).isoformat(),
+        'arrived_at': to_utc_iso(min(row.arrived_at for row in rows)),
         'status': 'present' if present == len(rows) else ('departed' if not present else 'partial'),
         'members': [row.to_dict(sensitive) for row in rows],
     }
@@ -162,7 +162,7 @@ def create_group():
             raise InvalidInput({'room_id': 'This room has no available family slots. Choose another room.'})
         if usage['available_spaces'] < len(validated):
             raise InvalidInput({'room_id': f"This room has only {usage['available_spaces']} people spaces left; {len(validated)} are needed."})
-    now = datetime.now(PHILIPPINES_TZ)
+    now = datetime.now(timezone.utc)
     code = str(uuid.uuid4())
     rows = [NonRegisteredEvacuee(**person, group_code=code, is_group_head=index == 0,
             operation_id=operation.id, center_id=center_id, room_id=room.id if room else None, arrived_at=now,
@@ -252,7 +252,7 @@ def add_member(code):
         if usage['available_spaces'] < 1:
             raise InvalidInput({'room_id': 'This room has no remaining people spaces. Move the group or choose another room before adding a member.'})
     person = NonRegisteredEvacuee(**values, group_code=head.group_code, is_group_head=False,
-        center_id=head.center_id, room_id=head.room_id, operation_id=head.operation_id, arrived_at=datetime.now(PHILIPPINES_TZ), recorded_by=int(get_jwt_identity()))
+        center_id=head.center_id, room_id=head.room_id, operation_id=head.operation_id, arrived_at=datetime.now(timezone.utc), recorded_by=int(get_jwt_identity()))
     db.session.add(person)
     audit(f'Added a member to non-registered group, operation #{head.operation_id}')
     db.session.commit()
@@ -285,11 +285,11 @@ def change_departure(rows, data):
     timestamp = None
     if data['departed']:
         try:
-            timestamp = parse_timestamp(data['departed_at']) if data.get('departed_at') else datetime.now(PHILIPPINES_TZ)
+            timestamp = parse_timestamp(data['departed_at']) if data.get('departed_at') else datetime.now(timezone.utc)
         except (TypeError, ValueError, AttributeError):
             raise InvalidInput({'departed_at': 'Enter a valid date and time including timezone.'})
         for row in rows:
-            arrival = row.arrived_at if row.arrived_at.tzinfo else row.arrived_at.replace(tzinfo=PHILIPPINES_TZ)
+            arrival = row.arrived_at if row.arrived_at.tzinfo else row.arrived_at.replace(tzinfo=timezone.utc)
             if timestamp < arrival:
                 raise InvalidInput({'departed_at': 'Departure must not be earlier than arrival.'})
     for row in rows:
@@ -373,8 +373,8 @@ def add_export_sheet(workbook, operation_id=None, center_id=None, search='', sta
         query = query.filter(NonRegisteredEvacuee.departed_at.isnot(None))
     for row in query.order_by(NonRegisteredEvacuee.group_code, NonRegisteredEvacuee.is_group_head.desc(), NonRegisteredEvacuee.id).all():
         values = ['Non-registered', row.first_name, row.middle_name, row.last_name, row.sex, row.age_years,
-            row.address, row.center.name, row.operation.event_name, row.arrived_at.isoformat(),
-            row.departed_at.isoformat() if row.departed_at else '', str(row.group_code), row.contact_number,
+            row.address, row.center.name, row.operation.event_name, to_utc_iso(row.arrived_at),
+            to_utc_iso(row.departed_at) or '', str(row.group_code), row.contact_number,
             row.is_pwd, row.is_pregnant, row.is_lactating, row.is_solo_parent, row.needs_assistance,
             row.needs_medical, row.notes]
         sheet.append(values)

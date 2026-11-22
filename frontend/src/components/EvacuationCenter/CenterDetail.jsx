@@ -1,5 +1,10 @@
 import { useState, useCallback, useEffect, useMemo, Fragment } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import {
+  formatManilaDateTime,
+  formatManilaRelativeDay,
+  formatManilaTime,
+} from '../../utils/dateTime'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faBuilding,
@@ -1984,26 +1989,7 @@ function cleanActivityDescription(action = '') {
 }
 
 function formatDayHeading(dateString) {
-  if (!dateString) return 'Recent'
-  const date = new Date(dateString)
-  if (isNaN(date.getTime())) return 'Recent'
-
-  const today = new Date()
-  const isToday =
-    date.getDate() === today.getDate() &&
-    date.getMonth() === today.getMonth() &&
-    date.getFullYear() === today.getFullYear()
-  if (isToday) return 'Today'
-
-  const yesterday = new Date()
-  yesterday.setDate(today.getDate() - 1)
-  const isYesterday =
-    date.getDate() === yesterday.getDate() &&
-    date.getMonth() === yesterday.getMonth() &&
-    date.getFullYear() === yesterday.getFullYear()
-  if (isYesterday) return 'Yesterday'
-
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return formatManilaRelativeDay(dateString, { month: 'short', day: 'numeric' }, 'Recent')
 }
 
 function getWhoDidIt(log) {
@@ -2109,13 +2095,17 @@ export function ActivityTab({ center }) {
 
     const rows = filteredLogs.map((log) => {
       const dt = log.timestamp
-        ? new Date(log.timestamp).toLocaleString(undefined, {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
+        ? formatManilaDateTime(
+          log.timestamp,
+          {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          },
+          'Recent',
+        )
         : 'Recent'
       const isAssign = (log.action || '').toLowerCase().includes('assign')
       const type = isAssign ? 'Assignment' : 'Update'
@@ -2238,10 +2228,14 @@ export function ActivityTab({ center }) {
                   {group.logs.map((log) => {
                     const desc = cleanActivityDescription(log.action || '')
                     const when = log.timestamp
-                      ? new Date(log.timestamp).toLocaleTimeString(undefined, {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })
+                      ? formatManilaTime(
+                        log.timestamp,
+                        {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        },
+                        'Recent',
+                      )
                       : 'Recent'
                     const isAssign = (log.action || '').toLowerCase().includes('assign')
                     const isDanger =

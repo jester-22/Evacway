@@ -54,6 +54,18 @@ async function getOrRegisterServiceWorker() {
   });
 }
 
+function formatPushActivationError(error) {
+  const message = String(error?.message || "");
+  if (error?.name === "AbortError" || /push service error/i.test(message)) {
+    const isBrave = typeof navigator !== "undefined" && Boolean(navigator.brave);
+    if (isBrave) {
+      return 'Brave blocks push messaging by default. Open brave://settings/privacy, enable "Use Google services for push messaging", relaunch Brave, and try again.';
+    }
+    return 'Browser push service failed. If using Brave, open brave://settings/privacy and enable "Use Google services for push messaging", then relaunch.';
+  }
+  return message || "Failed to activate push notifications.";
+}
+
 const PUSH_DISMISSED_KEY = "evacway_push_prompt_dismissed";
 
 export default function NotificationCenter({ onSelect }) {
@@ -297,7 +309,7 @@ export default function NotificationCenter({ onSelect }) {
       }, 2500);
     } catch (error) {
       console.error("Push activation failed:", error);
-      setPushMessage(error.message || "Failed to activate push notifications.");
+      setPushMessage(formatPushActivationError(error));
     } finally {
       setPushBusy(false);
     }

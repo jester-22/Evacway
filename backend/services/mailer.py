@@ -67,7 +67,11 @@ def send_password_setup_email(user_or_account, token, purpose="setup"):
 
     public_url = (current_app.config.get("FRONTEND_URL_PUBLIC") or "").strip().rstrip("/")
     frontend_url = (current_app.config.get("FRONTEND_URL") or "").strip().rstrip("/")
-    setup_urls = [f"{url}/set-password?token={token}" for url in (public_url, frontend_url) if url]
+    unique_urls = []
+    for url in (public_url, frontend_url):
+        if url and url not in unique_urls:
+            unique_urls.append(url)
+    setup_urls = [f"{url}/set-password?token={token}" for url in unique_urls]
     if not setup_urls:
         raise MailConfigurationError("Configure FRONTEND_URL_PUBLIC or FRONTEND_URL for password emails.")
     fallback_note = (
@@ -142,8 +146,15 @@ def send_resident_registration_email(registration):
     message["To"] = registration.email
 
     if registration.status == "approved":
-        public_url = (current_app.config.get("APP_URL_PUBLIC") or "").rstrip("/")
-        local_url = (current_app.config.get("APP_URL_LOCAL") or "").rstrip("/")
+        public_url = (
+            current_app.config.get("APP_URL_PUBLIC")
+            or current_app.config.get("FRONTEND_URL_PUBLIC")
+            or current_app.config.get("FRONTEND_URL")
+            or ""
+        ).strip().rstrip("/")
+        local_url = (current_app.config.get("APP_URL_LOCAL") or "").strip().rstrip("/")
+        if local_url == public_url:
+            local_url = ""
         public_map_url = f"{public_url}/map" if public_url else ""
         local_map_url = f"{local_url}/map" if local_url else ""
         forgot_password_url = f"{public_url}/forgot-password" if public_url else (f"{local_url}/forgot-password" if local_url else "")

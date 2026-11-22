@@ -155,6 +155,17 @@ class PasswordResetEmailTests(unittest.TestCase):
                     if public and local:
                         self.assertLess(body.index(public), body.index(local))
         with self.app.app_context(), patch.object(mailer, '_send_smtp_message') as send:
+            self.app.config.update(
+                FRONTEND_URL_PUBLIC='https://evacway.vercel.app/',
+                FRONTEND_URL='https://evacway.vercel.app',
+            )
+            mailer.send_password_setup_email(self.user, 'test-token', purpose='reset')
+            message = send.call_args.args[0]
+            for content_type in ('plain', 'html'):
+                body = message.get_body(preferencelist=(content_type,)).get_content()
+                self.assertIn('https://evacway.vercel.app/set-password?token=test-token', body)
+                self.assertNotIn('Only if the public server is unavailable', body)
+        with self.app.app_context(), patch.object(mailer, '_send_smtp_message') as send:
             self.app.config.update(FRONTEND_URL_PUBLIC='', FRONTEND_URL='')
             with self.assertRaises(mailer.MailConfigurationError):
                 mailer.send_password_setup_email(self.user, 'test-token', purpose='reset')

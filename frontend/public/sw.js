@@ -230,14 +230,29 @@ self.addEventListener("fetch", (event) => {
 
 self.addEventListener("push", (event) => {
   const payload = parsePushPayload(event.data);
-  event.waitUntil(self.registration.showNotification(payload.title || "EvacWay", {
-    body: payload.body || "There is a new dashboard notification.",
-    icon: "/evacway-app.png",
-    badge: "/evacway-app.png",
-    tag: payload.notificationId ? `evacway-${payload.notificationId}` : "evacway-update",
-    requireInteraction: Boolean(payload.emergency),
-    data: { url: payload.url || "/" },
-  }));
+  const isEmergency = Boolean(payload.emergency);
+  event.waitUntil(Promise.all([
+    self.registration.showNotification(payload.title || "EvacWay", {
+      body: payload.body || "There is a new dashboard notification.",
+      icon: "/evacway-app.png",
+      badge: "/evacway-app.png",
+      tag: payload.notificationId ? `evacway-${payload.notificationId}` : "evacway-update",
+      requireInteraction: isEmergency,
+      vibrate: isEmergency ? [300, 120, 300, 120, 400] : [200, 100, 200],
+      data: { url: payload.url || "/" },
+    }),
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      clients.forEach((client) => {
+        client.postMessage({
+          type: "evacway-push-notification",
+          notificationId: payload.notificationId || null,
+          resource_type: payload.resourceType || null,
+          event_type: payload.eventType || null,
+          is_emergency: isEmergency,
+        });
+      });
+    }),
+  ]));
 });
 
 self.addEventListener("notificationclick", (event) => {

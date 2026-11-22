@@ -9,12 +9,22 @@ import {
   faTriangleExclamation,
   faUserPlus,
   faLifeRing,
+  faVolumeHigh,
+  faVolumeXmark,
   faXmark,
   faSpinner,
 } from "@fortawesome/free-solid-svg-icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../services/api";
 import { queryKeys, useNotifications } from "../../hooks/useEvacuationQueries";
+import {
+  getAlertSoundKind,
+  getBatchAlertSoundKind,
+  isAlertSoundMuted,
+  playAlertSound,
+  setAlertSoundMuted,
+  unlockAlertAudio,
+} from "../../utils/alertSound";
 import { formatManilaDateTime } from "../../utils/dateTime";
 import "./NotificationCenter.css";
 
@@ -67,19 +77,74 @@ export default function NotificationCenter({ onSelect }) {
       return false;
     }
   });
+  const [soundMuted, setSoundMuted] = useState(() => isAlertSoundMuted());
   const seenIdsRef = useRef(null);
+  const soundPlayedIdsRef = useRef(new Set());
+
+  // Unlock Web Audio API on the first user interaction so polled/push alerts can play automatically
+  useEffect(() => {
+    function handleFirstGesture() {
+      if (unlockAlertAudio()) {
+        window.removeEventListener("pointerdown", handleFirstGesture);
+        window.removeEventListener("keydown", handleFirstGesture);
+        window.removeEventListener("touchstart", handleFirstGesture);
+      }
+    }
+
+    window.addEventListener("pointerdown", handleFirstGesture, { passive: true });
+    window.addEventListener("keydown", handleFirstGesture, { passive: true });
+    window.addEventListener("touchstart", handleFirstGesture, { passive: true });
+    return () => {
+      window.removeEventListener("pointerdown", handleFirstGesture);
+      window.removeEventListener("keydown", handleFirstGesture);
+      window.removeEventListener("touchstart", handleFirstGesture);
+    };
+  }, []);
+
+  // React immediately when the service worker receives a push notification
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return undefined;
+
+    function handleSwMessage(event) {
+      const payload = event.data;
+      if (!payload || payload.type !== "evacway-push-notification") return;
+
+      const alertKind = getAlertSoundKind(payload);
+      const notifId = payload.notificationId;
+      if (alertKind && (!notifId || !soundPlayedIdsRef.current.has(notifId))) {
+        if (notifId) soundPlayedIdsRef.current.add(notifId);
+        playAlertSound(alertKind);
+      }
+      refetchNotifications();
+    }
+
+    navigator.serviceWorker.addEventListener("message", handleSwMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", handleSwMessage);
+  }, [refetchNotifications]);
 
   useEffect(() => {
     if (!notificationsQuery.isSuccess) return;
     const currentIds = new Set(notifications.map((item) => item.id));
     if (seenIdsRef.current === null) {
       seenIdsRef.current = currentIds;
+      currentIds.forEach((id) => soundPlayedIdsRef.current.add(id));
       return;
     }
     const newlyArrived = notifications.filter(
       (item) => !seenIdsRef.current.has(item.id)
     );
     seenIdsRef.current = currentIds;
+
+    if (newlyArrived.length > 0) {
+      const unplayedAlerts = newlyArrived.filter(
+        (item) => !soundPlayedIdsRef.current.has(item.id)
+      );
+      newlyArrived.forEach((item) => soundPlayedIdsRef.current.add(item.id));
+      const alertKind = getBatchAlertSoundKind(unplayedAlerts);
+      if (alertKind) {
+        playAlertSound(alertKind);
+      }
+    }
 
     if (
       newlyArrived.length > 0 &&
@@ -264,6 +329,20 @@ export default function NotificationCenter({ onSelect }) {
     try {
       sessionStorage.setItem(PUSH_DISMISSED_KEY, "true");
     } catch { }
+  }
+
+  function handleToggleAlertSound() {
+    unlockAlertAudio();
+    setSoundMuted((prev) => {
+      const nextMuted = !prev;
+      setAlertSoundMuted(nextMuted);
+      return nextMuted;
+    });
+  }
+
+  function handleTestAlertSound() {
+    unlockAlertAudio();
+    playAlertSound("rescue", { force: true });
   }
 
   // Close notification panel on click outside or Escape
@@ -538,6 +617,25 @@ export default function NotificationCenter({ onSelect }) {
           </div>
 
           <footer className="notification-panel-footer">
+            <div className="notification-sound-row">
+              <button
+                type="button"
+                onClick={handleToggleAlertSound}
+                className={`notification-sound-toggle ${soundMuted ? "is-muted" : ""}`}
+                title={soundMuted ? "Unmute hazard & rescue alert sounds" : "Mute hazard & rescue alert sounds"}
+              >
+                <FontAwesomeIcon icon={soundMuted ? faVolumeXmark : faVolumeHigh} />
+                {soundMuted ? "Alert sound: Muted" : "Alert sound: On"}
+              </button>
+              <button
+                type="button"
+                onClick={handleTestAlertSound}
+                className="notification-sound-test-btn is-rescue"
+                title="Preview hazard & rescue alert sound"
+              >
+                Test alert sound
+              </button>
+            </div>
             {isPushActive ? (
               <button type="button" onClick={handlePushDisable} disabled={pushBusy} className="notification-push-toggle">
                 <FontAwesomeIcon icon={faBellSlash} />

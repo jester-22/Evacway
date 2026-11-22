@@ -53,9 +53,12 @@ def _async_send_staff_push_notifications(app, notif_data):
         except ImportError:
             return
 
-        frontend_url = app.config.get(
-            'FRONTEND_URL', 'http://localhost:5173'
-        ).rstrip('/')
+        frontend_url = (
+            app.config.get('FRONTEND_URL_PUBLIC')
+            or app.config.get('FRONTEND_URL')
+            or app.config.get('APP_URL_PUBLIC')
+            or 'http://localhost:5173'
+        ).strip().rstrip('/')
 
         for item in notif_data:
             user = db.session.get(User, item['user_id'])
@@ -82,6 +85,8 @@ def _async_send_staff_push_notifications(app, notif_data):
                 'url': url,
                 'notificationId': item['id'],
                 'emergency': item['is_emergency'],
+                'resourceType': item['resource_type'],
+                'eventType': item.get('event_type'),
             })
             subscriptions = PushSubscription.query.filter_by(user_id=user.id).all()
             for subscription in subscriptions:
@@ -126,6 +131,7 @@ def send_staff_push_notifications(notifications):
         {
             'id': n.id,
             'user_id': n.user_id,
+            'event_type': n.event_type,
             'resource_type': n.resource_type,
             'resource_id': n.resource_id,
             'title': n.title,

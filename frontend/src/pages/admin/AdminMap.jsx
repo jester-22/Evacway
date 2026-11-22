@@ -262,6 +262,7 @@ export default function AdminMap() {
   const deepLinkedRescueId = searchParams.get("rescue");
   const deepLinkedType = searchParams.get("type");
   const deepLinkedBarangay = searchParams.get("barangay");
+  const deepLinkedStatus = (searchParams.get("status") || "").toLowerCase();
 
   // Geocoded barangay fallback state for deep linked coordinates
   const [geoBarangay, setGeoBarangay] = useState("");
@@ -385,6 +386,19 @@ export default function AdminMap() {
     allHazardReportsQuery.data,
     publicHazardReportsQuery.data,
   ]);
+
+  const matchedRescueRequest = useMemo(() => {
+    if (!deepLinkedRescueId) return null;
+    const data = rescueRequestsQuery.data;
+    const list = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.requests)
+          ? data.requests
+          : [];
+    return list.find((r) => String(r.id) === String(deepLinkedRescueId)) || null;
+  }, [deepLinkedRescueId, rescueRequestsQuery.data]);
 
   // Match hazard zone features
   const matchedHazardZone = useMemo(() => {
@@ -1098,8 +1112,8 @@ export default function AdminMap() {
       showPlacementToast("Family slots must be a whole number of at least 1.");
       return;
     }
-    if (!Number.isInteger(Number(adminRoomForm.people_spaces)) || Number(adminRoomForm.people_spaces) < 1) {
-      showPlacementToast("People spaces must be a whole number of at least 1.");
+    if (!Number.isInteger(Number(adminRoomForm.people_spaces)) || Number(adminRoomForm.people_spaces) < 25) {
+      showPlacementToast("People spaces must be a whole number of at least 25.");
       return;
     }
 
@@ -1804,8 +1818,14 @@ export default function AdminMap() {
       const lng = Number(deepLinkedLng);
       if (Number.isFinite(lat) && Number.isFinite(lng)) {
         let label = "Incident Location";
+        let hasLiveIcon = false;
 
         if (deepLinkedHazardId) {
+          const hazardStatus = String(
+            matchedHazardReport?.status || deepLinkedStatus || ""
+          ).toLowerCase();
+          hasLiveIcon = hazardStatus === "pending" || hazardStatus === "validated";
+
           const rawType =
             deepLinkedType ||
             matchedHazardReport?.report_type ||
@@ -1834,6 +1854,13 @@ export default function AdminMap() {
             label = "Reported Hazard";
           }
         } else if (deepLinkedRescueId) {
+          const rescueStatus = String(
+            matchedRescueRequest?.status || deepLinkedStatus || ""
+          ).toLowerCase();
+          hasLiveIcon =
+            activeRescueRequests.some((r) => String(r.id) === String(deepLinkedRescueId)) ||
+            ["pending", "open", "acknowledged", "responding"].includes(rescueStatus);
+
           const rescueBarangay = deepLinkedBarangay || geoBarangay || "";
           if (rescueBarangay) {
             label = `Rescue Request • ${formatBarangayLabel(rescueBarangay)}`;
@@ -1848,7 +1875,10 @@ export default function AdminMap() {
           zoom: 16,
           hazardId: deepLinkedHazardId,
           rescueId: deepLinkedRescueId,
+          report: matchedHazardReport || null,
+          rescue: matchedRescueRequest || null,
           label,
+          noPin: hasLiveIcon,
           requestedAt: Date.now(),
         });
       }
@@ -1863,7 +1893,10 @@ export default function AdminMap() {
     deepLinkedRescueId,
     deepLinkedType,
     deepLinkedBarangay,
+    deepLinkedStatus,
     matchedHazardReport,
+    matchedRescueRequest,
+    activeRescueRequests,
     matchedHazardZone,
     geoBarangay,
   ]);
@@ -5043,40 +5076,64 @@ export default function AdminMap() {
           )}
 
           {/* ---------------------------------------------------------
-              COLLAPSED CENTERS BUTTON (Desktop & Mobile)
+              TOP-LEFT FLOATING PILLS (Go Back + Collapsed Centers Button)
               --------------------------------------------------------- */}
-          {((!isMobile && panelCollapsed) || (isMobile && !mobileCentersSheetOpen)) &&
-            !isMapping &&
-            !(isDrawingBuilding && redrawingBuildingId) && (
-              <button
-                type="button"
-                className="admin-map-centers-pill admin-map-mobile-centers-pill"
-                onClick={() => {
-                  if (isMobile) {
-                    setMobileCentersSheetOpen(true);
-                  } else {
-                    setPanelCollapsed(false);
+          {!isMapping && !(isDrawingBuilding && redrawingBuildingId) && (
+            <div className="admin-map-top-left-pills">
+              {(deepLinkedHazardId || deepLinkedRescueId) && (
+                <button
+                  type="button"
+                  className="admin-map-back-pill"
+                  onClick={() => {
+                    if (deepLinkedHazardId) {
+                      handleEditReport({ id: deepLinkedHazardId });
+                    } else if (deepLinkedRescueId) {
+                      handleOpenRescueAlerts({ id: deepLinkedRescueId });
+                    }
+                  }}
+                  aria-label={
+                    deepLinkedHazardId
+                      ? "Go back to Hazard Reports"
+                      : "Go back to Rescue Alerts"
                   }
-                }}
-                aria-expanded="false"
-                aria-label={`Open centers panel, ${allCentersList.length} center${allCentersList.length === 1 ? "" : "s"}${
-                  unmappedCentersCount > 0 ? `, ${unmappedCentersCount} not mapped` : ""
-                }`}
-              >
-                <Building2 size={16} strokeWidth={2} className="admin-map-centers-pill-icon" aria-hidden="true" />
-                <span className="admin-map-centers-pill-label">
-                  Centers ({allCentersList.length})
-                </span>
-                {unmappedCentersCount > 0 && (
-                  <span
-                    className="admin-map-sheet-badge"
-                    aria-hidden="true"
-                  >
-                    {unmappedCentersCount}
+                >
+                  <FontAwesomeIcon icon={faArrowLeft} className="admin-map-back-pill-icon" aria-hidden="true" />
+                  <span className="admin-map-centers-pill-label">Go back</span>
+                </button>
+              )}
+
+              {((!isMobile && panelCollapsed) || (isMobile && !mobileCentersSheetOpen)) && (
+                <button
+                  type="button"
+                  className="admin-map-centers-pill admin-map-mobile-centers-pill"
+                  onClick={() => {
+                    if (isMobile) {
+                      setMobileCentersSheetOpen(true);
+                    } else {
+                      setPanelCollapsed(false);
+                    }
+                  }}
+                  aria-expanded="false"
+                  aria-label={`Open centers panel, ${allCentersList.length} center${allCentersList.length === 1 ? "" : "s"}${
+                    unmappedCentersCount > 0 ? `, ${unmappedCentersCount} not mapped` : ""
+                  }`}
+                >
+                  <Building2 size={16} strokeWidth={2} className="admin-map-centers-pill-icon" aria-hidden="true" />
+                  <span className="admin-map-centers-pill-label">
+                    Centers ({allCentersList.length})
                   </span>
-                )}
-              </button>
-            )}
+                  {unmappedCentersCount > 0 && (
+                    <span
+                      className="admin-map-sheet-badge"
+                      aria-hidden="true"
+                    >
+                      {unmappedCentersCount}
+                    </span>
+                  )}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Mobile Bottom Sheet (Visible <= 768px when triggered) */}
           {isMobile && !isMapping && mobileCentersSheetOpen && !(isDrawingBuilding && redrawingBuildingId) && (

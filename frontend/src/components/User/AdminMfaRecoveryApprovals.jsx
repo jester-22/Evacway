@@ -40,6 +40,10 @@ export default function AdminMfaRecoveryApprovals() {
     }
   }
 
+  if (requests.length === 0 && !error) {
+    return null;
+  }
+
   return (
     <section className="amra-section ds-card" aria-labelledby="amra-title">
       <div className="amra-heading">
@@ -50,7 +54,7 @@ export default function AdminMfaRecoveryApprovals() {
         <button type="button" className="ds-btn ds-btn--secondary" onClick={refresh}>Refresh</button>
       </div>
       {error && <p className="amra-error" role="alert">{error}</p>}
-      {requests.length === 0 ? <p className="amra-empty">No pending recovery requests.</p> : (
+      {requests.length > 0 && (
         <ul className="amra-list">
           {requests.map((request) => (
             <li className="amra-row" key={request.id}>

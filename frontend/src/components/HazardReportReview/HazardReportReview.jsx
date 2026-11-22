@@ -276,6 +276,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const mapMarkerRef = useRef(null);
+  const handledFocusReportIdRef = useRef(null);
 
   useEffect(() => {
     if (listScrollRef.current) {
@@ -283,11 +284,17 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     }
   }, [page, pageSize]);
 
-  // Auto-select focused report if provided from notification
+  // Auto-select focused report once when provided from notification or map "Go back"
   useEffect(() => {
-    if (focusReportId == null || !reports.length) return;
-    const target = reports.find((item) => String(item.id) === String(focusReportId));
+    if (focusReportId == null) {
+      handledFocusReportIdRef.current = null;
+      return;
+    }
+    const focusKey = String(focusReportId);
+    if (handledFocusReportIdRef.current === focusKey || !reports.length) return;
+    const target = reports.find((item) => String(item.id) === focusKey);
     if (target) {
+      handledFocusReportIdRef.current = focusKey;
       openReport(target);
     }
   }, [focusReportId, reports]);
@@ -668,6 +675,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       const bName = barangayName || selected.barangay_name || selected.barangay || "";
       if (hType) params.set("type", hType);
       if (bName) params.set("barangay", bName);
+      if (selected.status) params.set("status", String(selected.status).toLowerCase());
 
       navigate(`${staffMapPath}?${params.toString()}`);
     } else {

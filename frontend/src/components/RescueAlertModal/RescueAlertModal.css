@@ -772,58 +772,6 @@
   text-align: center;
 }
 
-.rescue-text-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
-  border: 1px solid #dbeafe;
-  border-radius: 12px;
-  background: #f8fbff;
-}
-
-.rescue-text-card h3 {
-  margin: 0;
-  color: #0f172a;
-  font-size: 16px;
-  line-height: 1.3;
-}
-
-.rescue-text-card > p {
-  margin: 0;
-  color: #475569;
-  font-size: 12.5px;
-  line-height: 1.4;
-}
-
-.rescue-text-location-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 48px;
-  width: 100%;
-  border: 1px solid #1d4ed8;
-  border-radius: 10px;
-  color: #ffffff;
-  background: #1b5fc1;
-  font: 700 15px/1.2 var(--font-body);
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.rescue-text-location-button:hover:not(:disabled) {
-  background: #174ea6;
-}
-
-.rescue-text-location-button:disabled {
-  border-color: #cbd5e1;
-  color: #64748b;
-  background: #e2e8f0;
-  cursor: not-allowed;
-}
-
-.rescue-text-location-button:focus-visible,
 .rescue-hotline-link:focus-visible {
   outline: 2px solid #1d4ed8;
   outline-offset: 2px;
@@ -938,10 +886,6 @@
 
   .rescue-hotline-link {
     min-height: 56px;
-  }
-
-  .rescue-text-card {
-    padding: 12px;
   }
 
   .rescue-field-row {

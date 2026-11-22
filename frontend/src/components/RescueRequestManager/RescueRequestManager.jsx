@@ -550,6 +550,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
 
       const bName = selected.barangay || selected.barangay_name || "";
       if (bName) params.set("barangay", bName);
+      if (selected.status) params.set("status", String(selected.status).toLowerCase());
 
       navigate(`${staffMapPath}?${params.toString()}`);
     } else {

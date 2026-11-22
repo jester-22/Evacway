@@ -2814,14 +2814,27 @@
    ========================================================= */
 
 /* ---------------------------------------------------------
-   COLLAPSED CENTERS BUTTON (Desktop & Mobile)
+   TOP-LEFT FLOATING PILLS (Go Back + Collapsed Centers Button)
    --------------------------------------------------------- */
-.admin-map-centers-pill,
-.admin-map-mobile-centers-pill,
-.admin-map-rail {
+.admin-map-top-left-pills {
   position: absolute;
   top: calc(var(--space-5) + env(safe-area-inset-top, 0px));
   left: calc(var(--space-5) + env(safe-area-inset-left, 0px));
+  z-index: 300;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.admin-map-top-left-pills > * {
+  pointer-events: auto;
+}
+
+.admin-map-back-pill,
+.admin-map-centers-pill,
+.admin-map-mobile-centers-pill,
+.admin-map-rail {
   height: 40px;
   min-height: 40px;
   background-color: var(--surface);
@@ -2842,6 +2855,13 @@
   transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease, color 150ms ease;
 }
 
+.admin-map-rail {
+  position: absolute;
+  top: calc(var(--space-5) + env(safe-area-inset-top, 0px));
+  left: calc(var(--space-5) + env(safe-area-inset-left, 0px));
+}
+
+.admin-map-back-pill:hover,
 .admin-map-centers-pill:hover,
 .admin-map-mobile-centers-pill:hover,
 .admin-map-rail:hover {
@@ -2849,6 +2869,7 @@
   border-color: var(--primary-200);
 }
 
+.admin-map-back-pill:focus-visible,
 .admin-map-centers-pill:focus-visible,
 .admin-map-mobile-centers-pill:focus-visible,
 .admin-map-rail:focus-visible {
@@ -2856,6 +2877,7 @@
   outline-offset: 2px;
 }
 
+.admin-map-back-pill-icon,
 .admin-map-centers-pill-icon,
 .admin-map-rail-icon {
   color: var(--primary);
@@ -2894,8 +2916,7 @@
 }
 
 @media (max-width: 768px) {
-  .admin-map-centers-pill,
-  .admin-map-mobile-centers-pill {
+  .admin-map-top-left-pills {
     top: calc(var(--space-3) + env(safe-area-inset-top, 0px));
     left: calc(var(--space-3) + env(safe-area-inset-left, 0px));
   }

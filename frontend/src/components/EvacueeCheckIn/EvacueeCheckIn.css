@@ -3585,12 +3585,14 @@
 
 .ea-table-wrap {
   width: 100%;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ea-table {
   width: 100%;
-  min-width: 0;
+  min-width: 920px;
   table-layout: fixed;
   border-collapse: collapse;
   text-align: left;
@@ -3600,7 +3602,7 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 11px 14px;
+  padding: 11px 12px;
   border-bottom: 1px solid var(--border);
   background-color: var(--bg-2);
   color: var(--muted);
@@ -3613,7 +3615,7 @@
 
 .ea-table thead th:nth-child(1),
 .ea-table tbody td:nth-child(1) {
-  width: 24%;
+  width: 23%;
 }
 
 .ea-table thead th:nth-child(2),
@@ -3623,22 +3625,22 @@
 
 .ea-table thead th:nth-child(3),
 .ea-table tbody td:nth-child(3) {
-  width: 20%;
+  width: auto;
 }
 
 .ea-table thead th:nth-child(4),
 .ea-table tbody td:nth-child(4) {
-  width: 15%;
+  width: 150px;
 }
 
 .ea-table thead th:nth-child(5),
 .ea-table tbody td:nth-child(5) {
-  width: 10%;
+  width: 112px;
 }
 
 .ea-table thead th:nth-child(6),
 .ea-table tbody td:nth-child(6) {
-  width: 18%;
+  width: 222px;
 }
 
 .ea-table thead th.ea-th-action {
@@ -3660,7 +3662,7 @@
 }
 
 .ea-table tbody td {
-  padding: 13px 14px;
+  padding: 13px 12px;
   vertical-align: middle;
 }
 
@@ -3762,6 +3764,7 @@
 .ea-room-chip {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   height: 22px;
   padding: 0 9px;
   border: 1px solid var(--border);
@@ -3772,6 +3775,8 @@
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Column 4: FAMILY MEMBERS */
@@ -3838,13 +3843,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 6px;
+  max-width: 100%;
 }
 
 .ea-action-btn {
   height: 34px;
-  padding: 0 10px;
+  padding: 0 11px;
   font-size: 12.5px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ea-manage-icon-btn {

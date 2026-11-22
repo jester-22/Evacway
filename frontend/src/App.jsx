@@ -1,6 +1,6 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import LandingPage from "./pages/LandingPage";
-import { AuthProvider } from "./context/AuthContext";
+import { AuthProvider, useAuth } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute/ProtectedRoute";
 
 import ResidentHome from "./pages/resident/ResidentHome";
@@ -18,6 +18,27 @@ import AdminMap from "./pages/admin/AdminMap";
 import ErrorBoundary from "./components/ErrorBoundary/ErrorBoundary";
 import DataPrivacyNotice from "./pages/DataPrivacyNotice";
 
+function getRoleHomePath(role) {
+  if (role === "admin" || role === "lgu_personnel") return "/dashboard";
+  return "/map";
+}
+
+function GuestOnlyRoute({ children }) {
+  const { user } = useAuth();
+  if (user) {
+    return <Navigate to={getRoleHomePath(user.role)} replace />;
+  }
+  return children;
+}
+
+function ResidentOrGuestRoute({ children }) {
+  const { user } = useAuth();
+  if (user && (user.role === "admin" || user.role === "lgu_personnel")) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
+}
+
 function App() {
   return (
     
@@ -27,8 +48,22 @@ function App() {
         <ErrorBoundary>
           <Routes>
           {/* Public — no login required, per the proposal */}
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/map" element={<ResidentHome />} />
+          <Route
+            path="/"
+            element={
+              <GuestOnlyRoute>
+                <LandingPage />
+              </GuestOnlyRoute>
+            }
+          />
+          <Route
+            path="/map"
+            element={
+              <ResidentOrGuestRoute>
+                <ResidentHome />
+              </ResidentOrGuestRoute>
+            }
+          />
           <Route path="/login" element={<Login />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/set-password" element={<PasswordSetup />} />

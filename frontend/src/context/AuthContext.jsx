@@ -44,13 +44,11 @@ export function AuthProvider({ children }) {
   }
 
   function logout() {
-    console.log("LOGOUT FIRING");
     queryClient.clear();
-    navigate("/");
-    console.log("AFTER NAVIGATE, location is:", window.location.pathname);
     localStorage.removeItem("evacway_token");
     localStorage.removeItem("evacway_user");
     setUser(null);
+    navigate("/", { replace: true });
   }
 
   function updateUser(updatedUser) {

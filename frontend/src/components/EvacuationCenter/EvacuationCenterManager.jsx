@@ -531,8 +531,8 @@ export default function EvacuationCenterManager({
       return;
     }
     const parsedPeopleSpaces = Number(roomForm.people_spaces);
-    if (!Number.isInteger(parsedPeopleSpaces) || parsedPeopleSpaces < 1) {
-      setError("People spaces must be a whole number of at least 1.");
+    if (!Number.isInteger(parsedPeopleSpaces) || parsedPeopleSpaces < 25) {
+      setError("People spaces must be a whole number of at least 25.");
       return;
     }
     const computedFamilySlots = Math.ceil(parsedPeopleSpaces / 5);

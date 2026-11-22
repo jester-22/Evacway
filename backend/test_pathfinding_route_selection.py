@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from services.pathfinding import (
     choose_safe_route,
+    describe_fallback_reason,
     select_closest_alternative_center,
     select_route_candidates,
 )
@@ -106,6 +107,18 @@ class RouteCandidateSelectionTests(unittest.TestCase):
 
         self.assertIsNone(primary)
         self.assertEqual(alternative["evacuation_center"]["id"], 2)
+
+    def test_fallback_reason_distinguishes_unreachable_no_capacity_and_full(self):
+        self.assertEqual(describe_fallback_reason(None), "unreachable")
+        reachable = safe_candidate(46, "SLSU", 300, 0, 0)
+        self.assertEqual(
+            describe_fallback_reason(reachable, {"total_people_spaces": 0}),
+            "no_capacity",
+        )
+        self.assertEqual(
+            describe_fallback_reason(reachable, {"total_people_spaces": 50}),
+            "full",
+        )
 
 
 if __name__ == "__main__":

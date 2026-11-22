@@ -619,25 +619,41 @@ class CenterStructureFlowTests(unittest.TestCase):
             400,
         )
 
+        # Room capacity below 25 is rejected
+        too_small = self.client.post(
+            f'/api/evacuation-centers/{cid}/rooms',
+            headers=self.headers,
+            json={'room_number': '100', 'capacity': 24},
+        )
+        self.assertEqual(too_small.status_code, 400)
+
         r1 = self.client.post(
             f'/api/evacuation-centers/{cid}/rooms',
             headers=self.headers,
-            json={'room_number': '101', 'capacity': 3},
+            json={'room_number': '101', 'capacity': 25, 'family_slots': 1},
         )
         self.assertEqual(r1.status_code, 201)
         r1_id = r1.get_json()['room']['id']
 
+        # Lowering room capacity below 25 on update is rejected
+        too_small_upd = self.client.put(
+            f'/api/rooms/{r1_id}',
+            headers=self.headers,
+            json={'people_spaces': 20},
+        )
+        self.assertEqual(too_small_upd.status_code, 400)
+
         r2 = self.client.post(
             f'/api/evacuation-centers/{cid}/rooms',
             headers=self.headers,
-            json={'room_number': '102', 'capacity': 5},
+            json={'room_number': '102', 'capacity': 30},
         )
         self.assertEqual(r2.status_code, 201)
 
-        # Center capacity is automatically total of rooms (3 + 5 = 8)
+        # Center capacity is automatically total of rooms (25 + 30 = 55)
         centers = self.client.get('/api/evacuation-centers', headers=self.headers).get_json()['features']
         prop = next(f['properties'] for f in centers if f['properties']['id'] == cid)
-        self.assertEqual(prop['capacity'], 8)
+        self.assertEqual(prop['capacity'], 55)
 
         fam1 = self._create_family('Elena Torres', 3)
         fam2 = self._create_family('Gina Gomez', 1)

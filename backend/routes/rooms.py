@@ -22,9 +22,10 @@ from utils import get_optional_caller, public_room_payload, role_required
 
 
 rooms_bp = Blueprint('rooms', __name__)
+MIN_ROOM_PEOPLE_SPACES = 25
 
 
-def _positive_room_limit(data, key, default, label, legacy_key=None):
+def _positive_room_limit(data, key, default, label, legacy_key=None, minimum=1):
     value = data.get(key, data.get(legacy_key) if legacy_key else None)
     if value is None or str(value).strip() == '':
         value = default
@@ -33,8 +34,12 @@ def _positive_room_limit(data, key, default, label, legacy_key=None):
         if isinstance(value, float) and not value.is_integer():
             raise ValueError
     except (TypeError, ValueError):
+        if minimum > 1:
+            raise ValueError(f'{label} must be a whole number of at least {minimum}')
         raise ValueError(f'{label} must be a whole number greater than 0')
-    if parsed <= 0:
+    if parsed < minimum:
+        if minimum > 1:
+            raise ValueError(f'{label} must be at least {minimum}')
         raise ValueError(f'{label} must be greater than 0')
     return parsed
 
@@ -161,7 +166,9 @@ def create_room(center_id):
     room_number = data.get('room_number')
     try:
         family_slots = _positive_room_limit(data, 'family_slots', 5, 'Family slots')
-        people_spaces = _positive_room_limit(data, 'people_spaces', 25, 'People spaces', 'capacity')
+        people_spaces = _positive_room_limit(
+            data, 'people_spaces', MIN_ROOM_PEOPLE_SPACES, 'People spaces', 'capacity', minimum=MIN_ROOM_PEOPLE_SPACES
+        )
     except ValueError as err:
         return jsonify({'error': str(err)}), 400
     raw_floor = data.get('floor')
@@ -347,16 +354,16 @@ def update_room(room_id):
     ).count()
 
     current_usage = room.capacity_usage()
-    for key, label, used_key, current_limit in (
-        ('family_slots', 'Family slots', 'used_slots', int(room.family_slots or 5)),
-        ('people_spaces', 'People spaces', 'used_spaces', int(room.people_spaces or 25)),
+    for key, label, used_key, current_limit, minimum in (
+        ('family_slots', 'Family slots', 'used_slots', int(room.family_slots or 5), 1),
+        ('people_spaces', 'People spaces', 'used_spaces', int(room.people_spaces or MIN_ROOM_PEOPLE_SPACES), MIN_ROOM_PEOPLE_SPACES),
     ):
         legacy_value = data.get('capacity') if key == 'people_spaces' and key not in data else None
         if key not in data and legacy_value is None:
             continue
         try:
             parsed_limit = _positive_room_limit(
-                {key: data.get(key, legacy_value)}, key, current_limit, label
+                {key: data.get(key, legacy_value)}, key, current_limit, label, minimum=minimum
             )
         except ValueError as err:
             return jsonify({'error': str(err)}), 400

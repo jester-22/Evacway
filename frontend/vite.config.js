@@ -52,6 +52,8 @@ export default defineConfig({
     allowedHosts: [
       '.trycloudflare.com',
       '.ngrok-free.dev',
+      'evacway.me',
+      'www.evacway.me'
     ],
     proxy: {
       '/api': 'http://127.0.0.1:5000',

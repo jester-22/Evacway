@@ -15,7 +15,9 @@ function ProtectedRoute({ children, allowedRoles }) {
       ? "/map"
       : user.role === "lgu_personnel"
         ? "/lgu"
-        : "/";
+        : user.role === "admin"
+          ? "/dashboard"
+          : "/";
     return <Navigate to={redirectPath} state={{ flashMessage: "Admins only" }} replace />;
   }
 

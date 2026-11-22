@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test src/utils/polygonSnap.test.js src/utils/centerBuildings.test.js src/utils/routeCard.test.js src/utils/routeArrowAnimation.test.js src/utils/rescueRequest.test.js src/utils/publicMapLayers.test.js src/utils/mapBuildingLayers.test.js src/config/emergencyContacts.test.js src/config/offlineMap.test.js src/locales/landing.test.js src/pages/DataPrivacyNotice.test.js src/pages/resident/mapLayersLayout.test.js src/components/PublicMapDialogShell/PublicMapDialogShell.test.js src/pages/resident/mapChrome.test.js src/components/AuthModals/signupDialogLifecycle.test.js",
+    "test": "node --test src/utils/polygonSnap.test.js src/utils/centerBuildings.test.js src/utils/routeCard.test.js src/utils/routeArrowAnimation.test.js src/utils/rescueRequest.test.js src/utils/publicMapLayers.test.js src/utils/mapBuildingLayers.test.js src/utils/navigationProximity.test.js src/config/emergencyContacts.test.js src/config/offlineMap.test.js src/locales/landing.test.js src/pages/DataPrivacyNotice.test.js src/pages/resident/mapLayersLayout.test.js src/components/PublicMapDialogShell/PublicMapDialogShell.test.js src/pages/resident/mapChrome.test.js src/components/AuthModals/signupDialogLifecycle.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

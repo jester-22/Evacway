@@ -1043,10 +1043,11 @@ export function CenterFormModal({
 }
 
 const PEOPLE_PER_FAMILY_SLOT = 5;
+const MIN_ROOM_PEOPLE_SPACES = 25;
 
 function computeFamilySlots(peopleSpaces) {
   const spaces = Number(peopleSpaces);
-  if (!Number.isInteger(spaces) || spaces < 1) return null;
+  if (!Number.isInteger(spaces) || spaces < MIN_ROOM_PEOPLE_SPACES) return null;
   return Math.ceil(spaces / PEOPLE_PER_FAMILY_SLOT);
 }
 
@@ -1098,8 +1099,8 @@ export function CenterRoomModal({
     } else {
       clearFieldError('room_number');
     }
-    if (!Number.isInteger(Number(roomForm.people_spaces)) || Number(roomForm.people_spaces) < 1) {
-      setFieldError('people_spaces', 'Enter a whole number of people spaces (minimum 1).');
+    if (!Number.isInteger(Number(roomForm.people_spaces)) || Number(roomForm.people_spaces) < MIN_ROOM_PEOPLE_SPACES) {
+      setFieldError('people_spaces', `Enter a whole number of people spaces (minimum ${MIN_ROOM_PEOPLE_SPACES}).`);
       valid = false;
     } else {
       clearFieldError('people_spaces');
@@ -1229,13 +1230,13 @@ export function CenterRoomModal({
           <input
             id="room-people-spaces"
             type="number"
-            min="1"
+            min={MIN_ROOM_PEOPLE_SPACES}
             step="1"
             required
             inputMode="numeric"
             onKeyDown={(e) => ["e", "E", "+", "-", ".", ","].includes(e.key) && e.preventDefault()}
             className={fieldErrors.people_spaces ? 'form-input is-invalid' : 'form-input'}
-            value={roomForm.people_spaces ?? 25}
+            value={roomForm.people_spaces ?? MIN_ROOM_PEOPLE_SPACES}
             onChange={(e) => {
               clearFieldError('people_spaces');
               const nextSpaces = e.target.value;
@@ -1251,11 +1252,15 @@ export function CenterRoomModal({
             <p className="field-error">{fieldErrors.people_spaces}</p>
           ) : calculatedFamilySlots != null ? (
             <p className="cfm-helper-text">
-              Automatically sets <strong>{calculatedFamilySlots}</strong>{' '}
+              Minimum {MIN_ROOM_PEOPLE_SPACES} people. Automatically sets <strong>{calculatedFamilySlots}</strong>{' '}
               {calculatedFamilySlots === 1 ? 'family slot' : 'family slots'} (1 slot per{' '}
               {PEOPLE_PER_FAMILY_SLOT} people, rounded up).
             </p>
-          ) : null}
+          ) : (
+            <p className="cfm-helper-text">
+              Minimum room capacity is {MIN_ROOM_PEOPLE_SPACES} people.
+            </p>
+          )}
         </div>
         {hasBuildings && (
           <div className="form-group">

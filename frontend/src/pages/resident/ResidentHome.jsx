@@ -15,6 +15,11 @@ import { applyPublicMapLayerVisibility, simplifyPublicBaseMap } from "../../util
 import { shouldUpdateRouteArrowAnimation } from "../../utils/routeArrowAnimation.js";
 import { resolveRoomBuilding } from "../../utils/resolveRoomBuilding";
 import { needsLocationConfirmation } from "../../utils/locationConfirmation";
+import {
+  buildConnectedRouteLngLat,
+  findNearbyBlockedRoad,
+  BLOCKED_ROAD_CLEAR_THRESHOLD_METERS,
+} from "../../utils/navigationProximity";
 import { createReportPopup } from "../../components/mapReports/mapReports";
 import {
   setOrUpdateSelectedLocationMarker,
@@ -112,13 +117,6 @@ function transformOpenFreeMapRequest(url) {
     };
   }
   return { url };
-}
-
-function formatPublicCenterUpdateTime(value) {
-  const date = value ? new Date(value) : null;
-  return date && !Number.isNaN(date.getTime())
-    ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
-    : "";
 }
 
 function CenterCapacityFacts({ centerId, rooms, capacityOverride, className = "" }) {
@@ -1488,6 +1486,65 @@ const ResidentHome = () => {
   useEffect(() => {
     sogodBoundaryRef.current = sogodBoundary;
   }, [sogodBoundary]);
+  const roadsRef = useRef(null);
+  useEffect(() => {
+    roadsRef.current = roads;
+  }, [roads]);
+  const hazardReportsRef = useRef([]);
+  useEffect(() => {
+    hazardReportsRef.current = hazardReports;
+  }, [hazardReports]);
+  const [blockedRoadWarning, setBlockedRoadWarning] = useState(null);
+  const blockedRoadWarningRef = useRef(null);
+
+  function getRouteEndpoints(routeObj, liveOriginLatLng = null) {
+    let startLatLng = null;
+    if (
+      Array.isArray(liveOriginLatLng) &&
+      liveOriginLatLng.length >= 2 &&
+      Number.isFinite(Number(liveOriginLatLng[0])) &&
+      Number.isFinite(Number(liveOriginLatLng[1]))
+    ) {
+      startLatLng = [Number(liveOriginLatLng[0]), Number(liveOriginLatLng[1])];
+    } else if (Array.isArray(routeObj?.start_leg) && routeObj.start_leg.length > 0) {
+      const first = routeObj.start_leg[0];
+      if (Array.isArray(first) && first.length >= 2) {
+        const sLat = Number(first[0]);
+        const sLng = Number(first[1]);
+        if (Number.isFinite(sLat) && Number.isFinite(sLng)) {
+          startLatLng = [sLat, sLng];
+        }
+      }
+    } else if (
+      routeObj?._requestedOrigin &&
+      Number.isFinite(Number(routeObj._requestedOrigin.lat)) &&
+      Number.isFinite(Number(routeObj._requestedOrigin.lng))
+    ) {
+      startLatLng = [Number(routeObj._requestedOrigin.lat), Number(routeObj._requestedOrigin.lng)];
+    }
+
+    let entranceLatLng = null;
+    const entrance = routeObj?.chosen_entrance || routeObj?.evacuation_center?.chosen_entrance;
+    if (entrance) {
+      const eLat = Number(entrance.latitude ?? entrance.lat);
+      const eLng = Number(entrance.longitude ?? entrance.lng);
+      if (Number.isFinite(eLat) && Number.isFinite(eLng)) {
+        entranceLatLng = [eLat, eLng];
+      }
+    }
+    if (!entranceLatLng && Array.isArray(routeObj?.final_leg) && routeObj.final_leg.length > 0) {
+      const last = routeObj.final_leg[routeObj.final_leg.length - 1];
+      if (Array.isArray(last) && last.length >= 2) {
+        const eLat = Number(last[0]);
+        const eLng = Number(last[1]);
+        if (Number.isFinite(eLat) && Number.isFinite(eLng)) {
+          entranceLatLng = [eLat, eLng];
+        }
+      }
+    }
+
+    return { startLatLng, entranceLatLng };
+  }
 
   // --------------------------------------------------
   // Use Custom Hooks for Logic
@@ -4006,22 +4063,16 @@ const ResidentHome = () => {
       return;
     }
 
-    const routeCoordinates = route.route
-      .map((point) => {
-        if (!Array.isArray(point) || point.length < 2) {
-          return null;
-        }
-
-        const lat = Number(point[0]);
-        const lng = Number(point[1]);
-
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-          return null;
-        }
-
-        return [lng, lat];
-      })
-      .filter(Boolean);
+    const liveOrigin =
+      navigationActiveRef.current && liveUserLocationRef.current
+        ? [liveUserLocationRef.current.lat, liveUserLocationRef.current.lng]
+        : null;
+    const { startLatLng, entranceLatLng } = getRouteEndpoints(route, liveOrigin);
+    const routeCoordinates = buildConnectedRouteLngLat(
+      route.route,
+      startLatLng,
+      entranceLatLng
+    );
 
     if (routeCoordinates.length === 0) {
       setRouteError("The evacuation route contains invalid coordinates.");
@@ -4106,42 +4157,6 @@ const ResidentHome = () => {
         },
       });
 
-      // Final leg: short dashed lighter line connecting snapped road point to exact entrance
-      const finalLegSourceId = "evacuation-route-final-leg-source";
-      const finalLegLayerId = "evacuation-route-final-leg-layer";
-
-      if (map.getLayer(finalLegLayerId)) map.removeLayer(finalLegLayerId);
-      if (map.getSource(finalLegSourceId)) map.removeSource(finalLegSourceId);
-
-      if (Array.isArray(route.final_leg) && route.final_leg.length >= 2) {
-        map.addSource(finalLegSourceId, {
-          type: "geojson",
-          data: {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: route.final_leg,
-            },
-          },
-        });
-
-        map.addLayer({
-          id: finalLegLayerId,
-          type: "line",
-          source: finalLegSourceId,
-          layout: {
-            "line-cap": "round",
-            "line-join": "round",
-          },
-          paint: {
-            "line-color": "#60a5fa",
-            "line-width": 4.5,
-            "line-opacity": 0.95,
-            "line-dasharray": [2, 2],
-          },
-        });
-      }
-
       // Direction chevron arrows along the route (sampled every ~50m)
       const arrowPoints = generateRouteArrowPoints(routeCoordinates, 50);
       map.addSource("evacuation-route-arrows-source", {
@@ -4179,6 +4194,16 @@ const ResidentHome = () => {
         });
       }
 
+      if (map.getLayer("evacway-entrances-circle")) {
+        try {
+          map.moveLayer("evacway-entrances-circle");
+        } catch { }
+      }
+      if (map.getLayer("evacway-entrances-symbol")) {
+        try {
+          map.moveLayer("evacway-entrances-symbol");
+        } catch { }
+      }
       if (map.getLayer("resident-hazard-reports-layer-compact")) {
         try {
           map.moveLayer("resident-hazard-reports-layer-compact");
@@ -4276,8 +4301,6 @@ const ResidentHome = () => {
           if (map.getLayer(layerId)) map.removeLayer(layerId);
           if (map.getLayer(casingLayerId)) map.removeLayer(casingLayerId);
           if (map.getLayer(walkedLayerId)) map.removeLayer(walkedLayerId);
-          if (map.getLayer("evacuation-route-final-leg-layer")) map.removeLayer("evacuation-route-final-leg-layer");
-          if (map.getSource("evacuation-route-final-leg-source")) map.removeSource("evacuation-route-final-leg-source");
         }
       } catch (err) {
         // ignore
@@ -4647,6 +4670,8 @@ const ResidentHome = () => {
     setNavPillExpanded(false);
     autoFollowRef.current = true;
     setLostSignal(false);
+    blockedRoadWarningRef.current = null;
+    setBlockedRoadWarning(null);
 
     if (navigationWatchIdRef.current != null && navigator.geolocation) {
       navigator.geolocation.clearWatch(navigationWatchIdRef.current);
@@ -4659,13 +4684,19 @@ const ResidentHome = () => {
       // Restore full route on map if route exists
       const latestRoute = routeDataRef.current || route;
       if (latestRoute && Array.isArray(latestRoute.route) && map.isStyleLoaded()) {
+        const { startLatLng, entranceLatLng } = getRouteEndpoints(latestRoute);
+        const restoredCoordinates = buildConnectedRouteLngLat(
+          latestRoute.route,
+          startLatLng,
+          entranceLatLng
+        );
         const remSource = map.getSource("evacuation-route");
         if (remSource) {
           remSource.setData({
             type: "Feature",
             geometry: {
               type: "LineString",
-              coordinates: latestRoute.route.map(([lat, lng]) => [lng, lat]),
+              coordinates: restoredCoordinates,
             },
             properties: {},
           });
@@ -4685,10 +4716,7 @@ const ResidentHome = () => {
         if (arrowsSource) {
           arrowsSource.setData({
             type: "FeatureCollection",
-            features: generateRouteArrowPoints(
-              latestRoute.route.map(([lat, lng]) => [lng, lat]),
-              50
-            ),
+            features: generateRouteArrowPoints(restoredCoordinates, 50),
           });
         }
       }
@@ -4728,11 +4756,14 @@ const ResidentHome = () => {
 
     setRouteError("");
     setArrivalToast("");
+    blockedRoadWarningRef.current = null;
+    setBlockedRoadWarning(null);
     navigationActiveRef.current = true;
     setNavigationActive(true);
     setNavigationStatus("Starting navigation...");
     lastRerouteAtRef.current = 0;
     consecutiveOffRouteRef.current = 0;
+    lastBatteryThrottleRef.current = null;
     autoFollowRef.current = true;
     setIsPannedAway(false);
 
@@ -4777,15 +4808,15 @@ const ResidentHome = () => {
           lastGoodReadingTimeRef.current = now;
         }
 
-        // Battery: lower update rate to once every 5s if user hasn't moved > 5 m
+        // Battery: lower update rate to once every 2s if user hasn't moved > 2 m
         if (lastBatteryThrottleRef.current) {
           const timeSince = now - lastBatteryThrottleRef.current.time;
-          if (timeSince < 5000) {
+          if (timeSince < 2000) {
             const movedDist = getDistanceMeters(
               [lastBatteryThrottleRef.current.lat, lastBatteryThrottleRef.current.lng],
               [rawLat, rawLng]
             );
-            if (movedDist < 5) {
+            if (movedDist < 2) {
               return;
             }
           }
@@ -4841,9 +4872,15 @@ const ResidentHome = () => {
           }
         }
 
-        // Snap user to nearest point on route
+        // Snap user to nearest point on route for progress and off-route distance
         const routePoints = latestRoute?.route || [];
         const snap = snapLocationToRoute(rawLocation, routePoints);
+        const { entranceLatLng } = getRouteEndpoints(latestRoute);
+        const connectedRemainingCoords = buildConnectedRouteLngLat(
+          snap.remainingPoints,
+          rawLocation,
+          entranceLatLng
+        );
 
         // Compute heading: GPS heading -> delta displacement -> route direction
         let heading =
@@ -4883,12 +4920,10 @@ const ResidentHome = () => {
 
         previousLocationRef.current = { lat: rawLat, lng: rawLng };
 
-        // For display: use snapped position along route if user is within corridor (<= 30m)
-        const displayLat = snap.distanceToRoute <= 30 ? snap.snappedPoint[0] : rawLat;
-        const displayLng = snap.distanceToRoute <= 30 ? snap.snappedPoint[1] : rawLng;
-        setMyLocation({ lat: displayLat, lng: displayLng, heading, accuracy });
+        // Always show the user's real live GPS position so the marker follows even when walking off-route
+        setMyLocation({ lat: rawLat, lng: rawLng, heading, accuracy });
 
-        // Update route line on map: trim walked portion, keep remaining portion
+        // Update route line on map: connect directly from live user position to remaining route and exact entrance
         const currentMap = mapRef.current;
         if (currentMap && currentMap.isStyleLoaded()) {
           const remSource = currentMap.getSource("evacuation-route");
@@ -4897,7 +4932,7 @@ const ResidentHome = () => {
               type: "Feature",
               geometry: {
                 type: "LineString",
-                coordinates: snap.remainingPoints.map(([lat, lng]) => [lng, lat]),
+                coordinates: connectedRemainingCoords,
               },
               properties: {},
             });
@@ -4909,30 +4944,30 @@ const ResidentHome = () => {
               type: "Feature",
               geometry: {
                 type: "LineString",
-                coordinates: snap.walkedPoints.map(([lat, lng]) => [lng, lat]),
+                coordinates:
+                  snap.distanceToRoute <= 20
+                    ? snap.walkedPoints.map(([lat, lng]) => [lng, lat])
+                    : [],
               },
               properties: {},
             });
           }
 
           const arrowsSource = currentMap.getSource("evacuation-route-arrows-source");
-          if (arrowsSource && snap.remainingPoints && snap.remainingPoints.length >= 2) {
+          if (arrowsSource && connectedRemainingCoords.length >= 2) {
             arrowsSource.setData({
               type: "FeatureCollection",
-              features: generateRouteArrowPoints(
-                snap.remainingPoints.map(([lat, lng]) => [lng, lat]),
-                50
-              ),
+              features: generateRouteArrowPoints(connectedRemainingCoords, 50),
             });
           }
 
-          // Camera follow: keep map centered, rotate toward heading when available
+          // Camera follow: keep map centered on user's real GPS position, rotate toward heading when available
           if (autoFollowRef.current) {
             const reducedMotion =
               typeof window !== "undefined" &&
               window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
             currentMap.easeTo({
-              center: [displayLng, displayLat],
+              center: [rawLng, rawLat],
               pitch: 0,
               bearing: heading != null && Number.isFinite(heading) ? heading : currentMap.getBearing(),
               duration: reducedMotion ? 0 : 400,
@@ -4940,16 +4975,53 @@ const ResidentHome = () => {
           }
         }
 
-        // Calculate remaining distance and time
+        // Calculate remaining distance and time including live-user and entrance connectors
         let remainingDistance = 0;
-        for (let i = 0; i < snap.remainingPoints.length - 1; i++) {
+        for (let i = 0; i < connectedRemainingCoords.length - 1; i++) {
           remainingDistance += getDistanceMeters(
-            snap.remainingPoints[i],
-            snap.remainingPoints[i + 1]
+            [connectedRemainingCoords[i][1], connectedRemainingCoords[i][0]],
+            [connectedRemainingCoords[i + 1][1], connectedRemainingCoords[i + 1][0]]
           );
         }
-        setNavigationRemainingMeters(Math.round(remainingDistance));
+        const roundedRemainingMeters = Math.round(remainingDistance);
+        setNavigationRemainingMeters(roundedRemainingMeters);
+        navigationRemainingMetersRef.current = roundedRemainingMeters;
         setNavigationRemainingSeconds(Math.ceil(remainingDistance / 1.38));
+
+        // Check proximity to blocked roads or validated road-blocking hazards
+        const nearbyBlocked = findNearbyBlockedRoad(
+          rawLocation,
+          roadsRef.current,
+          hazardReportsRef.current
+        );
+        if (nearbyBlocked) {
+          const prevWarning = blockedRoadWarningRef.current;
+          blockedRoadWarningRef.current = nearbyBlocked;
+          setBlockedRoadWarning(nearbyBlocked);
+          if (
+            !prevWarning ||
+            (prevWarning.severity !== "on_road" && nearbyBlocked.severity === "on_road")
+          ) {
+            if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+              try {
+                navigator.vibrate([250, 120, 250]);
+              } catch {
+                // ignore vibration failures on unsupported devices
+              }
+            }
+          }
+        } else if (blockedRoadWarningRef.current) {
+          const stillNearBlocked = findNearbyBlockedRoad(
+            rawLocation,
+            roadsRef.current,
+            hazardReportsRef.current,
+            BLOCKED_ROAD_CLEAR_THRESHOLD_METERS
+          );
+          if (!stillNearBlocked) {
+            blockedRoadWarningRef.current = null;
+            setBlockedRoadWarning(null);
+          }
+        }
 
         // Advance walking steps
         const steps = latestRoute?.walking_steps || [];
@@ -4974,18 +5046,26 @@ const ResidentHome = () => {
           setNavigationStatus("Follow the highlighted route to the center.");
         }
 
-        // Off-route check: if > 50m for consecutive updates (throttled to at most once per 10s)
-        if (snap.distanceToRoute > 50) {
+        // Off-route or blocked-road check: reroute quickly (cooldown 4s)
+        if (snap.distanceToRoute > 20 || nearbyBlocked) {
           consecutiveOffRouteRef.current += 1;
           const nowReroute = Date.now();
+          const shouldRerouteNow =
+            snap.distanceToRoute > 30 ||
+            Boolean(nearbyBlocked) ||
+            consecutiveOffRouteRef.current >= 2;
           if (
-            consecutiveOffRouteRef.current >= 2 &&
+            shouldRerouteNow &&
             !reroutingRef.current &&
-            nowReroute - lastRerouteAtRef.current >= 10000
+            nowReroute - lastRerouteAtRef.current >= 4000
           ) {
             reroutingRef.current = true;
             lastRerouteAtRef.current = nowReroute;
-            setNavigationStatus("Off route, recalculating...");
+            setNavigationStatus(
+              nearbyBlocked
+                ? "Blocked road ahead, recalculating safe route..."
+                : "Off route, recalculating..."
+            );
 
             const targetCenterId = target?.id || target?.center_id;
             api.getEvacuationRoute(rawLocation[0], rawLocation[1], targetCenterId)
@@ -5009,15 +5089,31 @@ const ResidentHome = () => {
                   activeEntranceRef.current = candidateEntrance;
                 }
 
-                const walkingTarget = candidateEntrance || target;
-                const walkingDirections = await getWalkingDirections(rawLocation, walkingTarget).catch(() => null);
+                const safeRoutePoints =
+                  Array.isArray(backendResult?.route) && backendResult.route.length > 0
+                    ? backendResult.route
+                    : latestRoute.route;
+                let walkingSteps = [];
+                if (Array.isArray(safeRoutePoints) && safeRoutePoints.length >= 2) {
+                  const walkingTarget = candidateEntrance || target;
+                  const walkingDirections = await getWalkingDirections(rawLocation, walkingTarget).catch(() => null);
+                  if (
+                    walkingDirections &&
+                    mapboxRouteMatchesBackend(walkingDirections.route, safeRoutePoints, 15.0) &&
+                    Array.isArray(walkingDirections.walking_steps)
+                  ) {
+                    walkingSteps = walkingDirections.walking_steps;
+                  }
+                }
 
                 const updatedRoute = {
                   ...latestRoute,
                   ...backendResult,
-                  ...(walkingDirections || {}),
-                  route: backendResult.route && backendResult.route.length > 0 ? backendResult.route : (walkingDirections?.route || latestRoute.route),
+                  _requestedOrigin: { lat: rawLat, lng: rawLng },
+                  route: safeRoutePoints, // ALWAYS keep backend hazard-aware route geometry
+                  walking_steps: walkingSteps,
                   chosen_entrance: candidateEntrance,
+                  start_leg: backendResult.start_leg,
                   final_leg: backendResult.final_leg || latestRoute.final_leg,
                 };
 
@@ -5027,8 +5123,41 @@ const ResidentHome = () => {
                 setActiveWalkingStep(0);
                 consecutiveOffRouteRef.current = 0;
 
-                const remainingMeters = walkingDirections?.walking_distance_meters ?? (backendResult.distance_km ? backendResult.distance_km * 1000 : null);
-                const remainingSeconds = walkingDirections?.walking_duration_seconds ?? (backendResult.estimated_time_min ? backendResult.estimated_time_min * 60 : null);
+                const { entranceLatLng: updatedEntranceLatLng } = getRouteEndpoints(updatedRoute);
+                const reconnectedCoords = buildConnectedRouteLngLat(
+                  safeRoutePoints,
+                  rawLocation,
+                  updatedEntranceLatLng
+                );
+                const liveMap = mapRef.current;
+                if (liveMap && liveMap.isStyleLoaded()) {
+                  const remSrc = liveMap.getSource("evacuation-route");
+                  if (remSrc) {
+                    remSrc.setData({
+                      type: "Feature",
+                      geometry: { type: "LineString", coordinates: reconnectedCoords },
+                      properties: {},
+                    });
+                  }
+                  const walkedSrc = liveMap.getSource("evacuation-route-walked");
+                  if (walkedSrc) {
+                    walkedSrc.setData({
+                      type: "Feature",
+                      geometry: { type: "LineString", coordinates: [] },
+                      properties: {},
+                    });
+                  }
+                  const arrowsSrc = liveMap.getSource("evacuation-route-arrows-source");
+                  if (arrowsSrc && reconnectedCoords.length >= 2) {
+                    arrowsSrc.setData({
+                      type: "FeatureCollection",
+                      features: generateRouteArrowPoints(reconnectedCoords, 50),
+                    });
+                  }
+                }
+
+                const remainingMeters = backendResult.distance_km ? Math.round(backendResult.distance_km * 1000) : null;
+                const remainingSeconds = backendResult.estimated_time_min ? Math.round(backendResult.estimated_time_min * 60) : null;
                 setNavigationRemainingMeters(remainingMeters);
                 navigationRemainingMetersRef.current = remainingMeters;
                 setNavigationRemainingSeconds(remainingSeconds);
@@ -5103,16 +5232,12 @@ const ResidentHome = () => {
         if (map.getLayer("evacuation-route-casing")) map.removeLayer("evacuation-route-casing");
         if (map.getLayer("evacuation-route-walked-line")) map.removeLayer("evacuation-route-walked-line");
         if (map.getLayer("evacuation-route-flow")) map.removeLayer("evacuation-route-flow");
-        if (map.getLayer("evacuation-route-final-leg-layer")) map.removeLayer("evacuation-route-final-leg-layer");
 
         if (map.getSource("evacuation-route-arrows-source")) {
           map.removeSource("evacuation-route-arrows-source");
         }
         if (map.getSource("evacuation-route")) map.removeSource("evacuation-route");
         if (map.getSource("evacuation-route-walked")) map.removeSource("evacuation-route-walked");
-        if (map.getSource("evacuation-route-final-leg-source")) {
-          map.removeSource("evacuation-route-final-leg-source");
-        }
       }
       removeAccuracyCircle(map);
     } catch (err) {
@@ -6142,18 +6267,20 @@ const ResidentHome = () => {
         className={`map-container ${pickingLocation && pickingPurposeRef.current === "hazard" ? "is-picking-hazard" : ""} ${pickingLocation && pickingPurposeRef.current === "route" ? "is-picking-route" : ""
           }`}
       />
-      {formatPublicCenterUpdateTime(evacCenters?.last_updated) && (
-        <div className="public-centers-updated" aria-label={`Evacuation center list last updated ${formatPublicCenterUpdateTime(evacCenters.last_updated)}`}>
-          Center data updated {formatPublicCenterUpdateTime(evacCenters.last_updated)}
-        </div>
-      )}
 
       {/* Header (slim 48px bar on phones) */}
       <header className="top-bar">
-        <Link to="/" className="brand brand-link" aria-label="EvacWay Home" title="EvacWay Home">
-          <img src="/evacway-logo-text.png" alt="EvacWay" className="brand-logo brand-logo-wide" />
-          <img src="/evacway-app.png" alt="EvacWay" className="brand-logo brand-logo-square" />
-        </Link>
+        {!user ? (
+          <Link to="/" className="brand brand-link" aria-label="EvacWay Home" title="EvacWay Home">
+            <img src="/evacway-logo-text.png" alt="EvacWay" className="brand-logo brand-logo-wide" />
+            <img src="/evacway-app.png" alt="EvacWay" className="brand-logo brand-logo-square" />
+          </Link>
+        ) : (
+          <div className="brand" aria-label="EvacWay">
+            <img src="/evacway-logo-text.png" alt="EvacWay" className="brand-logo brand-logo-wide" />
+            <img src="/evacway-app.png" alt="EvacWay" className="brand-logo brand-logo-square" />
+          </div>
+        )}
 
         {/* Search evacuation center bar: centered in header between logo and user actions */}
         <div className="top-bar-search">
@@ -7415,7 +7542,8 @@ const ResidentHome = () => {
 
       {/* Active walking navigation: compact pill on mobile (expands on tap) or top bar */}
       {navigationActive && (
-        <div className="nav-active-top-bar route-nav-compact" role="region" aria-label="Walking navigation">
+        <>
+          <div className="nav-active-top-bar route-nav-compact" role="region" aria-label="Walking navigation">
             <div className="nav-bar-icon-wrap" aria-hidden="true">
               <FontAwesomeIcon
                 icon={faArrowUp}
@@ -7427,14 +7555,14 @@ const ResidentHome = () => {
             <div className="nav-bar-content">
               <div className="nav-bar-instruction">
                 {currentWalkingManeuver?.instruction ||
-                  (navigationStatus?.includes("Off route")
+                  (navigationStatus?.includes("Off route") || navigationStatus?.includes("Blocked road")
                     ? navigationStatus
                     : "Follow highlighted route")}
               </div>
               <div className="nav-bar-subline">
                 {lostSignal ? (
                   <span className="nav-signal-lost-pill">Searching for location...</span>
-                ) : navigationStatus && navigationStatus.includes("Off route") ? (
+                ) : navigationStatus && (navigationStatus.includes("Off route") || navigationStatus.includes("Blocked road")) ? (
                   <span className="nav-bar-offroute">{navigationStatus}</span>
                 ) : navigationRemainingMeters != null ? (
                   <span>
@@ -7467,6 +7595,31 @@ const ResidentHome = () => {
               End
             </button>
           </div>
+
+          {blockedRoadWarning && (
+            <div
+              className={`nav-blocked-road-warning ${blockedRoadWarning.severity === "on_road" ? "is-critical" : ""}`}
+              role="alert"
+              aria-live="assertive"
+            >
+              <div className="nav-blocked-road-icon" aria-hidden="true">
+                <FontAwesomeIcon icon={faTriangleExclamation} />
+              </div>
+              <div className="nav-blocked-road-copy">
+                <strong className="nav-blocked-road-title">
+                  {blockedRoadWarning.severity === "on_road"
+                    ? "Blocked road! Turn back immediately"
+                    : `Blocked road ahead (~${blockedRoadWarning.distanceMeters} m)`}
+                </strong>
+                <span className="nav-blocked-road-detail">
+                  {blockedRoadWarning.severity === "on_road"
+                    ? `You are near ${blockedRoadWarning.roadName}. Follow the blue detour route.`
+                    : `Avoid ${blockedRoadWarning.roadName}. Follow the blue detour route.`}
+                </span>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Route preview stays below the header, clear of the map controls and bottom dock. */}
@@ -7576,7 +7729,13 @@ const ResidentHome = () => {
             <>
               {route.fallback_state === "fallback" && (
                 <div className="route-fallback-banner" role="status">
-                  <strong>Your center can't be reached. Showing the nearest safe center.</strong>
+                  <strong>
+                    {route.fallback_reason === "no_capacity"
+                      ? `${displayEntityName(route.assigned_center?.name, "Selected center")} has no available rooms right now. Showing the nearest safe center.`
+                      : route.fallback_reason === "full"
+                        ? `${displayEntityName(route.assigned_center?.name, "Selected center")} is currently full. Showing the nearest safe center.`
+                        : "Your center can't be reached. Showing the nearest safe center."}
+                  </strong>
                   <span>
                     {route.evacuation_center?.free_family_slots ?? "—"} family slots and {route.evacuation_center?.free_people_spaces ?? "—"} people spaces are free. {route.selection_reason}
                   </span>

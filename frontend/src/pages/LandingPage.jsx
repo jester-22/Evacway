@@ -1167,7 +1167,7 @@ export default function LandingPage() {
           </div>
           <div className="ew-footer-bottom">
             <p className="ew-footer-credit">
-              Hazard data from HazardHunterPH. Roads from OpenStreetMap. MDRRMO Sogod, Southern Leyte.
+              Roads from OpenStreetMap. MDRRMO Sogod, Southern Leyte.
             </p>
             <p className="ew-footer-copy">&copy; 2026 EvacWay &bull; Municipality of Sogod, Southern Leyte. {t("footer.copyright")}</p>
           </div>

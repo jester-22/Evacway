@@ -750,18 +750,18 @@ export function createReportPopup(report, options = {}) {
       actionRow.appendChild(resolveBtn);
     }
 
-    // Edit button (secondary/ghost)
+    // Go back button (opens report details in Hazard Reports)
     if (typeof options.onEdit === "function") {
-      const editBtn = document.createElement("button");
-      editBtn.type = "button";
-      editBtn.className = "map-report-btn-ghost";
-      editBtn.textContent = "Edit";
-      editBtn.addEventListener("click", (e) => {
+      const goBackBtn = document.createElement("button");
+      goBackBtn.type = "button";
+      goBackBtn.className = "map-report-btn-ghost";
+      goBackBtn.textContent = "Go back";
+      goBackBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
         options.onEdit(report);
       });
-      actionRow.appendChild(editBtn);
+      actionRow.appendChild(goBackBtn);
     }
 
     // Delete button (admin-only ghost danger button)
@@ -983,7 +983,7 @@ export function createRescuePopup(rescue, options = {}) {
     const openBtn = document.createElement("button");
     openBtn.type = "button";
     openBtn.className = "map-report-btn-secondary";
-    openBtn.textContent = "Open in Rescue Alerts";
+    openBtn.textContent = "Go back";
     openBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();

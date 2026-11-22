@@ -5,7 +5,15 @@ from flask import g, has_request_context
 from shapely.geometry import Point, LineString
 from shapely.strtree import STRtree
 from geoalchemy2.shape import to_shape
-from models import RoadSegment, EvacuationCenter, EvacuationCenterRoom
+from sqlalchemy import func
+from models import (
+    db,
+    RoadSegment,
+    EvacuationCenter,
+    EvacuationCenterRoom,
+    EvacuationAssignment,
+    NonRegisteredEvacuee,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +348,7 @@ def select_closest_alternative_center(candidates):
 def get_centers_free_capacity(centers):
     center_ids = [center.id for center in centers]
     capacity_by_center = {
-        center_id: {"free_family_slots": 0, "free_people_spaces": 0}
+        center_id: {"free_family_slots": 0, "free_people_spaces": 0, "total_people_spaces": 0}
         for center_id in center_ids
     }
     if not center_ids:
@@ -356,9 +364,65 @@ def get_centers_free_capacity(centers):
     ]
     usage = EvacuationCenterRoom.bulk_capacity_usage(rooms)
     for room in rooms:
-        capacity_by_center[room.evacuation_center_id]["free_family_slots"] += usage[room.id]["available_slots"]
-        capacity_by_center[room.evacuation_center_id]["free_people_spaces"] += usage[room.id]["available_spaces"]
+        entry = capacity_by_center[room.evacuation_center_id]
+        entry["free_family_slots"] += usage[room.id]["available_slots"]
+        entry["free_people_spaces"] += usage[room.id]["available_spaces"]
+        entry["total_people_spaces"] += int(room.people_spaces or room.capacity or 0)
+
+    # Open-area centers (e.g. covered courts / plazas) track capacity directly on the center rather than rooms.
+    open_area_centers = [
+        center for center in centers
+        if (getattr(center, "structure_mode", None) or "buildings_and_rooms") == "open_area"
+        and int(center.capacity or 0) > 0
+    ]
+    if open_area_centers:
+        open_area_ids = [center.id for center in open_area_centers]
+        assigned_counts = dict(
+            db.session.query(
+                EvacuationAssignment.evacuation_center_id,
+                func.count(EvacuationAssignment.id),
+            )
+            .filter(EvacuationAssignment.evacuation_center_id.in_(open_area_ids))
+            .group_by(EvacuationAssignment.evacuation_center_id)
+            .all()
+        )
+        walkin_counts = dict(
+            db.session.query(
+                NonRegisteredEvacuee.center_id,
+                func.count(NonRegisteredEvacuee.id),
+            )
+            .filter(
+                NonRegisteredEvacuee.center_id.in_(open_area_ids),
+                NonRegisteredEvacuee.departed_at.is_(None),
+            )
+            .group_by(NonRegisteredEvacuee.center_id)
+            .all()
+        )
+        for center in open_area_centers:
+            total_cap = int(center.capacity or 0)
+            used_people = int(assigned_counts.get(center.id, 0) or 0) + int(walkin_counts.get(center.id, 0) or 0)
+            free_people = max(total_cap - used_people, 0)
+            capacity_by_center[center.id] = {
+                "free_family_slots": math.ceil(free_people / 5) if free_people > 0 else 0,
+                "free_people_spaces": free_people,
+                "total_people_spaces": total_cap,
+            }
+
     return capacity_by_center
+
+
+def describe_fallback_reason(assigned_route, assigned_capacity=None):
+    """Distinguish why a requested center fell back: unreachable, no_capacity, or full."""
+    if assigned_route is None:
+        return "unreachable"
+    total_spaces = (
+        assigned_capacity.get("total_people_spaces", 0)
+        if isinstance(assigned_capacity, dict)
+        else int(assigned_route.get("evacuation_center", {}).get("total_people_spaces") or 0)
+    )
+    if total_spaces <= 0:
+        return "no_capacity"
+    return "full"
 
 
 def choose_safe_route(candidates, assigned_center_id=None):
@@ -601,6 +665,8 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
             "name": assigned_center.name if assigned_center else None,
         }
     if fallback_state == "fallback":
+        assigned_cap = capacity_by_center.get(assigned_center.id) if assigned_center else None
+        best_result["fallback_reason"] = describe_fallback_reason(assigned_route, assigned_cap)
         best_result["selection_reason"] = (
             "Nearest reachable center with free family slots and people spaces, "
             "measured by walking distance."

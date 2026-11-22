@@ -551,7 +551,6 @@ function UserManagement() {
   return (
     <div className="um-page">
       <div className="um-root">
-        {currentUser?.role === "admin" && <AdminMfaRecoveryApprovals />}
         {/* PAGE HEADER */}
         <header className="um-header">
           <div className="um-header-copy">
@@ -570,6 +569,8 @@ function UserManagement() {
             <span>Add User</span>
           </Button>
         </header>
+
+        {currentUser?.role === "admin" && <AdminMfaRecoveryApprovals />}
 
         {/* ACTION ERROR BANNER (mutation errors) */}
         {actionError && (

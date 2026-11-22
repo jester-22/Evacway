@@ -29,10 +29,20 @@ function LguDashboard() {
   const notificationId = searchParams.get("notificationId");
   const resourceTypeParam = searchParams.get("resourceType");
   const resourceIdParam = searchParams.get("resourceId");
+  const hazardParam = searchParams.get("hazard");
+  const rescueParam = searchParams.get("rescue");
   const [tab, setTab] = useState(["centers", "barangays", "reports", "rescue", "checkin", "registrations", "settings"].includes(requestedTab) ? requestedTab : "centers");
   const [flashNotice, setFlashNotice] = useState(location.state?.flashMessage || "");
-  const [focusedReportId, setFocusedReportId] = useState(null);
-  const [focusedRescueId, setFocusedRescueId] = useState(null);
+  const [focusedReportId, setFocusedReportId] = useState(() => {
+    if (!hazardParam) return null;
+    const parsed = Number(hazardParam);
+    return Number.isFinite(parsed) ? parsed : hazardParam;
+  });
+  const [focusedRescueId, setFocusedRescueId] = useState(() => {
+    if (!rescueParam) return null;
+    const parsed = Number(rescueParam);
+    return Number.isFinite(parsed) ? parsed : rescueParam;
+  });
   const [focusedRegistrationId, setFocusedRegistrationId] = useState(null);
   const { user, logout } = useAuth();
   const queryClient = useQueryClient();
@@ -87,6 +97,18 @@ function LguDashboard() {
       setTab(requestedTab);
     }
   }, [requestedTab, navigate]);
+
+  useEffect(() => {
+    if (!hazardParam) return;
+    const parsed = Number(hazardParam);
+    setFocusedReportId(Number.isFinite(parsed) ? parsed : hazardParam);
+  }, [hazardParam]);
+
+  useEffect(() => {
+    if (!rescueParam) return;
+    const parsed = Number(rescueParam);
+    setFocusedRescueId(Number.isFinite(parsed) ? parsed : rescueParam);
+  }, [rescueParam]);
 
   useEffect(() => {
     const focusKey = `${notificationId || ""}:${resourceTypeParam || ""}:${resourceIdParam || ""}`;
@@ -171,6 +193,10 @@ function LguDashboard() {
       } else {
         query.set("hazard", String(item.id));
       }
+    }
+    const status = item.status || item.request_status;
+    if (status) {
+      query.set("status", String(status).toLowerCase());
     }
     navigate(`/lgu/map?${query.toString()}`);
   }

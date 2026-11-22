@@ -640,6 +640,7 @@ function DashboardMap({
   const currentHazardPopupRef = useRef(null);
   const centerMarkersRef = useRef([]);
   const focusPointMarkerRef = useRef(null);
+  const autoOpenedFocusRef = useRef(null);
   const currentRoomPopupRef = useRef(null);
   const roomElementsMapRef = useRef({});
   const onRoomClickRef = useRef(onRoomClick);
@@ -991,7 +992,6 @@ function DashboardMap({
   const familiesError = roomFamiliesQuery.error?.message || "";
 
   const filteredReports = useMemo(() => {
-    const focusId = focusLocation?.hazardId ? String(focusLocation.hazardId) : null;
     const seenIds = new Set();
     const result = [];
 
@@ -1000,15 +1000,6 @@ function DashboardMap({
       const idStr = String(report.id);
       if (seenIds.has(idStr)) return;
 
-      const status = String(report.status || "").toLowerCase();
-      if (status === "rejected" && (!focusId || focusId !== idStr)) return;
-
-      if (focusId && idStr === focusId) {
-        seenIds.add(idStr);
-        result.push(report);
-        return;
-      }
-
       if (isValidatedReport(report)) {
         seenIds.add(idStr);
         result.push(report);
@@ -1016,7 +1007,7 @@ function DashboardMap({
     });
 
     return result;
-  }, [hazardReports, focusLocation?.hazardId]);
+  }, [hazardReports]);
 
   /*
    * Search
@@ -1111,9 +1102,24 @@ function DashboardMap({
       focusPointMarkerRef.current = null;
     }
 
-    // Only create focus marker pin if focusLocation has a specific incident label (e.g. Hazard Report, Rescue Request)
-    // and noPin is not true. Do NOT drop a pin for normal center/place navigation.
-    if (!focusLocation.label || focusLocation.noPin === true) {
+    // Only create focus marker pin if focusLocation has a specific incident label (e.g. historical/resolved incident)
+    // and noPin is not true. When a pending/validated hazard or active rescue already has its own map icon,
+    // fly directly to that icon without dropping a duplicate focus pin on top of it.
+    const focusedHazardHasIcon = Boolean(
+      focusLocation.hazardId &&
+      (
+        (filteredReports || []).some((r) => String(r?.id) === String(focusLocation.hazardId)) ||
+        (pendingHazardReports || []).some((r) => String(r?.id) === String(focusLocation.hazardId))
+      )
+    );
+    const focusedRescueHasIcon = Boolean(
+      focusLocation.rescueId &&
+      (rescueRequests || []).some((r) => {
+        const statusKey = String(r?.status || "pending").toLowerCase();
+        return String(r?.id) === String(focusLocation.rescueId) && statusKey !== "resolved";
+      })
+    );
+    if (!focusLocation.label || focusLocation.noPin === true || focusedHazardHasIcon || focusedRescueHasIcon) {
       return;
     }
 
@@ -1125,6 +1131,49 @@ function DashboardMap({
       <div class="dashboard-focus-dot"></div>
       <span class="dashboard-focus-label">${labelText}</span>
     `;
+    if (focusLocation.report || focusLocation.rescue) {
+      pinEl.style.cursor = "pointer";
+      pinEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (isDrawing || drawMode !== "none") return;
+        if (currentHazardPopupRef.current) {
+          try { currentHazardPopupRef.current.remove(); } catch {}
+          currentHazardPopupRef.current = null;
+        }
+        if (focusLocation.report) {
+          const popup = new mapboxgl.Popup({
+            offset: [0, -28],
+            className: "ew-popup",
+            maxWidth: "440px",
+            closeButton: false,
+            closeOnClick: true,
+          });
+          const content = createReportPopup(focusLocation.report, {
+            ...popupOptions,
+            onClose: () => popup.remove(),
+            popup,
+          });
+          popup.setLngLat([longitude, latitude]).setDOMContent(content).addTo(map);
+          currentHazardPopupRef.current = popup;
+        } else if (focusLocation.rescue) {
+          const popup = new mapboxgl.Popup({
+            offset: [0, -32],
+            className: "ew-popup",
+            maxWidth: "420px",
+            closeButton: false,
+            closeOnClick: true,
+          });
+          const content = createRescuePopup(focusLocation.rescue, {
+            onAdvanceStatus: onRescueAction?.onAdvanceStatus,
+            onOpenInRescueAlerts: onRescueAction?.onOpenInRescueAlerts,
+            onClose: () => popup.remove(),
+            popup,
+          });
+          popup.setLngLat([longitude, latitude]).setDOMContent(content).addTo(map);
+          currentHazardPopupRef.current = popup;
+        }
+      });
+    }
 
     const pinMarker = new mapboxgl.Marker({
       element: pinEl,
@@ -1134,7 +1183,112 @@ function DashboardMap({
       .addTo(map);
 
     focusPointMarkerRef.current = pinMarker;
-  }, [mapLoaded, focusLocation, drawMode]);
+  }, [mapLoaded, focusLocation, drawMode, isDrawing, filteredReports, pendingHazardReports, rescueRequests, popupOptions, onRescueAction]);
+
+  // Auto-open the popup modal when navigating via "View on Map" for a hazard report or rescue request
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!focusLocation?.hazardId && !focusLocation?.rescueId) {
+      autoOpenedFocusRef.current = null;
+      return;
+    }
+    if (!map || !mapLoaded || isDrawing || drawMode !== "none") return;
+
+    const focusKey = focusLocation.hazardId
+      ? `hazard:${focusLocation.hazardId}`
+      : `rescue:${focusLocation.rescueId}`;
+    if (autoOpenedFocusRef.current === focusKey) return;
+
+    if (focusLocation.hazardId) {
+      const targetId = String(focusLocation.hazardId);
+      const targetReport =
+        (focusLocation.report && String(focusLocation.report.id) === targetId ? focusLocation.report : null) ||
+        (pendingHazardReports || []).find((r) => String(r?.id) === targetId) ||
+        (filteredReports || []).find((r) => String(r?.id) === targetId) ||
+        (hazardReports || []).find((r) => String(r?.id) === targetId);
+      if (!targetReport) return;
+
+      const lng = Number(targetReport.longitude ?? targetReport.lng ?? focusLocation.longitude);
+      const lat = Number(targetReport.latitude ?? targetReport.lat ?? focusLocation.latitude);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+
+      if (currentHazardPopupRef.current) {
+        try { currentHazardPopupRef.current.remove(); } catch {}
+        currentHazardPopupRef.current = null;
+      }
+
+      const popup = new mapboxgl.Popup({
+        offset: [0, -28],
+        className: "ew-popup",
+        maxWidth: "440px",
+        closeButton: false,
+        closeOnClick: true,
+      });
+
+      const content = createReportPopup(targetReport, {
+        ...popupOptions,
+        onClose: () => popup.remove(),
+        popup,
+      });
+
+      popup.setLngLat([lng, lat]).setDOMContent(content).addTo(map);
+      currentHazardPopupRef.current = popup;
+      autoOpenedFocusRef.current = focusKey;
+      return;
+    }
+
+    if (focusLocation.rescueId) {
+      const targetId = String(focusLocation.rescueId);
+      const targetRescue =
+        (focusLocation.rescue && String(focusLocation.rescue.id) === targetId ? focusLocation.rescue : null) ||
+        (rescueRequests || []).find((r) => String(r?.id) === targetId);
+      if (!targetRescue) return;
+
+      const lng = Number(targetRescue.longitude ?? targetRescue.lng ?? focusLocation.longitude);
+      const lat = Number(targetRescue.latitude ?? targetRescue.lat ?? focusLocation.latitude);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+
+      if (currentHazardPopupRef.current) {
+        try { currentHazardPopupRef.current.remove(); } catch {}
+        currentHazardPopupRef.current = null;
+      }
+
+      const popup = new mapboxgl.Popup({
+        offset: [0, -32],
+        className: "ew-popup",
+        maxWidth: "420px",
+        closeButton: false,
+        closeOnClick: true,
+      });
+
+      const content = createRescuePopup(targetRescue, {
+        onAdvanceStatus: onRescueAction?.onAdvanceStatus,
+        onOpenInRescueAlerts: onRescueAction?.onOpenInRescueAlerts,
+        onClose: () => popup.remove(),
+        popup,
+      });
+
+      popup.setLngLat([lng, lat]).setDOMContent(content).addTo(map);
+      currentHazardPopupRef.current = popup;
+      autoOpenedFocusRef.current = focusKey;
+    }
+  }, [
+    mapLoaded,
+    focusLocation?.hazardId,
+    focusLocation?.rescueId,
+    focusLocation?.report,
+    focusLocation?.rescue,
+    focusLocation?.latitude,
+    focusLocation?.longitude,
+    isDrawing,
+    drawMode,
+    pendingHazardReports,
+    filteredReports,
+    hazardReports,
+    rescueRequests,
+    popupOptions,
+    onRescueAction,
+  ]);
 
   /*
    * Helper to suppress basemap commercial POIs (shops, restaurants)

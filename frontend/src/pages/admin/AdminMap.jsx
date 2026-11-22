@@ -61,6 +61,7 @@ import {
   faPlaceOfWorship,
   faWarehouse,
   faBuilding,
+  faHand,
   faTriangleExclamation,
 } from "@fortawesome/free-solid-svg-icons";
 import {

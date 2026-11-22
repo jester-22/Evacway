@@ -267,6 +267,8 @@ export default function CenterDetail({
               onAddRoom={structureMode === 'rooms_only' ? onAddRoom : undefined}
               onEditRoom={onEditRoom}
               onOpenBuilding={onOpenBuilding}
+              onAssignHousehold={onAssignHousehold}
+              onEditCenter={isAdmin ? onEditCenter : undefined}
             />
           </section>
         )}
@@ -1338,6 +1340,8 @@ export function StructureTab({
   onOpenRoom,
   onEditRoom,
   onOpenBuilding,
+  onAssignHousehold,
+  onEditCenter,
 }) {
   const structureMode = resolveCenterStructureMode(center)
   const isSingleVenue = structureMode === 'open_area'

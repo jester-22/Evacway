@@ -682,7 +682,7 @@ function LiveStatusStrip({ prefersReducedMotion, t }) {
           </div>
         )}
         <p className="ew-status-updated">
-          {t("status.updated")} {lastUpdatedLabel}{lastUpdatedDate && !Number.isNaN(lastUpdatedDate.getTime()) ? ` · ${t("status.serverTime")}` : ""}
+          {t("status.updated")} {lastUpdatedLabel}{lastUpdatedTime ? ` · ${t("status.serverTime")}` : ""}
         </p>
       </div>
     </section>

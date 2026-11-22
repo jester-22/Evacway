@@ -14,6 +14,7 @@ from sqlalchemy.orm import joinedload
 
 from models import (
     db,
+    Amenity,
     Resident,
     Family,
     Barangay,

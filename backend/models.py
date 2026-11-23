@@ -2210,3 +2210,18 @@ class NonRegisteredEvacuee(BaseModel):
         return result
 
 
+# ---------------------------------------------------------
+# SHARED UPLOADED FILES (HAZARD & RESCUE PHOTOS)
+# ---------------------------------------------------------
+class UploadedFile(BaseModel):
+    __tablename__ = 'uploaded_files'
+
+    id = db.Column(db.Integer, primary_key=True)
+    storage_path = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    content_type = db.Column(db.String(120), nullable=False, default='application/octet-stream')
+    data = db.Column(db.LargeBinary, nullable=False)
+    byte_size = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+

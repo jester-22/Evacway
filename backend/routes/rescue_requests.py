@@ -9,6 +9,7 @@ from werkzeug.utils import secure_filename
 
 from models import RescueRequest, SystemLog, db, Resident, ResidentAccount, User, utc_now, to_utc_iso
 from services.sogod_boundary import is_inside_sogod
+from services.upload_storage import save_uploaded_photo
 from services.notifications import (
     create_staff_notifications,
     send_staff_push_notifications,
@@ -69,18 +70,12 @@ def _sanitize_uploader_folder(uploader_name):
 
 
 def _save_proof_images(photo_files, uploader_name=None):
-    """Save uploads under static/uploads/rescue/<uploader> with unique names; return their URLs."""
+    """Save uploads into shared storage (Supabase Storage or shared DB + local mirror)."""
     uploader_folder = _sanitize_uploader_folder(uploader_name)
-    upload_folder = os.path.join(
-        current_app.root_path, 'static', 'uploads', 'rescue', uploader_folder
-    )
-    os.makedirs(upload_folder, exist_ok=True)
     urls = []
     for photo in photo_files:
-        ext = photo.filename.rsplit('.', 1)[1].lower()
-        unique_name = f"{uuid.uuid4().hex}.{ext}"
-        photo.save(os.path.join(upload_folder, unique_name))
-        urls.append(f"/static/uploads/rescue/{uploader_folder}/{unique_name}")
+        photo_url, _ = save_uploaded_photo(photo, 'rescue', uploader_folder)
+        urls.append(photo_url)
     return urls
 
 

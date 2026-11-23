@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-from flask import Flask, abort, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from config import Config
@@ -142,6 +142,12 @@ with app.app_context():
     except Exception as e:
         app.logger.warning("Could not ensure hazard_reports.barangay_name: %s", e)
 
+    try:
+        from migrate_uploaded_files import ensure_uploaded_files_table
+        ensure_uploaded_files_table(db)
+    except Exception as e:
+        app.logger.warning("Could not ensure uploaded_files table: %s", e)
+
 
 # =========================================================
 # BLUEPRINTS
@@ -232,6 +238,18 @@ def serve_uploaded_file(subpath):
         if norm.startswith(os.path.normpath(static_root)) and os.path.isfile(norm):
             directory, filename = os.path.split(norm)
             return send_from_directory(directory, filename)
+
+    try:
+        from services.upload_storage import get_uploaded_file_from_db
+        stored = get_uploaded_file_from_db(subpath)
+        if stored is not None:
+            data, content_type = stored
+            response = Response(data, mimetype=content_type)
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return response
+    except Exception as exc:
+        app.logger.warning("Could not load uploaded file %s from database: %s", subpath, exc)
+
     abort(404)
 
 

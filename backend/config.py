@@ -61,3 +61,6 @@ class Config:
     LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("LOGIN_RATE_LIMIT_WINDOW_SECONDS", "900"))
     LGU_TOTP_REQUIRED = os.environ.get("LGU_TOTP_REQUIRED", "false").strip().lower() in {"1", "true", "yes", "on"}
     DATA_PRIVACY_NOTICE_VERSION = os.environ.get("DATA_PRIVACY_NOTICE_VERSION", "1").strip() or "1"
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+    SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    SUPABASE_STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "evacway-uploads").strip() or "evacway-uploads"

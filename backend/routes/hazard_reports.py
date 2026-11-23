@@ -34,6 +34,7 @@ from services.pathfinding import (
     haversine,
 )
 from services.sogod_boundary import is_inside_sogod
+from services.upload_storage import delete_uploaded_photo, save_uploaded_photo
 from services.public_status import (
     active_hazard_status_filter,
     get_public_active_operation_alert,
@@ -552,21 +553,14 @@ def submit_hazard_report():
         return jsonify({"error": "Location validation is temporarily unavailable. Please try again later."}), 503
 
     uploader_folder = secure_filename(str(reporter_display_name or '').strip()) or 'user'
-    upload_folder = os.path.join(
-        current_app.root_path, 'static', 'uploads', 'hazard', uploader_folder
-    )
-    os.makedirs(upload_folder, exist_ok=True)
 
     saved_photo_urls = []
-    saved_file_paths = []
+    saved_photo_metas = []
     try:
         for photo in uploaded_files:
-            ext = photo.filename.rsplit('.', 1)[1].lower()
-            unique_name = f"{uuid.uuid4().hex}.{ext}"
-            file_path = os.path.join(upload_folder, unique_name)
-            photo.save(file_path)
-            saved_file_paths.append(file_path)
-            saved_photo_urls.append(f"/static/uploads/hazard/{uploader_folder}/{unique_name}")
+            photo_url, photo_meta = save_uploaded_photo(photo, 'hazard', uploader_folder)
+            saved_photo_urls.append(photo_url)
+            saved_photo_metas.append(photo_meta)
 
         snap_pt, _, _, _ = snap_point_to_road(
             report_latitude,
@@ -574,11 +568,8 @@ def submit_hazard_report():
             snap_to_intersection=False,
         )
         if not is_inside_sogod(snap_pt[0], snap_pt[1]):
-            for saved_path in saved_file_paths:
-                try:
-                    os.remove(saved_path)
-                except OSError:
-                    current_app.logger.warning("Could not remove rejected hazard report photo: %s", saved_path)
+            for photo_meta in saved_photo_metas:
+                delete_uploaded_photo(photo_meta)
             return jsonify({"error": "The nearest reportable road is outside Sogod. Choose a location inside the boundary."}), 400
         point = Point(snap_pt[1], snap_pt[0])
         resolved_barangay = resolve_barangay_name_for_point(
@@ -619,12 +610,8 @@ def submit_hazard_report():
         send_staff_push_notifications(notifications)
     except Exception as e:
         db.session.rollback()
-        for path in saved_file_paths:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except OSError:
-                pass
+        for photo_meta in saved_photo_metas:
+            delete_uploaded_photo(photo_meta)
         current_app.logger.exception("Failed to submit hazard report")
         return jsonify({"error": f"Failed to submit hazard report: {str(e)}"}), 500
 

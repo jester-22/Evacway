@@ -124,7 +124,10 @@ class MemberEditFlowTests(unittest.TestCase):
                     'evacuation_center_id INTEGER, '
                     'building_id INTEGER, '
                     'room_number VARCHAR(50), '
+                    'floor INTEGER, '
                     'capacity INTEGER, '
+                    'family_slots INTEGER DEFAULT 5, '
+                    'people_spaces INTEGER DEFAULT 25, '
                     'is_active BOOLEAN NOT NULL DEFAULT 1, '
                     'created_at DATETIME)'
                 )

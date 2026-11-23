@@ -137,36 +137,59 @@ def submit_rescue_request():
     ident = get_jwt_identity()
     account_type = claims.get('account_type', 'user')
 
+    if claims.get('mfa_flow'):
+        return jsonify({'error': "You don't have permission to do this"}), 403
+
+    try:
+        ident_int = int(ident) if ident is not None else None
+    except (TypeError, ValueError):
+        ident_int = None
+
+    if ident_int is None:
+        return jsonify({'error': 'An active registered account is required to submit a rescue request.'}), 401
+
     saved_name = claims.get('name') or ''
     saved_contact = ''
     saved_family_count = 1
 
-    if ident:
-        try:
-            ident_int = int(ident)
-            if account_type == 'resident_account':
-                acct = ResidentAccount.query.get(ident_int)
-                if acct:
-                    if acct.resident:
-                        saved_name = acct.resident.get_full_name()
-                        if getattr(acct.resident, 'contact_number', None):
-                            saved_contact = str(acct.resident.contact_number).strip()
-                        family = getattr(acct.resident, 'family', None)
-                        if family and family.member_count:
-                            saved_family_count = max(int(family.member_count), 1)
-                    elif acct.email and not saved_name:
-                        saved_name = acct.email.split('@')[0]
-            else:
-                usr = User.query.get(ident_int)
-                if usr:
-                    if usr.name:
-                        saved_name = usr.name
-                    elif usr.email and not saved_name:
-                        saved_name = usr.email.split('@')[0]
-                    if getattr(usr, 'phone', None):
-                        saved_contact = str(usr.phone).strip()
-        except Exception:
-            pass
+    if account_type == 'resident_account':
+        acct = db.session.get(ResidentAccount, ident_int)
+        if not acct or not acct.is_active:
+            return jsonify({'error': "You don't have permission to do this"}), 403
+        if acct.resident:
+            saved_name = acct.resident.get_full_name()
+            if getattr(acct.resident, 'contact_number', None):
+                saved_contact = str(acct.resident.contact_number).strip()
+            family = getattr(acct.resident, 'family', None)
+            if family and family.member_count:
+                saved_family_count = max(int(family.member_count), 1)
+        elif acct.email and not saved_name:
+            saved_name = acct.email.split('@')[0]
+    elif account_type == 'user':
+        usr = db.session.get(User, ident_int)
+        if not usr or not usr.is_active:
+            return jsonify({'error': "You don't have permission to do this"}), 403
+        if (
+            usr.role == 'admin'
+            or bool(usr.totp_enabled)
+            or (
+                usr.role == 'lgu_personnel'
+                and current_app.config.get('LGU_TOTP_REQUIRED', False)
+            )
+        ):
+            if (
+                claims.get('mfa_verified') is not True
+                or claims.get('mfa_version') != int(usr.mfa_version or 0)
+            ):
+                return jsonify({'error': "You don't have permission to do this"}), 403
+        if usr.name:
+            saved_name = usr.name
+        elif usr.email and not saved_name:
+            saved_name = usr.email.split('@')[0]
+        if getattr(usr, 'contact_number', None):
+            saved_contact = str(usr.contact_number).strip()
+    else:
+        return jsonify({'error': "You don't have permission to do this"}), 403
 
     if not requester_name:
         requester_name = saved_name or "Resident (Assistance Needed)"
@@ -309,14 +332,17 @@ def submit_rescue_request():
 @jwt_required()
 def get_rescue_form_context():
     claims = get_jwt() or {}
-    if claims.get('role') != 'resident' or claims.get('account_type') != 'resident_account':
+    if claims.get('account_type') != 'resident_account' or claims.get('mfa_flow'):
         return jsonify({'error': 'Resident access required.'}), 403
 
     try:
-        resident_id = int(claims.get('resident_id'))
+        account_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Resident account is unavailable.'}), 404
-    resident = db.session.get(Resident, resident_id)
+    acct = db.session.get(ResidentAccount, account_id)
+    if not acct or not acct.is_active:
+        return jsonify({'error': "You don't have permission to do this"}), 403
+    resident = db.session.get(Resident, acct.resident_id)
     if not resident:
         return jsonify({'error': 'Resident account is unavailable.'}), 404
     family = resident.family

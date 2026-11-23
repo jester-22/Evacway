@@ -241,9 +241,13 @@ def serve_uploaded_file(subpath):
                     if entry.is_dir():
                         candidates.append(os.path.join(entry.path, basename))
 
+    static_root_norm = os.path.normpath(static_root)
     for candidate in candidates:
         norm = os.path.normpath(candidate)
-        if norm.startswith(os.path.normpath(static_root)) and os.path.isfile(norm):
+        if (
+            os.path.commonpath([static_root_norm, norm]) == static_root_norm
+            and os.path.isfile(norm)
+        ):
             directory, filename = os.path.split(norm)
             return send_from_directory(directory, filename)
 

@@ -318,11 +318,14 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
 }
 
 export function NonRegisteredGroups({ result, loading, error, retry, status, setStatus, page, setPage, canEdit, isAdmin, onEdit, onMember, onChanged, onAdd, addDisabled }) {
-  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [selectedGroupCode, setSelectedGroupCode] = useState(null);
   const [details, setDetails] = useState({});
   const [busy, setBusy] = useState(null);
   const [actionError, setActionError] = useState('');
   const groups = result?.groups || [];
+  const selectedGroup = selectedGroupCode
+    ? groups.find((item) => item.group_code === selectedGroupCode) || null
+    : null;
   const act = async (key, task) => {
     if (busy) return;
     setBusy(key); setActionError('');
@@ -337,7 +340,7 @@ export function NonRegisteredGroups({ result, loading, error, retry, status, set
       const response = await api.getNonRegisteredGroup(group.group_code, true);
       setDetails((current) => ({ ...current, [group.group_code]: response.group }));
       if (editPerson) {
-        setSelectedGroup(null);
+        setSelectedGroupCode(null);
         onEdit(response.group.members.find((person) => person.id === editPerson.id), group);
       }
     } catch (requestError) { setActionError(requestError.message || 'Could not load protected details.'); }
@@ -351,15 +354,15 @@ export function NonRegisteredGroups({ result, loading, error, retry, status, set
          : <><div className="nre-table-wrap"><table className="nre-table"><thead><tr><th>Head of group</th><th>People</th><th>Shelter / room</th><th>Arrival</th><th>Status</th><th>Staff action</th></tr></thead>
           <tbody>{groups.map((group) => {
             return <GroupRows key={group.group_code} {...{ group, busy, canEdit }}
-              openDetails={() => setSelectedGroup(group)} member={() => onMember(group)}
+              openDetails={() => setSelectedGroupCode(group.group_code)} member={() => onMember(group)}
               depart={(person, departed) => act(`departure-${person?.id || group.group_code}`, () => api.departNonRegistered(person?.id || group.group_code, departed, !person))}
               />;
           })}</tbody></table></div>
           <nav className="nre-pagination" aria-label="Non-registered groups pagination"><span>{result.total} groups</span><button type="button" className="nre-secondary" disabled={page <= 1 || busy} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page}</span><button type="button" className="nre-secondary" disabled={page * 10 >= result.total || busy} onClick={() => setPage(page + 1)}>Next</button></nav></>}
     {selectedGroup && <GroupDetailsModal group={selectedGroup} details={details[selectedGroup.group_code]}
-      busy={busy === selectedGroup.group_code ? busy : null} canEdit={canEdit} isAdmin={isAdmin}
-      onClose={() => setSelectedGroup(null)} onReveal={() => reveal(selectedGroup)}
-      onEdit={(person) => reveal(selectedGroup, person)} onMember={() => { setSelectedGroup(null); onMember(selectedGroup); }}
+      busy={busy} canEdit={canEdit} isAdmin={isAdmin}
+      onClose={() => setSelectedGroupCode(null)} onReveal={() => reveal(selectedGroup)}
+      onEdit={(person) => reveal(selectedGroup, person)} onMember={() => { setSelectedGroupCode(null); onMember(selectedGroup); }}
       onDepart={(person, departed) => act(`departure-${person?.id || selectedGroup.group_code}`, () => api.departNonRegistered(person?.id || selectedGroup.group_code, departed, !person))}
       onRemove={(person) => { if (window.confirm('Delete this non-registered arrival record?')) act(`delete-${person.id}`, () => api.deleteNonRegisteredPerson(person.id)); }} />}
   </section>;

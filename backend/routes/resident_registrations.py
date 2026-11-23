@@ -1,4 +1,5 @@
 import re
+import secrets
 import time
 import unicodedata
 from collections import defaultdict
@@ -23,6 +24,7 @@ from models import (
     ResidentRegistrationRequest,
     RegistrationLinkOverrideLog,
     ResidentAccount,
+    RosterYear,
     StaffNotification,
     SystemLog,
     User,
@@ -1049,15 +1051,37 @@ def manual_create_resident_account():
         if birthdate_error:
             return jsonify({'error': birthdate_error}), 400
 
+        family_id = None
+        if barangay_id is not None:
+            active_year = (
+                RosterYear.query.filter_by(is_active=True).first()
+                or RosterYear.query.order_by(RosterYear.year.desc()).first()
+            )
+            if active_year is not None:
+                head_display = ' '.join(p for p in (first_name, middle_name, last_name, suffix) if p).strip()
+                manual_family = Family(
+                    roster_year_id=active_year.id,
+                    barangay_id=barangay_id,
+                    family_code=f"MAN-{secrets.token_hex(4).upper()}",
+                    head_name=head_display[:150],
+                    address=address or None,
+                    contact_number=contact_number or None,
+                    member_count=1,
+                )
+                db.session.add(manual_family)
+                db.session.flush()
+                family_id = manual_family.id
+
         resident = Resident(
+            family_id=family_id,
             first_name=first_name,
             middle_name=middle_name or None,
             last_name=last_name,
             suffix=suffix or None,
             date_of_birth=birthdate_obj,
-            barangay_id=barangay_id,
-            address=address or None,
-            contact_number=contact_number or None,
+            alternate_contact=contact_number or None,
+            is_head_of_family=bool(family_id),
+            relationship_to_head='Household Head' if family_id else None,
         )
         db.session.add(resident)
         db.session.flush()
@@ -1089,10 +1113,13 @@ def manual_create_resident_account():
     barangay_name = ''
     if resident.barangay:
         barangay_name = resident.barangay.name if hasattr(resident.barangay, 'name') else str(resident.barangay)
-    elif resident.barangay_id:
-        b_row = db.session.get(Barangay, resident.barangay_id)
+    elif resident.family and resident.family.barangay_id:
+        b_row = db.session.get(Barangay, resident.family.barangay_id)
         if b_row:
             barangay_name = b_row.name
+
+    fallback_address = str(data.get('address') or '').strip()
+    fallback_contact = str(data.get('contact_number') or '').strip()
 
     # Create matching approved ResidentRegistrationRequest for complete recordkeeping
     reg_request = ResidentRegistrationRequest(
@@ -1101,8 +1128,8 @@ def manual_create_resident_account():
         last_name=resident.last_name,
         birthdate=birth_dt,
         barangay=barangay_name or 'N/A',
-        address=resident.address or 'N/A',
-        contact_number=resident.contact_number or 'N/A',
+        address=resident.address or fallback_address or 'N/A',
+        contact_number=resident.contact_number or fallback_contact or 'N/A',
         email=email,
         password_hash=pwd_hash,
         status='approved',

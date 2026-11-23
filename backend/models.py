@@ -1909,9 +1909,14 @@ class EvacuationCenterRoom(BaseModel):
                         db.func.count(db.func.distinct(NonRegisteredEvacuee.group_code)),
                         db.func.count(NonRegisteredEvacuee.id),
                     )
+                    .join(
+                        EvacuationOperation,
+                        NonRegisteredEvacuee.operation_id == EvacuationOperation.id,
+                    )
                     .filter(
                         NonRegisteredEvacuee.room_id.in_(room_ids),
                         NonRegisteredEvacuee.departed_at.is_(None),
+                        EvacuationOperation.status == 'active',
                     )
                     .group_by(NonRegisteredEvacuee.room_id)
                     .all()

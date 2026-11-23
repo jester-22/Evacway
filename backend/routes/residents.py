@@ -2255,9 +2255,15 @@ def list_residents():
 
     linked_resident_ids = {
         resident_id
-        for (resident_id,) in User.query.with_entities(User.resident_id).filter(
-            User.resident_id.isnot(None)
-        ).all()
+        for (resident_id,) in (
+            db.session.query(User.resident_id)
+            .filter(User.resident_id.isnot(None))
+            .union(
+                db.session.query(ResidentAccount.resident_id)
+                .filter(ResidentAccount.resident_id.isnot(None))
+            )
+            .all()
+        )
     }
     result = []
     for resident in residents:
@@ -2518,7 +2524,7 @@ def autosuggest_residents():
             return _lookup_rate_limit_response()
         _record_resident_lookup('find_someone', caller, query, found=False)
         status = 401 if caller is None else 403
-        error = 'Authentication required.' if caller is None else 'Resident access required.'
+        error = 'Authentication required.' if caller is None else 'Staff access required.'
         return jsonify({"error": error}), status
 
     client_ip = (

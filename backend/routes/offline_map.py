@@ -109,9 +109,6 @@ def get_sogod_offline_map_tile(zoom, x, y):
         }
 
     headers = {"Cache-Control": "public, max-age=2592000"}
-    content_length = upstream.headers.get("Content-Length")
-    if content_length and content_length.isdigit():
-        headers["Content-Length"] = content_length
     return Response(
         upstream.content,
         status=200,

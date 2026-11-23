@@ -42,6 +42,13 @@ async function request(path, options = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    if (
+      res.status === 401 &&
+      token &&
+      !String(path || "").startsWith("/api/auth/")
+    ) {
+      window.dispatchEvent(new CustomEvent("evacway:auth-expired"));
+    }
     const err = new Error(
       data.error || data.message || `Request failed (${res.status})`
     );

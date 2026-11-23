@@ -2665,7 +2665,15 @@ def add_family_member(family_id):
     if assigned_room:
         db.session.add(EvacuationAssignment(
             resident_id=resident.id,
+            evacuation_center_id=assigned_room.evacuation_center_id,
             room_id=assigned_room.id
+        ))
+        db.session.flush()
+    elif existing_assignment and existing_assignment.evacuation_center_id:
+        db.session.add(EvacuationAssignment(
+            resident_id=resident.id,
+            evacuation_center_id=existing_assignment.evacuation_center_id,
+            room_id=None
         ))
         db.session.flush()
 

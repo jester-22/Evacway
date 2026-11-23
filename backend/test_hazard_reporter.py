@@ -182,12 +182,12 @@ class HazardReporterTests(unittest.TestCase):
         data = {
             'description': description,
             'report_type': 'flood',
-            'latitude': '10.67',
-            'longitude': '122.95',
+            'latitude': '10.386',
+            'longitude': '124.982',
             'photos': (io.BytesIO(b'fake-jpeg-bytes'), 'hazard.jpg'),
         }
         with (
-            patch('routes.hazard_reports.snap_point_to_road', return_value=((10.67, 122.95), None, None, None)),
+            patch('routes.hazard_reports.snap_point_to_road', return_value=((10.386, 124.982), None, None, None)),
             patch('routes.hazard_reports.create_staff_notifications', return_value=[]),
             patch('routes.hazard_reports.send_staff_push_notifications'),
         ):

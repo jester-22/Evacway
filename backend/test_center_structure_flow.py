@@ -21,6 +21,7 @@ from models import (
     NonRegisteredEvacuee,
     Resident,
     ResidentAccount,
+    ResidentLookupLog,
     RosterYear,
     SystemLog,
     User,
@@ -73,6 +74,7 @@ class CenterStructureFlowTests(unittest.TestCase):
             Family.__table__,
             Resident.__table__,
             ResidentAccount.__table__,
+            ResidentLookupLog.__table__,
             EvacuationOperation.__table__,
             EvacuationAssignment.__table__,
             EvacuationCheckInRecord.__table__,
@@ -339,8 +341,10 @@ class CenterStructureFlowTests(unittest.TestCase):
     def _assert_public_room_fields(self, room, allow_my_room=False):
         allowed = {
             'id',
+            'building_id',
             'building_name',
             'room_number',
+            'floor',
             'available_slots',
             'available_spaces',
             'status',

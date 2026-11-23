@@ -492,7 +492,7 @@ def _resolve_authenticated_reporter():
     except (TypeError, ValueError):
         ident_int = None
 
-    if ident_int is None:
+    if ident_int is None or claims.get('mfa_flow'):
         return None, None, None
 
     if account_type == 'resident_account':
@@ -502,9 +502,24 @@ def _resolve_authenticated_reporter():
         display_name = (acct.resident.get_full_name() if acct.resident else None) or f"Resident #{acct.id}"
         return None, acct.id, display_name
 
+    if account_type != 'user':
+        return None, None, None
     usr = db.session.get(User, ident_int)
     if not usr or not usr.is_active:
         return None, None, None
+    if (
+        usr.role == 'admin'
+        or bool(usr.totp_enabled)
+        or (
+            usr.role == 'lgu_personnel'
+            and current_app.config.get('LGU_TOTP_REQUIRED', False)
+        )
+    ):
+        if (
+            claims.get('mfa_verified') is not True
+            or claims.get('mfa_version') != int(usr.mfa_version or 0)
+        ):
+            return None, None, None
     display_name = (usr.name or '').strip() or f"User #{usr.id}"
     return usr.id, None, display_name
 

@@ -43,9 +43,24 @@ def get_optional_caller():
 
         if account_type != 'user':
             return None
+        if claims.get('mfa_flow'):
+            return None
         user = db.session.get(User, int(identity))
         if not user or not user.is_active or user.role not in STAFF_ROLES:
             return None
+        if (
+            user.role == 'admin'
+            or bool(user.totp_enabled)
+            or (
+                user.role == 'lgu_personnel'
+                and current_app.config.get('LGU_TOTP_REQUIRED', False)
+            )
+        ):
+            if (
+                claims.get('mfa_verified') is not True
+                or claims.get('mfa_version') != int(user.mfa_version or 0)
+            ):
+                return None
         return {'role': user.role, 'user_id': user.id}
     except Exception:
         return None
@@ -65,8 +80,10 @@ def public_room_payload(room, is_my_room=False, usage=None, building=None):
 
     payload = {
         'id': room.id,
+        'building_id': room.building_id,
         'building_name': (building.name or f'Building #{building.id}') if building else None,
         'room_number': room.room_number,
+        'floor': room.floor,
         'available_slots': usage['available_slots'],
         'available_spaces': usage['available_spaces'],
         'status': status,
@@ -114,8 +131,8 @@ def role_required(*allowed_roles):
             account_type = claims.get("account_type", "user")
 
             if is_staff_route:
-                # STAFF ROUTE: Only accept user tokens
-                if account_type != "user":
+                # STAFF ROUTE: Only accept non-challenge user tokens
+                if account_type != "user" or claims.get("mfa_flow"):
                     return jsonify({"error": "You don't have permission to do this"}), 403
 
                 # Load user from users table by id (never from token claims)
@@ -127,9 +144,13 @@ def role_required(*allowed_roles):
                 if user.role not in allowed_roles:
                     return jsonify({"error": "You don't have permission to do this"}), 403
 
-                if user.role == "admin" or (
-                    user.role == "lgu_personnel"
-                    and current_app.config.get("LGU_TOTP_REQUIRED", False)
+                if (
+                    user.role == "admin"
+                    or bool(user.totp_enabled)
+                    or (
+                        user.role == "lgu_personnel"
+                        and current_app.config.get("LGU_TOTP_REQUIRED", False)
+                    )
                 ):
                     if (
                         claims.get("mfa_verified") is not True

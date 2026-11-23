@@ -47,6 +47,7 @@ class FindCenterRouteTests(unittest.TestCase):
             conn.execute(text(
                 'CREATE TABLE users ('
                 'id INTEGER PRIMARY KEY, name VARCHAR(100), email VARCHAR(120), '
+                'recovery_email VARCHAR(120), '
                 'password_hash VARCHAR(255), contact_number VARCHAR(20), resident_id INTEGER, '
                 'role VARCHAR(20), is_active BOOLEAN, created_at DATETIME, last_login_at DATETIME, '
                 'login_failed_attempts INTEGER DEFAULT 0, login_failure_window_started_at DATETIME, '
@@ -182,7 +183,15 @@ class FindCenterRouteTests(unittest.TestCase):
             'Authorization': 'Bearer ' + create_access_token(identity='1')
         }
         self.admin_headers = {
-            'Authorization': 'Bearer ' + create_access_token(identity='2')
+            'Authorization': 'Bearer ' + create_access_token(
+                identity='2',
+                additional_claims={
+                    'role': 'admin',
+                    'account_type': 'user',
+                    'mfa_verified': True,
+                    'mfa_version': 0,
+                },
+            )
         }
 
     def _verify_center(self, full_name='Juan Reyes', barangay_id=1, birthdate='1980-02-03', headers=None):

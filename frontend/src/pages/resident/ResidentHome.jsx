@@ -2525,7 +2525,9 @@ const ResidentHome = () => {
         })
         .catch((err) => {
           console.warn("Auto check-in check:", err);
-          autoCheckInAttemptedRef.current = false;
+          if (err?.status !== 401 && err?.status !== 403) {
+            autoCheckInAttemptedRef.current = false;
+          }
         });
     }
   }, [myLocation, myCenter, evacCenters, isLoggedInResident]);

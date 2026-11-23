@@ -1,7 +1,24 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import { useNavigate } from "react-router-dom";
+
+function isJwtExpired(token) {
+  if (!token || typeof token !== "string") return true;
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const payload = JSON.parse(window.atob(padded));
+    if (typeof payload.exp === "number" && Date.now() >= payload.exp * 1000) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 const DEFAULT_AUTH_CONTEXT = {
   user: null,
@@ -26,8 +43,15 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try {
       const saved = localStorage.getItem("evacway_user");
-      return saved ? JSON.parse(saved) : null;
+      const token = localStorage.getItem("evacway_token");
+      if (!saved || !token || isJwtExpired(token)) {
+        localStorage.removeItem("evacway_token");
+        localStorage.removeItem("evacway_user");
+        return null;
+      }
+      return JSON.parse(saved);
     } catch {
+      localStorage.removeItem("evacway_token");
       localStorage.removeItem("evacway_user");
       return null;
     }
@@ -35,6 +59,19 @@ export function AuthProvider({ children }) {
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    function handleAuthExpired() {
+      const wasStaff = user?.role === "admin" || user?.role === "lgu_personnel";
+      queryClient.clear();
+      localStorage.removeItem("evacway_token");
+      localStorage.removeItem("evacway_user");
+      setUser(null);
+      navigate(wasStaff ? "/login" : "/", { replace: true });
+    }
+    window.addEventListener("evacway:auth-expired", handleAuthExpired);
+    return () => window.removeEventListener("evacway:auth-expired", handleAuthExpired);
+  }, [navigate, queryClient, user?.role]);
 
   function saveLoginSession(data) {
     const sameAccount = Boolean(

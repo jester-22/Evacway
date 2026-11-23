@@ -9,10 +9,12 @@ from models import (
     EvacuationCenter,
     EvacuationCenterBuilding,
     EvacuationCenterRoom,
+    EvacuationOperation,
     CenterBarangay,
     Barangay,
     EvacuationAssignment,
     Family,
+    NonRegisteredEvacuee,
     Resident,
     SystemLog,
     to_utc_iso,
@@ -637,15 +639,38 @@ def update_room_location(room_id):
 def toggle_room_active(room_id):
     room = EvacuationCenterRoom.query.get_or_404(room_id)
 
-    # Check for assigned families before deactivating
+    # Check for assigned families or present walk-ins before deactivating
     if room.is_active:
         active_assignments = EvacuationAssignment.query.filter_by(room_id=room.id).count()
         if active_assignments > 0:
             return jsonify({
                 "error": f"Cannot deactivate room with {active_assignments} assigned resident(s). Please move or unassign families first."
             }), 400
+        active_walkins = (
+            db.session.query(func.count(NonRegisteredEvacuee.id))
+            .join(EvacuationOperation, NonRegisteredEvacuee.operation_id == EvacuationOperation.id)
+            .filter(
+                NonRegisteredEvacuee.room_id == room.id,
+                NonRegisteredEvacuee.departed_at.is_(None),
+                EvacuationOperation.status == 'active',
+            )
+            .scalar() or 0
+        )
+        if active_walkins > 0:
+            return jsonify({
+                "error": f"Cannot deactivate room with {active_walkins} active non-registered evacuee(s). Please mark them departed first."
+            }), 400
 
     room.is_active = not room.is_active
+    db.session.flush()
+
+    center = room.evacuation_center
+    if center:
+        active_rooms = EvacuationCenterRoom.query.filter_by(
+            evacuation_center_id=room.evacuation_center_id, is_active=True
+        ).all()
+        center.capacity = sum(r.people_spaces or 0 for r in active_rooms)
+
     db.session.commit()
 
     user_id = get_jwt_identity()
@@ -689,6 +714,20 @@ def delete_room(room_id):
     if active_assignments > 0:
         return jsonify({
             "error": f"Cannot delete room with {active_assignments} assigned resident(s). Please move or unassign families first."
+        }), 400
+    active_walkins = (
+        db.session.query(func.count(NonRegisteredEvacuee.id))
+        .join(EvacuationOperation, NonRegisteredEvacuee.operation_id == EvacuationOperation.id)
+        .filter(
+            NonRegisteredEvacuee.room_id == room.id,
+            NonRegisteredEvacuee.departed_at.is_(None),
+            EvacuationOperation.status == 'active',
+        )
+        .scalar() or 0
+    )
+    if active_walkins > 0:
+        return jsonify({
+            "error": f"Cannot delete room with {active_walkins} active non-registered evacuee(s). Please mark them departed first."
         }), 400
 
     center = room.evacuation_center
@@ -1119,9 +1158,8 @@ def assign_families(room_id):
                 family_id=fam.id,
                 first_name=name_parts[0],
                 last_name=' '.join(name_parts[1:]),
-                household_head_name=fam.head_name,
-                barangay=fam.barangay.name if fam.barangay else '',
-                contact_number=fam.contact_number,
+                is_head_of_family=True,
+                relationship_to_head='Household Head',
             )
             db.session.add(resident)
             db.session.flush()
@@ -1129,13 +1167,20 @@ def assign_families(room_id):
         for resident in residents:
             assignment = EvacuationAssignment(
                 resident_id=resident.id,
-                room_id=room.id
+                evacuation_center_id=room.evacuation_center_id,
+                room_id=room.id,
             )
             db.session.add(assignment)
         fam.evacuation_status = "Assigned"
 
     for resident in standalone_residents:
-        db.session.add(EvacuationAssignment(resident_id=resident.id, room_id=room.id))
+        db.session.add(
+            EvacuationAssignment(
+                resident_id=resident.id,
+                evacuation_center_id=room.evacuation_center_id,
+                room_id=room.id,
+            )
+        )
 
     user_id = get_jwt_identity()
     db.session.add(
@@ -1185,22 +1230,20 @@ def remove_family_from_room(room_id, resident_or_family_id):
     if not room:
         return jsonify({"error": "Room not found"}), 404
 
-    # Check if id refers to a Family
+    # Check if id refers to a Family assigned to this room first; otherwise fall back to Resident
     family = Family.query.get(resident_or_family_id)
-    if family:
-        assignments = (
-            db.session.query(EvacuationAssignment)
-            .join(Resident, EvacuationAssignment.resident_id == Resident.id)
-            .filter(
-                Resident.family_id == family.id,
-                EvacuationAssignment.room_id == room_id
-            )
-            .all()
+    family_assignments = (
+        db.session.query(EvacuationAssignment)
+        .join(Resident, EvacuationAssignment.resident_id == Resident.id)
+        .filter(
+            Resident.family_id == family.id,
+            EvacuationAssignment.room_id == room_id
         )
-        if not assignments:
-            return jsonify({"error": "Family is not assigned to this room"}), 404
-
-        for a in assignments:
+        .all()
+        if family else []
+    )
+    if family and family_assignments:
+        for a in family_assignments:
             db.session.delete(a)
 
         family.evacuation_status = "Unassigned"
@@ -1213,7 +1256,8 @@ def remove_family_from_room(room_id, resident_or_family_id):
         ).first()
 
         if not assignment:
-            return jsonify({"error": "Assignment not found in this room"}), 404
+            error_msg = "Family is not assigned to this room" if family else "Assignment not found in this room"
+            return jsonify({"error": error_msg}), 404
 
         resident = Resident.query.get(resident_or_family_id)
         if resident and resident.family_id:

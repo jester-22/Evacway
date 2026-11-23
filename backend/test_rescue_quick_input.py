@@ -113,11 +113,12 @@ class RescueFormContextRouteTests(unittest.TestCase):
                 'resident_id': 9,
             },
         )
+        account = SimpleNamespace(id=4, resident_id=9, is_active=True)
         resident = SimpleNamespace(
             family=SimpleNamespace(member_count=5),
             contact_number='09123456893',
         )
-        with patch('routes.rescue_requests.db.session.get', return_value=resident) as get_resident:
+        with patch('routes.rescue_requests.db.session.get', side_effect=[account, resident]) as get_record:
             response = self.client.get(
                 '/api/rescue-requests/form-context',
                 headers={'Authorization': f'Bearer {token}'},
@@ -127,7 +128,7 @@ class RescueFormContextRouteTests(unittest.TestCase):
             'family_member_count': 5,
             'contact_number': '09123456893',
         })
-        get_resident.assert_called_once()
+        self.assertEqual(get_record.call_count, 2)
 
     def test_staff_cannot_read_resident_form_prefill_values(self):
         token = create_access_token(

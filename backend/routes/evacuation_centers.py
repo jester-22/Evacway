@@ -25,6 +25,7 @@ from models import (
     SystemLog,
     EvacuationOperation,
     EvacuationCheckInRecord,
+    NonRegisteredEvacuee,
     ResidentAccount,
     philippines_now,
     utc_now,
@@ -2108,17 +2109,36 @@ def get_allowed_center_types_endpoint(center_id):
 def toggle_center_active(center_id):
     center = EvacuationCenter.query.get_or_404(center_id)
 
-    # Check for active assignments before deactivating
+    # Check for active assignments or present walk-ins before deactivating
     if center.is_active:
         active_assignments = (
             db.session.query(func.count(EvacuationAssignment.id))
-            .join(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
-            .filter(EvacuationCenterRoom.evacuation_center_id == center.id)
+            .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+            .filter(
+                or_(
+                    EvacuationAssignment.evacuation_center_id == center.id,
+                    EvacuationCenterRoom.evacuation_center_id == center.id,
+                )
+            )
             .scalar() or 0
         )
         if active_assignments > 0:
             return jsonify({
                 "error": f"Cannot deactivate evacuation center with {active_assignments} assigned resident(s). Please move or unassign families first."
+            }), 400
+        active_walkins = (
+            db.session.query(func.count(NonRegisteredEvacuee.id))
+            .join(EvacuationOperation, NonRegisteredEvacuee.operation_id == EvacuationOperation.id)
+            .filter(
+                NonRegisteredEvacuee.center_id == center.id,
+                NonRegisteredEvacuee.departed_at.is_(None),
+                EvacuationOperation.status == 'active',
+            )
+            .scalar() or 0
+        )
+        if active_walkins > 0:
+            return jsonify({
+                "error": f"Cannot deactivate evacuation center with {active_walkins} active non-registered evacuee(s). Please mark them departed first."
             }), 400
 
     center.is_active = not center.is_active
@@ -2386,6 +2406,20 @@ def update_evacuee_check_in(center_id):
         target_resident_ids = [res.id]
         if res.family_id:
             family = Family.query.get(res.family_id)
+    elif resident_ids:
+        if not isinstance(resident_ids, list):
+            return jsonify({"error": "resident_ids must be a list"}), 400
+        try:
+            parsed_ids = [int(rid) for rid in resident_ids]
+        except (TypeError, ValueError):
+            return jsonify({"error": "resident_ids must contain valid integer IDs"}), 400
+        matched_residents = Resident.query.filter(Resident.id.in_(parsed_ids)).all()
+        if not matched_residents:
+            return jsonify({"error": "No matching residents found"}), 404
+        target_resident_ids = [r.id for r in matched_residents]
+        first_fam_id = next((r.family_id for r in matched_residents if r.family_id), None)
+        if first_fam_id:
+            family = Family.query.get(first_fam_id)
 
     # Find assignments in this center (direct or via room)
     assignments = (
@@ -2558,17 +2592,26 @@ def auto_geofence_check_in():
             except Exception:
                 pass
 
-        if not is_inside and center.latitude and center.longitude:
-            import math
-            R = 6371000
-            dlat = math.radians(float(center.latitude) - float(lat))
-            dlng = math.radians(float(center.longitude) - float(lng))
-            a = (math.sin(dlat/2)**2 +
-                 math.cos(math.radians(float(lat))) * math.cos(math.radians(float(center.latitude))) *
-                 math.sin(dlng/2)**2)
-            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-            if R * c <= 75:  # within 75 meters
-                is_inside = True
+        if not is_inside:
+            ref_lat, ref_lng = None, None
+            ref_geom = center.entrance_geom if center.entrance_geom is not None else center.geom
+            if ref_geom is not None:
+                try:
+                    ref_pt = to_shape(ref_geom).centroid
+                    ref_lat, ref_lng = float(ref_pt.y), float(ref_pt.x)
+                except Exception:
+                    pass
+            if ref_lat is not None and ref_lng is not None:
+                import math
+                R = 6371000
+                dlat = math.radians(ref_lat - float(lat))
+                dlng = math.radians(ref_lng - float(lng))
+                a = (math.sin(dlat/2)**2 +
+                     math.cos(math.radians(float(lat))) * math.cos(math.radians(ref_lat)) *
+                     math.sin(dlng/2)**2)
+                c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+                if R * c <= 75:  # within 75 meters
+                    is_inside = True
 
     if lat is not None and lng is not None and not is_inside:
         return jsonify({
@@ -2668,11 +2711,17 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
     if target_op and target_op.status == 'concluded':
         is_historical = True
 
+    resolved_center_id = func.coalesce(
+        EvacuationAssignment.evacuation_center_id,
+        EvacuationCenterRoom.evacuation_center_id,
+    )
     center_assigned_totals = dict(
         db.session.query(
-            EvacuationAssignment.evacuation_center_id,
+            resolved_center_id,
             func.count(EvacuationAssignment.id)
-        ).group_by(EvacuationAssignment.evacuation_center_id).all()
+        )
+        .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+        .group_by(resolved_center_id).all()
     )
 
     if is_historical and target_op:
@@ -2689,10 +2738,12 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
     else:
         center_checked_totals = dict(
             db.session.query(
-                EvacuationAssignment.evacuation_center_id,
+                resolved_center_id,
                 func.count(EvacuationAssignment.id)
-            ).filter(EvacuationAssignment.checked_in_at.isnot(None))
-            .group_by(EvacuationAssignment.evacuation_center_id).all()
+            )
+            .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
+            .filter(EvacuationAssignment.checked_in_at.isnot(None))
+            .group_by(resolved_center_id).all()
         )
 
     now = philippines_now()
@@ -3540,7 +3591,7 @@ def extend_evacuation_schedule():
         db.session.add(SystemLog(
             user_id=current_uid,
             action=f"Extended arrival deadline for {log_label} {hrs_label} (New deadline: {new_deadline_formatted})",
-            timestamp=now
+            timestamp=utc_now()
         ))
 
     # Synchronize extension on active operations

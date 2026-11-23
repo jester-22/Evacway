@@ -905,6 +905,7 @@ def complete_password_setup():
         account.password_hash = generate_password_hash(password)
         db.session.add(SystemLog(user_id=None, action=f"Resident account ({account.email}) set or reset password using email link"))
         db.session.commit()
+        resolved_role = "resident"
     else:
         user = User.query.get(user_id)
         if not user or user.email.strip().lower() != token_email:
@@ -915,5 +916,10 @@ def complete_password_setup():
         user.password_hash = generate_password_hash(password)
         db.session.add(SystemLog(user_id=user.id, action="Password set or reset using email link"))
         db.session.commit()
+        resolved_role = user.role
 
-    return jsonify({"message": "Password updated. You can now sign in."})
+    return jsonify({
+        "message": "Password updated. You can now sign in.",
+        "account_type": account_type,
+        "role": resolved_role,
+    })

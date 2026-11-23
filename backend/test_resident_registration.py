@@ -1063,8 +1063,17 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         db.session.add_all([brgy, ry])
         db.session.flush()
 
+        from shapely.geometry import Polygon
+        from models import CenterType
+        if not db.session.get(CenterType, 1):
+            db.session.add(CenterType(id=1, code='private_property', name='Private Property', structure_mode='rooms_only', is_active=True))
+            db.session.flush()
+        wkb_hex = Polygon([(124.98, 10.39), (124.99, 10.39), (124.99, 10.40), (124.98, 10.39)]).wkb_hex
         with db.engine.begin() as conn:
-            conn.execute(text("INSERT INTO evacuation_centers (id, name, capacity, is_active) VALUES (1, 'Test Center', 100, 1)"))
+            conn.execute(
+                text("INSERT INTO evacuation_centers (id, name, capacity, center_type_id, is_active, geom) VALUES (1, 'Test Center', 100, 1, 1, :geom)"),
+                {'geom': wkb_hex},
+            )
 
         room1 = EvacuationCenterRoom(id=1, evacuation_center_id=1, room_number='101', capacity=10, is_active=True)
         room2 = EvacuationCenterRoom(id=2, evacuation_center_id=1, room_number='102', capacity=10, is_active=True)

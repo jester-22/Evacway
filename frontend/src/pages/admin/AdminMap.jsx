@@ -302,7 +302,7 @@ export default function AdminMap() {
     return counts;
   }, [allLoadedRooms]);
 
-  // Map of center ID -> active building count for list rows
+  // Map of center ID -> active building count & mapped/unmapped breakdown for list rows
   const buildingsCountByCenterId = useMemo(() => {
     const counts = {};
     if (buildingsGeoJSON?.features) {
@@ -315,6 +315,64 @@ export default function AdminMap() {
     }
     return counts;
   }, [buildingsGeoJSON]);
+
+  const buildingStatsByCenterId = useMemo(() => {
+    const stats = {};
+    if (buildingsGeoJSON?.features) {
+      buildingsGeoJSON.features.forEach((b) => {
+        const cId = b.properties?.evacuation_center_id;
+        if (cId == null) return;
+        if (!stats[cId]) stats[cId] = { total: 0, mapped: 0, unmapped: 0 };
+        stats[cId].total += 1;
+        const isMapped = Boolean(
+          (b.geometry &&
+            Array.isArray(b.geometry.coordinates) &&
+            b.geometry.coordinates.length > 0) ||
+            b.properties?.is_mapped
+        );
+        if (isMapped) stats[cId].mapped += 1;
+        else stats[cId].unmapped += 1;
+      });
+    }
+    if (centers?.features) {
+      centers.features.forEach((c) => {
+        const props = c.properties || c;
+        const cId = props.id ?? c.id;
+        if (cId == null || stats[cId]) return;
+        if (Array.isArray(props.buildings)) {
+          const total = props.buildings.length;
+          const mapped = props.buildings.filter((b) => Boolean(b?.is_mapped)).length;
+          stats[cId] = { total, mapped, unmapped: Math.max(0, total - mapped) };
+        } else if (props.building_count != null) {
+          const total = Number(props.building_count || 0);
+          const unmapped = Number(props.unmapped_building_count || 0);
+          const mapped = Number(props.mapped_building_count ?? Math.max(0, total - unmapped));
+          stats[cId] = { total, mapped, unmapped };
+        }
+      });
+    }
+    return stats;
+  }, [buildingsGeoJSON, centers]);
+
+  const unmappedBuildingsSummary = useMemo(() => {
+    let totalUnmappedBuildings = 0;
+    let centersWithUnmappedBuildings = 0;
+    if (centers?.features) {
+      centers.features.forEach((c) => {
+        const props = c.properties || c;
+        const cId = props.id ?? c.id;
+        const cType = props.center_type || "campus";
+        if (cType !== "campus") return;
+        const st = buildingStatsByCenterId[cId];
+        const unmapped = st ? st.unmapped : Number(props.unmapped_building_count || 0);
+        if (unmapped > 0) {
+          totalUnmappedBuildings += unmapped;
+          centersWithUnmappedBuildings += 1;
+        }
+      });
+    }
+    return { totalUnmappedBuildings, centersWithUnmappedBuildings };
+  }, [centers, buildingStatsByCenterId]);
 
   // Unmapped centers count for sidebar badge
   const unmappedCentersCount = useMemo(() => {
@@ -1731,27 +1789,33 @@ export default function AdminMap() {
     const centroid = getPolygonCentroid(matchedBuilding.geometry);
     if (centroid) {
       setMapFocusLocation(centroid);
+    } else if (selectedCenter) {
+      const centerCoords = getCenterCoordinates(selectedCenter);
+      if (centerCoords) {
+        setMapFocusLocation({
+          ...centerCoords,
+          zoom: 18,
+          noPin: true,
+          requestedAt: Date.now(),
+        });
+      }
     }
 
-    if (initialMode === "redraw") {
+    if (["redraw", "remap", "place_building", "place"].includes(initialMode)) {
       const bOrigPoints = polygonToPoints(matchedBuilding.geometry);
       setBuildingEditOriginalPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
       setBuildingEditUndoStack([]);
+      setIsRedrawingBuildingFromScratch(bOrigPoints.length < 3);
       setPanelSubView("map_rooms");
       setMapRoomsTab("buildings");
       setRedrawingBuildingId(bId);
       setIsDrawingBuilding(true);
       // Initialize with existing polygon points so vertex handles appear for editing
       setNewBuildingPoints(bOrigPoints.length >= 3 ? bOrigPoints : []);
-      // Hide the saved building outline during redraw
-
-
-
-
     } else {
       setBuildingModalOpen(true);
     }
-  }, [deepLinkedBuildingId, buildingsGeoJSON, initialMode, isMobile]);
+  }, [deepLinkedBuildingId, buildingsGeoJSON, initialMode, isMobile, selectedCenter]);
 
   function formatHazardType(rawType) {
     if (!rawType) return "Hazard";
@@ -2390,7 +2454,22 @@ export default function AdminMap() {
       typeNames[centerType] ||
       centerType.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-    const row2Text = `${barangayText} · ${typeText} · ${roomCount} ${roomCount === 1 ? "room" : "rooms"}`;
+    const bldStats = buildingStatsByCenterId[centerId] || {
+      total: Number(props.building_count || 0),
+      mapped: Number(props.mapped_building_count || 0),
+      unmapped: Number(props.unmapped_building_count || 0),
+    };
+    const unmappedBldgCount = !isVenueOrHouse ? bldStats.unmapped : 0;
+    const totalBldgCount = !isVenueOrHouse ? bldStats.total : 0;
+
+    const row2Parts = [barangayText, typeText];
+    if (!isVenueOrHouse && totalBldgCount > 0) {
+      row2Parts.push(
+        `${bldStats.mapped}/${totalBldgCount} ${totalBldgCount === 1 ? "bldg" : "bldgs"} mapped`
+      );
+    }
+    row2Parts.push(`${roomCount} ${roomCount === 1 ? "room" : "rooms"}`);
+    const row2Text = row2Parts.join(" · ");
 
     const statusVariant = !mapped
       ? "not-mapped"
@@ -2404,7 +2483,7 @@ export default function AdminMap() {
       <article
         key={centerId}
         data-center-id={String(centerId)}
-        className={`admin-map-center-card ${isSelected ? "is-selected" : ""}`}
+        className={`admin-map-center-card ${isSelected ? "is-selected" : ""} ${unmappedBldgCount > 0 ? "has-unmapped-buildings" : ""}`}
       >
         <button
           type="button"
@@ -2414,7 +2493,15 @@ export default function AdminMap() {
         >
           <div className="admin-map-center-card__header">
             <span className="admin-map-center-card__name">{centerName}</span>
-            <StatusPill variant={statusVariant} />
+            <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+              {mapped && unmappedBldgCount > 0 && (
+                <StatusPill
+                  variant="unmapped"
+                  label={`${unmappedBldgCount} ${unmappedBldgCount === 1 ? "bldg unmapped" : "bldgs unmapped"}`}
+                />
+              )}
+              <StatusPill variant={statusVariant} />
+            </div>
           </div>
 
           <div className="admin-map-center-card__meta">{row2Text}</div>
@@ -3921,6 +4008,36 @@ export default function AdminMap() {
             { value: "not-mapped", label: "Not mapped", count: unmappedCount },
           ]}
         />
+
+        {unmappedBuildingsSummary.totalUnmappedBuildings > 0 && (
+          <div
+            role="status"
+            style={{
+              marginTop: "8px",
+              padding: "7px 10px",
+              borderRadius: "8px",
+              backgroundColor: "#fffbeb",
+              border: "1px solid #fde68a",
+              color: "#b45309",
+              fontSize: "12px",
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: "7px",
+              lineHeight: 1.35,
+            }}
+          >
+            <AlertTriangle size={14} strokeWidth={2.2} style={{ flexShrink: 0 }} aria-hidden="true" />
+            <span>
+              {unmappedBuildingsSummary.totalUnmappedBuildings}{" "}
+              {unmappedBuildingsSummary.totalUnmappedBuildings === 1
+                ? "building is"
+                : "buildings are"}{" "}
+              not mapped yet across {unmappedBuildingsSummary.centersWithUnmappedBuildings}{" "}
+              {unmappedBuildingsSummary.centersWithUnmappedBuildings === 1 ? "center" : "centers"}
+            </span>
+          </div>
+        )}
       </>
     );
   }
@@ -4033,6 +4150,18 @@ export default function AdminMap() {
     const occupied = Number(props.occupied || 0);
     const assigned = Number(props.assigned ?? props.total_assigned ?? 0);
     const buildingCount = centerBuildings.length;
+    const mappedBuildingsInCenter = centerBuildings.filter((b) =>
+      Boolean(
+        (b.geometry &&
+          Array.isArray(b.geometry.coordinates) &&
+          b.geometry.coordinates.length > 0) ||
+          b.properties?.is_mapped
+      )
+    ).length;
+    const unmappedBuildingsInCenter = Math.max(
+      0,
+      buildingCount - mappedBuildingsInCenter
+    );
     const barangays = props.barangays || props.barangay_breakdown || [];
     const barangayText =
       barangays.length > 0
@@ -4190,13 +4319,58 @@ export default function AdminMap() {
               aria-label="Center buildings"
             >
               <div className="admin-map-detail-section-header">
-                <h4 className="admin-map-detail-section-title">
-                  Buildings ({buildingCount})
-                </h4>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                  <h4 className="admin-map-detail-section-title">
+                    Buildings ({buildingCount})
+                  </h4>
+                  {buildingCount > 0 && unmappedBuildingsInCenter > 0 && (
+                    <StatusPill
+                      variant="unmapped"
+                      label={`${unmappedBuildingsInCenter} not mapped`}
+                    />
+                  )}
+                  {buildingCount > 0 && unmappedBuildingsInCenter === 0 && (
+                    <StatusPill variant="available" label="All mapped" />
+                  )}
+                </div>
                 <span className="admin-map-detail-section-hint">
                   Tap a building to view rooms
                 </span>
               </div>
+
+              {buildingCount > 0 && unmappedBuildingsInCenter > 0 && (
+                <div
+                  role="status"
+                  style={{
+                    marginBottom: "10px",
+                    padding: "8px 10px",
+                    borderRadius: "8px",
+                    backgroundColor: "#fffbeb",
+                    border: "1px solid #fde68a",
+                    color: "#b45309",
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "7px",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  <AlertTriangle
+                    size={14}
+                    strokeWidth={2.2}
+                    style={{ flexShrink: 0, marginTop: "2px" }}
+                    aria-hidden="true"
+                  />
+                  <span>
+                    <strong>
+                      {unmappedBuildingsInCenter} of {buildingCount}{" "}
+                      {buildingCount === 1 ? "building is" : "buildings are"} not mapped yet.
+                    </strong>{" "}
+                    Click <strong>Map building</strong> on an unmapped building below to draw its footprint on the map.
+                  </span>
+                </div>
+              )}
 
               {buildingsLoading && buildingCount === 0 ? (
                 <div
@@ -4278,10 +4452,17 @@ export default function AdminMap() {
                     }
 
                     const bMapped = Boolean(
-                      b.geometry &&
+                      (b.geometry &&
                         b.geometry.coordinates &&
-                        b.geometry.coordinates.length > 0
+                        b.geometry.coordinates.length > 0) ||
+                        bProps.is_mapped
                     );
+
+                    if (!bMapped) {
+                      statusVariant = "unmapped";
+                      statusLabel = "Not mapped";
+                    }
+
                     const isSelectedBuilding =
                       selectedBuildingId != null &&
                       String(selectedBuildingId) === String(bId);
@@ -5116,19 +5297,35 @@ export default function AdminMap() {
                   }}
                   aria-expanded="false"
                   aria-label={`Open centers panel, ${allCentersList.length} center${allCentersList.length === 1 ? "" : "s"}${
-                    unmappedCentersCount > 0 ? `, ${unmappedCentersCount} not mapped` : ""
+                    unmappedCentersCount > 0 ? `, ${unmappedCentersCount} center(s) not mapped` : ""
+                  }${
+                    unmappedBuildingsSummary.totalUnmappedBuildings > 0
+                      ? `, ${unmappedBuildingsSummary.totalUnmappedBuildings} building(s) not mapped`
+                      : ""
                   }`}
                 >
                   <Building2 size={16} strokeWidth={2} className="admin-map-centers-pill-icon" aria-hidden="true" />
                   <span className="admin-map-centers-pill-label">
                     Centers ({allCentersList.length})
                   </span>
-                  {unmappedCentersCount > 0 && (
+                  {(unmappedCentersCount > 0 || unmappedBuildingsSummary.totalUnmappedBuildings > 0) && (
                     <span
                       className="admin-map-sheet-badge"
+                      title={
+                        [
+                          unmappedCentersCount > 0
+                            ? `${unmappedCentersCount} unmapped center${unmappedCentersCount === 1 ? "" : "s"}`
+                            : null,
+                          unmappedBuildingsSummary.totalUnmappedBuildings > 0
+                            ? `${unmappedBuildingsSummary.totalUnmappedBuildings} unmapped building${unmappedBuildingsSummary.totalUnmappedBuildings === 1 ? "" : "s"}`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      }
                       aria-hidden="true"
                     >
-                      {unmappedCentersCount}
+                      {unmappedCentersCount + unmappedBuildingsSummary.totalUnmappedBuildings}
                     </span>
                   )}
                 </button>

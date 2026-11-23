@@ -1181,7 +1181,8 @@ body:has(.ew) {
   height: fit-content;
   max-height: calc(100vh - 2rem);
   overflow: auto;
-  width: min(420px, calc(100vw - 2rem));
+  width: min(440px, calc(100vw - 2rem));
+  max-width: 440px;
   padding: 0;
   border: 1px solid var(--ew-rule);
   border-radius: 22px;
@@ -1191,7 +1192,8 @@ body:has(.ew) {
 }
 
 .ew-signup-dialog {
-  width: min(620px, calc(100vw - 1.5rem));
+  width: min(640px, calc(100vw - 1.5rem));
+  max-width: 640px;
   max-height: calc(100dvh - 1.5rem);
   overflow: auto;
 }

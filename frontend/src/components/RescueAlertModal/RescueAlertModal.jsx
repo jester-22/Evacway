@@ -18,6 +18,7 @@ import { queryKeys } from "../../hooks/useEvacuationQueries";
 import { createSelectedLocationElement, refineGeolocation } from "../../utils/mapLocationIndicators";
 import { useAuth } from "../../context/AuthContext";
 import { needsLocationConfirmation } from "../../utils/locationConfirmation";
+import { sanitizePhoneInput, validateContactNumber } from "../../utils/formValidation";
 import { maskContactNumber, RESCUE_NEEDS, RESCUE_VULNERABILITY_FLAGS } from "../../utils/rescueRequest.js";
 import PublicMapDialogShell from "../PublicMapDialogShell/PublicMapDialogShell";
 import "./RescueAlertModal.css";
@@ -336,7 +337,15 @@ export default function RescueAlertModal({
 
     // Optional contact number: fallback to saved number if left empty, or empty string
     const savedContact = (user?.contact_number || user?.phone || "").trim();
-    const finalContact = requesterContact.trim() || savedContact || "";
+    const typedContact = requesterContact.trim();
+    if (typedContact) {
+      const contactErr = validateContactNumber(typedContact, { required: false, label: "Contact number" });
+      if (contactErr) {
+        setError(contactErr);
+        return;
+      }
+    }
+    const finalContact = typedContact || savedContact || "";
 
     if (!coordinates && !locationDescription.trim()) {
       setError("Share your GPS location or describe where help is needed.");
@@ -558,7 +567,7 @@ export default function RescueAlertModal({
                       value={requesterContact}
                       onChange={(event) => {
                         contactTouchedRef.current = true;
-                        setRequesterContact(event.target.value);
+                        setRequesterContact(sanitizePhoneInput(event.target.value));
                       }}
                       maxLength={20}
                       placeholder="Enter your contact number"

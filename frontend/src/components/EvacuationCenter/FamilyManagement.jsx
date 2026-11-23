@@ -457,6 +457,18 @@ function isDirectVenueCenter(center) {
   return resolveCenterStructureMode(center) === "open_area";
 }
 
+function isCenterMappedForAssignment(center) {
+  if (!center || center.is_active === false) return false;
+  if (center.has_map === false || center.is_mapped === false) return false;
+  const mode = resolveCenterStructureMode(center);
+  if (mode === "buildings_and_rooms" && Array.isArray(center.buildings)) {
+    return center.buildings.some(
+      (b) => b?.is_mapped !== false && (b?.status || "open") === "open"
+    );
+  }
+  return true;
+}
+
 function centerHasBuildings(center, rooms = []) {
   if (!center) return false;
   if (resolveCenterStructureMode(center) !== "buildings_and_rooms") return false;
@@ -467,9 +479,16 @@ function centerHasBuildings(center, rooms = []) {
 
 function getAvailableBuildingsForCenter(center, rooms = [], needed = 1) {
   if (!center) return [];
+  const isCampus = resolveCenterStructureMode(center) === "buildings_and_rooms";
   const bldgMap = new Map();
+  const hasCenterBuildingsList = Array.isArray(center.buildings) && center.buildings.length > 0;
   for (const b of center.buildings || []) {
-    if (b?.id != null && b.status !== "closed" && b.status !== "under_repair") {
+    if (
+      b?.id != null &&
+      b.status !== "closed" &&
+      b.status !== "under_repair" &&
+      b.is_mapped !== false
+    ) {
       bldgMap.set(String(b.id), {
         id: String(b.id),
         name: b.name || `Building #${b.id}`,
@@ -480,8 +499,11 @@ function getAvailableBuildingsForCenter(center, rooms = [], needed = 1) {
   }
   for (const r of rooms) {
     if (r.building_id != null) {
+      if (r.building_is_mapped === false) continue;
+      if (r.building_status && r.building_status !== "open") continue;
       const key = String(r.building_id);
       if (!bldgMap.has(key)) {
+        if (hasCenterBuildingsList) continue;
         bldgMap.set(key, {
           id: key,
           name: r.building_name || `Building #${r.building_id}`,
@@ -498,20 +520,22 @@ function getAvailableBuildingsForCenter(center, rooms = [], needed = 1) {
     }
   }
   const list = Array.from(bldgMap.values()).filter((b) => b.rooms.length > 0);
-  const unmappedRooms = rooms.filter(
-    (r) => r.building_id == null && (Number(needed) <= 0 || roomCanFitHousehold(r, needed))
-  );
-  if (unmappedRooms.length > 0) {
-    const unmappedSpaces = unmappedRooms.reduce(
-      (sum, r) => sum + getRoomRemainingCapacity(r),
-      0
+  if (!isCampus) {
+    const unmappedRooms = rooms.filter(
+      (r) => r.building_id == null && (Number(needed) <= 0 || roomCanFitHousehold(r, needed))
     );
-    list.push({
-      id: "unmapped",
-      name: "Other / Unassigned Building Rooms",
-      rooms: unmappedRooms,
-      availableSpaces: unmappedSpaces,
-    });
+    if (unmappedRooms.length > 0) {
+      const unmappedSpaces = unmappedRooms.reduce(
+        (sum, r) => sum + getRoomRemainingCapacity(r),
+        0
+      );
+      list.push({
+        id: "unmapped",
+        name: "Other / Unassigned Building Rooms",
+        rooms: unmappedRooms,
+        availableSpaces: unmappedSpaces,
+      });
+    }
   }
   return list;
 }
@@ -523,12 +547,18 @@ function getFilteredRoomsForSelection(
   needed = 1
 ) {
   if (!center) return [];
+  const isCampus = resolveCenterStructureMode(center) === "buildings_and_rooms";
   const hasBldgs = centerHasBuildings(center, rooms);
   return rooms.filter((r) => {
+    if (r.center_is_mapped === false) return false;
+    if (isCampus) {
+      if (r.building_id == null || r.building_is_mapped === false) return false;
+      if (r.building_status && r.building_status !== "open") return false;
+    }
     if (Number(needed) > 0 && !roomCanFitHousehold(r, needed)) return false;
     if (!hasBldgs) return true;
     if (!selectedBuildingId) return false;
-    if (selectedBuildingId === "unmapped") return r.building_id == null;
+    if (selectedBuildingId === "unmapped") return !isCampus && r.building_id == null;
     return String(r.building_id) === String(selectedBuildingId);
   });
 }
@@ -1015,9 +1045,13 @@ export default function FamilyManagement({
       modal === "move",
   });
   const centersList = useMemo(() => {
-    const raw = (centersQuery.data?.features || []).map(
-      (feature) => feature.properties || feature
-    );
+    const raw = (centersQuery.data?.features || [])
+      .filter((feature) => {
+        const props = feature.properties || feature;
+        if (feature.geometry === null && !props.has_map && !props.is_mapped) return false;
+        return isCenterMappedForAssignment(props);
+      })
+      .map((feature) => feature.properties || feature);
     const preferredBarangayId =
       isAddWizardOpen
         ? wizardForm.barangay_id

@@ -4,7 +4,16 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus, faXmark, faSpinner } from '@fortawesome/free-solid-svg-icons';
 import { api } from '../../services/api';
 import { formatFloorLabel, formatRoomLabel } from '../../utils/formatRoomLabel';
-import { formatManilaDateTime, getManilaDateKey } from '../../utils/dateTime';
+import { formatManilaDateTime } from '../../utils/dateTime';
+import {
+  getLocalMinDobIso,
+  getLocalYesterdayIso,
+  sanitizeNameInput,
+  sanitizePhoneInput,
+  validateContactNumber,
+  validatePastBirthdate,
+  validatePersonName,
+} from '../../utils/formValidation';
 import './NonRegisteredEvacuees.css';
 
 const emptyPerson = () => ({ first_name: '', middle_name: '', last_name: '', sex: '', age_years: '',
@@ -52,13 +61,23 @@ function PersonFields({ person, index, update, remove, operationId, fields, pref
   const field = (name, label, type = 'text', required = false) => {
     const error = fields[`${prefix}${name}`];
     const id = `nre-person-${index}-${name}`;
+    const isNameField = name === 'first_name' || name === 'middle_name' || name === 'last_name';
+    const isPhoneField = name === 'contact_number';
     return <label className="nre-field" htmlFor={id} key={name}>
       <span>{label}{required ? ' *' : ''}</span>
       <input id={id} type={type} value={person[name] ?? ''} required={required}
-        min={type === 'number' ? 0 : undefined} max={type === 'number' ? 120 : type === 'date' ? getManilaDateKey(new Date()) : undefined}
-        step={type === 'number' ? 1 : undefined} maxLength={name.includes('name') ? 60 : type === 'text' ? 200 : undefined}
+        min={type === 'number' ? 0 : type === 'date' ? getLocalMinDobIso() : undefined}
+        max={type === 'number' ? 120 : type === 'date' ? getLocalYesterdayIso() : undefined}
+        step={type === 'number' ? 1 : undefined} maxLength={isNameField ? 50 : type === 'text' ? 200 : undefined}
         autoComplete="off" aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
-        onChange={(event) => update(name, event.target.value)} />
+        onChange={(event) => {
+          const val = isNameField
+            ? sanitizeNameInput(event.target.value)
+            : isPhoneField
+              ? sanitizePhoneInput(event.target.value)
+              : event.target.value;
+          update(name, val);
+        }} />
       {error && <span className="nre-field-error" id={`${id}-error`}>{error}</span>}
     </label>;
   };
@@ -90,7 +109,7 @@ function PersonFields({ person, index, update, remove, operationId, fields, pref
       </label>
       <>
         <label className="nre-field" htmlFor={`nre-birthdate-${index}`}><span>Birthdate *</span>
-          <input id={`nre-birthdate-${index}`} type="date" value={person.birthdate || ''} max={getManilaDateKey(new Date())}
+          <input id={`nre-birthdate-${index}`} type="date" value={person.birthdate || ''} min={getLocalMinDobIso()} max={getLocalYesterdayIso()}
             required aria-invalid={Boolean(fields[`${prefix}birthdate`])}
             onChange={(event) => { update('birthdate', event.target.value); update('age_years', ageFromBirthdate(event.target.value)); }} />
           {fields[`${prefix}birthdate`] && <span className="nre-field-error">{fields[`${prefix}birthdate`]}</span>}
@@ -116,7 +135,6 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
   const [people, setPeople] = useState(() => [{ ...emptyPerson(), ...(mode.person || {}) }]);
   const [shelter, setShelter] = useState(() => String(mode.group?.center_id || (centerId !== 'all' ? centerId : '')));
   const [step, setStep] = useState(1);
-  const [arrivalType, setArrivalType] = useState(() => mode.kind === 'create' ? 'family' : '');
   const [rooms, setRooms] = useState([]);
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [roomsError, setRoomsError] = useState('');
@@ -130,11 +148,10 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
   const modal = useRef(null);
   const onCloseRef = useRef(onClose);
   const isCreationFlow = mode.kind === 'create' || mode.kind === 'choose';
-  const workflowActive = isCreationFlow && Boolean(arrivalType);
-  const isFamilyArrival = arrivalType === 'family';
-  const isIndividualArrival = arrivalType === 'individual';
-  const stepCount = isFamilyArrival ? 3 : 2;
-  const roomStep = stepCount;
+  const workflowActive = isCreationFlow;
+  const isIndividualArrival = true;
+  const stepCount = 2;
+  const roomStep = 2;
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => {
     if (!workflowActive || !shelter) {
@@ -171,17 +188,42 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
     document.addEventListener('keydown', keydown);
     return () => { document.removeEventListener('keydown', keydown); document.body.style.overflow = overflow; previous?.focus(); };
   }, []);
+  const assignableCenters = (centers || []).filter(
+    (c) => c.is_mapped !== false && c.has_map !== false && c.has_mapped_building !== false
+  );
+  const selectedCenterObj = assignableCenters.find((c) => String(c.id) === String(shelter));
+  const isCampusShelter =
+    selectedCenterObj &&
+    (selectedCenterObj.structure_mode || 'buildings_and_rooms') === 'buildings_and_rooms';
   const update = (index, key, value) => setPeople((current) => current.map((person, i) => i === index ? { ...person, [key]: value } : person));
-  const fittingRooms = rooms.filter((room) => Number(room.available_slots ?? 0) >= 1
-    && Number(room.available_spaces ?? 0) >= people.length
-    && !room.is_full
+  const fittingRooms = rooms.filter((room) => Number(room.available_spaces ?? 0) >= 1
     && room.is_active !== false
-    && (!room.building_status || room.building_status === 'open'));
+    && (!room.building_status || room.building_status === 'open')
+    && room.center_is_mapped !== false
+    && (!isCampusShelter || (room.building_id != null && room.building_is_mapped !== false)));
   const visibleRooms = fittingRooms.filter((room) => !roomSearch.trim() || [
     room.room_number, room.building_name, formatFloorLabel(room.floor),
   ].filter(Boolean).join(' ').toLowerCase().includes(roomSearch.trim().toLowerCase()));
   const selectedRoom = fittingRooms.find((room) => String(room.id) === String(roomId));
   const selectedRoomInvalid = roomId !== '' && roomId !== 'none' && !selectedRoom;
+  const validatePeopleAtIndices = (indices) => {
+    const nextFields = {};
+    for (const idx of indices) {
+      const p = people[idx] || {};
+      const prefix = workflowActive ? `people.${idx}.` : '';
+      const fnErr = validatePersonName(p.first_name, { label: 'First name', required: true, min: 2, max: 50 });
+      if (fnErr) nextFields[`${prefix}first_name`] = fnErr;
+      const mnErr = validatePersonName(p.middle_name, { label: 'Middle name', required: false, min: 2, max: 50 });
+      if (mnErr) nextFields[`${prefix}middle_name`] = mnErr;
+      const lnErr = validatePersonName(p.last_name, { label: 'Last name', required: true, min: 2, max: 50 });
+      if (lnErr) nextFields[`${prefix}last_name`] = lnErr;
+      const dobErr = validatePastBirthdate(p.birthdate, { label: 'Birthdate', required: true });
+      if (dobErr) nextFields[`${prefix}birthdate`] = dobErr;
+      const phoneErr = validateContactNumber(p.contact_number, { required: false, label: 'Contact number' });
+      if (phoneErr) nextFields[`${prefix}contact_number`] = phoneErr;
+    }
+    return nextFields;
+  };
   const goToNextStep = () => {
     const panel = modal.current?.querySelector(`[data-arrival-step="${step}"]`);
     const invalid = [...(panel?.querySelectorAll('input, select') || [])].find((field) => !field.checkValidity());
@@ -189,6 +231,13 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
       invalid.reportValidity();
       return;
     }
+    const customErrors = validatePeopleAtIndices([0]);
+    if (Object.keys(customErrors).length > 0) {
+      setFields(customErrors);
+      setError('Please correct the highlighted fields.');
+      return;
+    }
+    setFields({});
     setError('');
     setStep((current) => Math.min(stepCount, current + 1));
   };
@@ -199,23 +248,28 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
       return;
     }
     if (!workflowActive && !event.currentTarget.reportValidity()) return;
+    const allCustomErrors = validatePeopleAtIndices([0]);
+    if (Object.keys(allCustomErrors).length > 0) {
+      setFields(allCustomErrors);
+      setError('Please correct the highlighted fields.');
+      return;
+    }
     if (workflowActive && roomId === '') {
-      setError('Choose a room that fits this group, or select “Record without a room.”');
+      setError('Choose a room that fits this evacuee, or select “Record without a room.”');
       return;
     }
     if (lock.current) return;
     lock.current = true; setSaving(true); setError(''); setFields({});
-    const normalized = people.map((person) => Object.fromEntries(Object.keys(emptyPerson()).map((key) => [key, key === 'age_years' ? Number(person[key]) : person[key]])));
+    const normalized = people.slice(0, 1).map((person) => Object.fromEntries(Object.keys(emptyPerson()).map((key) => [key, key === 'age_years' ? Number(person[key]) : person[key]])));
     try {
       if (mode.kind === 'edit') await api.updateNonRegisteredPerson(mode.person.id, normalized[0]);
-      else if (mode.kind === 'member') await api.addNonRegisteredMember(mode.group.group_code, normalized[0]);
       else await api.createNonRegisteredGroup({ center_id: Number(shelter), operation_id: operation.id,
         room_id: roomId === 'none' ? null : Number(roomId), people: normalized });
       await onSaved();
       onClose();
     } catch (requestError) {
       const fieldErrors = requestError.data?.fields || {};
-      setError(requestError.message || 'Could not save arrivals.');
+      setError(requestError.message || 'Could not save arrival.');
       setFields(fieldErrors);
       if (fieldErrors.room_id) {
         setRoomId('');
@@ -224,62 +278,32 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
     }
     finally { lock.current = false; setSaving(false); }
   };
-  if (isCreationFlow && !arrivalType) {
-    return <div className="nre-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="nre-modal nre-type-modal" ref={modal} role="dialog" aria-modal="true" aria-labelledby="nre-type-title">
-        <header><div><h2 id="nre-type-title">Add a non-registered arrival</h2><p>Choose how many people you’re recording.</p></div>
-          <button type="button" onClick={onClose} aria-label="Close arrival type selection"><FontAwesomeIcon icon={faXmark} /></button></header>
-        <div className="nre-type-options">
-          <button type="button" className="nre-type-option" onClick={() => { setArrivalType('individual'); setStep(1); }}>
-            <span className="nre-type-option-icon">1</span><span><strong>Individual</strong><small>Record one person and choose an available room.</small></span><span className="nre-type-option-arrow">›</span>
-          </button>
-          <button type="button" className="nre-type-option" onClick={() => { setArrivalType('family'); setStep(1); }}>
-            <span className="nre-type-option-icon"><FontAwesomeIcon icon={faPlus} /></span><span><strong>Family or group</strong><small>Record the group head, add members, then choose a room.</small></span><span className="nre-type-option-arrow">›</span>
-          </button>
-        </div>
-        <footer><button type="button" className="nre-secondary" onClick={onClose}>Cancel</button></footer>
-      </section>
-    </div>;
-  }
   return <div className="nre-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}>
     <section className={`nre-modal ${isIndividualArrival ? 'nre-individual-modal' : ''}`} ref={modal} role="dialog" aria-modal="true" aria-labelledby="nre-modal-title">
-      <header><div><h2 id="nre-modal-title">{mode.kind === 'edit' ? 'Edit arrival details' : mode.kind === 'member' ? 'Add family member' : isIndividualArrival ? 'Add individual arrival' : 'Add family arrival'}</h2>
-        <p>{workflowActive ? `${isIndividualArrival ? 'Individual arrival' : `${people.length} ${people.length === 1 ? 'person' : 'people'}`} · Step ${step} of ${stepCount}` : mode.group?.head_name}</p></div>
+      <header><div><h2 id="nre-modal-title">{mode.kind === 'edit' ? 'Edit arrival details' : 'Add non-registered arrival'}</h2>
+        <p>{workflowActive ? `Individual arrival · Step ${step} of ${stepCount}` : (mode.person?.name || mode.group?.head_name)}</p></div>
         <button type="button" onClick={onClose} disabled={saving} aria-label="Close arrival form"><FontAwesomeIcon icon={faXmark} /></button>
       </header>
       {workflowActive && <nav className="nre-wizard-progress" aria-label="Arrival steps">
-        <span className={step === 1 ? 'is-current' : 'is-complete'}><b>1</b> {isIndividualArrival ? 'Details' : 'Head details'}</span><i aria-hidden="true" />
-        {isFamilyArrival && <><span className={step === 2 ? 'is-current' : step > 2 ? 'is-complete' : ''}><b>2</b> Add members</span><i aria-hidden="true" /></>}
-        <span className={step === roomStep ? 'is-current' : ''}><b>{roomStep}</b> Assign room</span>
+        <span className={step === 1 ? 'is-current' : 'is-complete'}><b>1</b> Evacuee details</span><i aria-hidden="true" />
+        <span className={step === roomStep ? 'is-current' : ''}><b>2</b> Assign room</span>
       </nav>}
       <form onSubmit={submit} noValidate>
         <div className="nre-modal-body" data-arrival-step="1" hidden={workflowActive && step !== 1}>
           <div className="nre-detail-grid">
             <label className="nre-field" htmlFor="nre-shelter"><span>Shelter *</span><select id="nre-shelter" required value={shelter} disabled={!workflowActive} onChange={(event) => setShelter(event.target.value)}>
-              <option value="">Select shelter</option>{centers.map((center) => <option key={center.id} value={center.id}>{center.name}</option>)}
+              <option value="">Select shelter</option>{assignableCenters.map((center) => <option key={center.id} value={center.id}>{center.name}</option>)}
             </select>{fields.center_id && <span className="nre-field-error">{fields.center_id}</span>}</label>
             <label className="nre-field"><span>Operation</span><input value={operation?.event_name || ''} readOnly aria-label="Active operation" />
               {fields.operation_id && <span className="nre-field-error">{fields.operation_id}</span>}</label>
           </div>
-          {(workflowActive ? people.slice(0, 1) : people).map((person, index) => <PersonFields key={index} person={person} index={index} operationId={operation?.id}
-            update={(key, value) => update(index, key, value)} compact={false} legendText={isIndividualArrival ? 'Individual details' : undefined} fields={fields} prefix={workflowActive ? `people.${index}.` : ''} />)}
+          {people.slice(0, 1).map((person, index) => <PersonFields key={index} person={person} index={index} operationId={operation?.id}
+            update={(key, value) => update(index, key, value)} compact={false} legendText="Evacuee details" fields={fields} prefix={workflowActive ? `people.${index}.` : ''} />)}
           <p className="nre-privacy">Information is used only for evacuation management (Data Privacy Act, RA 10173).</p>
           {error && <p className="nre-field-error" role="alert">{error}</p>}
         </div>
-        {isFamilyArrival && <div className="nre-modal-body nre-members-step" data-arrival-step="2" hidden={step !== 2}>
-          <div className="nre-step-intro"><span className="nre-step-number">2</span><div><h3>Add family members</h3><p>Add the other people arriving with {people[0]?.first_name || 'the group head'}. Each member adds one people space; the family uses one room slot.</p></div></div>
-          {people.length > 1 ? people.slice(1).map((person, index) => {
-            const personIndex = index + 1;
-            return <PersonFields key={personIndex} person={person} index={personIndex} operationId={operation?.id}
-              update={(key, value) => update(personIndex, key, value)} compact fields={fields} prefix={`people.${personIndex}.`}
-              remove={() => setPeople((current) => current.filter((_, i) => i !== personIndex))} />;
-          }) : <div className="nre-members-empty"><strong>No additional members added</strong><span>For a single person, continue to room selection.</span></div>}
-          <button type="button" className="nre-secondary nre-add-member-step" disabled={people.length >= 30 || saving} onClick={() => setPeople((current) => [...current, emptyPerson()])}><FontAwesomeIcon icon={faPlus} /> Add family member</button>
-          {fields.people && <p className="nre-field-error">{fields.people}</p>}
-          {error && <p className="nre-field-error" role="alert">{error}</p>}
-        </div>}
         {workflowActive && <div className="nre-modal-body nre-room-step" data-arrival-step={roomStep} hidden={step !== roomStep}>
-          <div className="nre-step-intro"><span className="nre-step-number">{roomStep}</span><div><h3>Assign a room</h3><p>Rooms are shown only when they have a family slot and enough people spaces for all {people.length} {people.length === 1 ? 'person' : 'people'}.</p></div></div>
+          <div className="nre-step-intro"><span className="nre-step-number">{roomStep}</span><div><h3>Assign a room</h3><p>Rooms are shown when they have at least 1 available people space for this evacuee.</p></div></div>
           <label className="nre-field" htmlFor="nre-room-search"><span>Search rooms</span><input id="nre-room-search" value={roomSearch} onChange={(event) => setRoomSearch(event.target.value)} placeholder="Search by room, building, or floor" /></label>
           {roomsLoading ? <p className="nre-room-state" role="status">Loading available rooms…</p>
               : roomsError ? <div className="nre-room-state" role="alert"><p>{roomsError}</p><button type="button" className="nre-secondary" onClick={() => setRoomsRetry((attempt) => attempt + 1)}>Retry</button></div>
@@ -290,14 +314,14 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
                   return <button key={room.id} type="button" role="radio" aria-checked={String(roomId) === String(room.id)}
                     className={`nre-room-option ${String(roomId) === String(room.id) ? 'is-selected' : ''}`} onClick={() => { setRoomId(String(room.id)); setError(''); setFields((current) => { const next = { ...current }; delete next.room_id; return next; }); }}>
                     <span className="nre-room-option-copy"><strong>{label}</strong><small>{location || 'Shelter room'}</small></span>
-                    <span className="nre-room-option-capacity">{room.available_slots} family slot{room.available_slots === 1 ? '' : 's'} · {room.available_spaces} people spaces left</span>
+                    <span className="nre-room-option-capacity">{room.available_slots} family slot{room.available_slots === 1 ? '' : 's'} · {room.available_spaces} people space{room.available_spaces === 1 ? '' : 's'} left</span>
                   </button>;
                 })}
-              </div> : <div className="nre-room-empty"><strong>{rooms.length ? 'No room fits this group' : 'No rooms are defined for this shelter'}</strong><p>{rooms.length ? 'Every available room needs at least one family slot and enough people spaces.' : 'You can record the arrival now and leave its room unassigned.'}</p></div>}
+              </div> : <div className="nre-room-empty"><strong>{rooms.length ? 'No room has available people spaces' : 'No rooms are defined for this shelter'}</strong><p>{rooms.length ? 'Every available room needs at least 1 people space left.' : 'You can record the arrival now and leave its room unassigned.'}</p></div>}
           {fittingRooms.length === 0 && <button type="button" className={`nre-room-unassigned ${roomId === 'none' ? 'is-selected' : ''}`} aria-pressed={roomId === 'none'} onClick={() => { setRoomId('none'); setError(''); setFields((current) => { const next = { ...current }; delete next.room_id; return next; }); }}>
             <strong>Record without a room</strong><span>Keep the arrival on the shelter roster without exceeding room capacity. Assign a room later.</span>
           </button>}
-          {selectedRoomInvalid && <p className="nre-field-error" role="alert">This room no longer has enough capacity for the group. Choose another room.</p>}
+          {selectedRoomInvalid && <p className="nre-field-error" role="alert">This room no longer has enough capacity. Choose another room.</p>}
           {selectedRoom && <div className="nre-room-selection"><strong>Assigned to {formatRoomLabel(selectedRoom.room_number)}</strong><span>{[selectedRoom.building_name, Number(selectedRoom.building_floors || 1) > 1 ? formatFloorLabel(selectedRoom.floor) : ''].filter(Boolean).join(' · ') || 'Shelter room'}</span></div>}
           {fields.room_id && <p className="nre-field-error" role="alert">{fields.room_id}</p>}
           {error && <p className="nre-field-error" role="alert">{error}</p>}
@@ -308,23 +332,38 @@ export function NonRegisteredModal({ mode, centers, operation, centerId, onClose
                 ? <button type="button" className="nre-secondary" onClick={onClose} disabled={saving}>Cancel</button>
                 : <button type="button" className="nre-secondary" onClick={() => { setStep((current) => current - 1); setError(''); }} disabled={saving}>Back</button>}
               {step < stepCount
-                ? <button type="button" className="nre-add-button" onClick={goToNextStep} disabled={saving}>{step === 1 ? (isFamilyArrival ? 'Next: add members' : 'Next: assign room') : 'Next: assign room'}</button>
+                ? <button type="button" className="nre-add-button" onClick={goToNextStep} disabled={saving}>Next: assign room</button>
                 : <button className="nre-add-button" disabled={saving || roomsLoading || Boolean(roomsError) || roomId === '' || selectedRoomInvalid}>{saving && <FontAwesomeIcon icon={faSpinner} spin />}{saving ? 'Saving arrival…' : 'Save arrival'}</button>}</>
-            : <><button type="button" className="nre-secondary" onClick={onClose} disabled={saving}>Cancel</button><button type="submit" className="nre-add-button" disabled={saving}>{saving ? 'Saving…' : mode.kind === 'edit' ? 'Save arrivals' : 'Add member'}</button></>}
+            : <><button type="button" className="nre-secondary" onClick={onClose} disabled={saving}>Cancel</button><button type="submit" className="nre-add-button" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button></>}
         </footer>
       </form>
     </section>
   </div>;
 }
 
-export function NonRegisteredGroups({ result, loading, error, retry, status, setStatus, page, setPage, canEdit, isAdmin, onEdit, onMember, onChanged, onAdd, addDisabled }) {
-  const [selectedGroupCode, setSelectedGroupCode] = useState(null);
+export function NonRegisteredGroups({ result, loading, error, retry, status, setStatus, page, setPage, canEdit, isAdmin, onEdit, onChanged, onAdd, addDisabled }) {
+  const [selectedEntry, setSelectedEntry] = useState(null);
   const [details, setDetails] = useState({});
   const [busy, setBusy] = useState(null);
   const [actionError, setActionError] = useState('');
   const groups = result?.groups || [];
-  const selectedGroup = selectedGroupCode
-    ? groups.find((item) => item.group_code === selectedGroupCode) || null
+  const entries = groups.flatMap((group) => {
+    const members = Array.isArray(group.members) && group.members.length > 0
+      ? group.members
+      : [{
+          id: group.group_code,
+          name: group.head_name,
+          arrived_at: group.arrived_at,
+          departed_at: group.present_count ? null : group.arrived_at,
+        }];
+    return members.map((person) => ({ person, group }));
+  });
+  const activeEntry = selectedEntry
+    ? entries.find(
+        (item) =>
+          String(item.person.id) === String(selectedEntry.personId) &&
+          item.group.group_code === selectedEntry.groupCode
+      ) || null
     : null;
   const act = async (key, task) => {
     if (busy) return;
@@ -340,35 +379,40 @@ export function NonRegisteredGroups({ result, loading, error, retry, status, set
       const response = await api.getNonRegisteredGroup(group.group_code, true);
       setDetails((current) => ({ ...current, [group.group_code]: response.group }));
       if (editPerson) {
-        setSelectedGroupCode(null);
-        onEdit(response.group.members.find((person) => person.id === editPerson.id), group);
+        setSelectedEntry(null);
+        onEdit(response.group.members.find((person) => person.id === editPerson.id) || editPerson, group);
       }
     } catch (requestError) { setActionError(requestError.message || 'Could not load protected details.'); }
     finally { setBusy(null); }
   };
+  const totalIndividuals = Number(result?.summary?.people ?? entries.length ?? result?.total ?? 0);
   return <section className="nre-groups" aria-labelledby="nre-groups-title">
     <div className="nre-section-heading"><h2 id="nre-groups-title">Non-registered arrivals</h2><label>Status <select aria-label="Non-registered status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="all">All</option><option value="present">On-site</option><option value="departed">Departed</option></select></label></div>
     {actionError && <p className="nre-field-error" role="alert">{actionError}</p>}
     {loading ? <p role="status">Loading non-registered arrivals...</p> : error ? <div role="alert"><p>{error.message}</p><button type="button" className="nre-secondary" onClick={retry}>Retry</button></div>
-      : groups.length === 0 ? <div className="nre-empty"><h3>No non-registered arrivals</h3><p>Record people who arrive without a pre-assignment.</p><AddNonRegisteredButton disabled={addDisabled} onClick={onAdd} /></div>
-         : <><div className="nre-table-wrap"><table className="nre-table"><thead><tr><th>Head of group</th><th>People</th><th>Shelter / room</th><th>Arrival</th><th>Status</th><th>Staff action</th></tr></thead>
-          <tbody>{groups.map((group) => {
-            return <GroupRows key={group.group_code} {...{ group, busy, canEdit }}
-              openDetails={() => setSelectedGroupCode(group.group_code)} member={() => onMember(group)}
-              depart={(person, departed) => act(`departure-${person?.id || group.group_code}`, () => api.departNonRegistered(person?.id || group.group_code, departed, !person))}
+      : entries.length === 0 ? <div className="nre-empty"><h3>No non-registered arrivals</h3><p>Record individuals who arrive without a pre-assignment.</p><AddNonRegisteredButton disabled={addDisabled} onClick={onAdd} /></div>
+         : <><div className="nre-table-wrap"><table className="nre-table"><thead><tr><th>Evacuee name</th><th>Details</th><th>Shelter / room</th><th>Arrival</th><th>Status</th><th>Staff action</th></tr></thead>
+          <tbody>{entries.map(({ person, group }) => {
+            return <GroupRows key={`${group.group_code}-${person.id}`} {...{ person, group, busy, canEdit }}
+              openDetails={() => setSelectedEntry({ groupCode: group.group_code, personId: person.id })}
+              depart={(targetPerson, departed) => act(`departure-${targetPerson.id}`, () => api.departNonRegistered(targetPerson.id, departed, false))}
               />;
           })}</tbody></table></div>
-          <nav className="nre-pagination" aria-label="Non-registered groups pagination"><span>{result.total} groups</span><button type="button" className="nre-secondary" disabled={page <= 1 || busy} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page}</span><button type="button" className="nre-secondary" disabled={page * 10 >= result.total || busy} onClick={() => setPage(page + 1)}>Next</button></nav></>}
-    {selectedGroup && <GroupDetailsModal group={selectedGroup} details={details[selectedGroup.group_code]}
+          <nav className="nre-pagination" aria-label="Non-registered arrivals pagination"><span>{totalIndividuals} {totalIndividuals === 1 ? 'person' : 'people'}</span><button type="button" className="nre-secondary" disabled={page <= 1 || busy} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page}</span><button type="button" className="nre-secondary" disabled={page * 10 >= (result?.total || 0) || busy} onClick={() => setPage(page + 1)}>Next</button></nav></>}
+    {activeEntry && <GroupDetailsModal person={activeEntry.person} group={activeEntry.group} details={details[activeEntry.group.group_code]}
       busy={busy} canEdit={canEdit} isAdmin={isAdmin}
-      onClose={() => setSelectedGroupCode(null)} onReveal={() => reveal(selectedGroup)}
-      onEdit={(person) => reveal(selectedGroup, person)} onMember={() => { setSelectedGroupCode(null); onMember(selectedGroup); }}
-      onDepart={(person, departed) => act(`departure-${person?.id || selectedGroup.group_code}`, () => api.departNonRegistered(person?.id || selectedGroup.group_code, departed, !person))}
-      onRemove={(person) => { if (window.confirm('Delete this non-registered arrival record?')) act(`delete-${person.id}`, () => api.deleteNonRegisteredPerson(person.id)); }} />}
+      onClose={() => setSelectedEntry(null)} onReveal={() => reveal(activeEntry.group)}
+      onEdit={(targetPerson) => reveal(activeEntry.group, targetPerson)}
+      onDepart={(targetPerson, departed) => act(`departure-${targetPerson.id}`, () => api.departNonRegistered(targetPerson.id, departed, false))}
+      onRemove={(targetPerson) => { if (window.confirm('Delete this non-registered arrival record?')) act(`delete-${targetPerson.id}`, () => api.deleteNonRegisteredPerson(targetPerson.id)); }} />}
   </section>;
 }
 
-function GroupRows({ group, busy, canEdit, openDetails, member, depart }) {
+function GroupRows({ person, group, busy, canEdit, openDetails, depart }) {
+  const isPresent = !person.departed_at;
+  const sexLabel = person.sex ? person.sex.charAt(0).toUpperCase() + person.sex.slice(1) : null;
+  const ageLabel = person.age_years != null ? `${person.age_years} yrs` : null;
+  const demographicSummary = [sexLabel, ageLabel].filter(Boolean).join(' · ') || 'Individual';
   return <tr className="nre-group-row" tabIndex={0} onClick={(event) => {
     if (!event.target.closest('button, a, select, input')) openDetails();
   }} onKeyDown={(event) => {
@@ -376,28 +420,31 @@ function GroupRows({ group, busy, canEdit, openDetails, member, depart }) {
       event.preventDefault();
       openDetails();
     }
-  }}><td><button className="nre-group-toggle" type="button" onClick={openDetails}>{group.head_name}</button></td>
-    <td>{group.people_count} people<br /><small>{group.present_count} on-site</small></td><td>{group.center_name}<br /><small>{group.room_name ? `${formatRoomLabel(group.room_name)}${group.building_name ? ` · ${group.building_name}` : ''}${group.floor ? ` · ${formatFloorLabel(group.floor)}` : ''}` : 'No room assigned'}</small></td><td>{formatTime(group.arrived_at)}</td>
-    <td><span className="nre-pill">Non-registered</span><span className={`nre-pill ${group.present_count ? 'is-arrived' : ''}`}>{group.present_count ? 'Arrived' : 'Departed'}</span></td>
-    <td>{canEdit && <div className="nre-actions"><button type="button" disabled={Boolean(busy)} onClick={() => depart(null, group.present_count > 0)}>{group.present_count ? 'Depart group' : 'Undo departure'}</button>{group.present_count > 0 && group.present_count < group.people_count && <button type="button" disabled={Boolean(busy)} onClick={() => depart(null, false)}>Undo group departure</button>}<button type="button" disabled={Boolean(busy)} onClick={member}>Add member</button></div>}</td></tr>;
+  }}><td><button className="nre-group-toggle" type="button" onClick={openDetails}>{person.name || group.head_name}</button></td>
+    <td>{demographicSummary}<br /><small>{isPresent ? 'On-site' : 'Departed'}</small></td><td>{group.center_name}<br /><small>{group.room_name ? `${formatRoomLabel(group.room_name)}${group.building_name ? ` · ${group.building_name}` : ''}${group.floor ? ` · ${formatFloorLabel(group.floor)}` : ''}` : 'No room assigned'}</small></td><td>{formatTime(person.arrived_at || group.arrived_at)}</td>
+    <td><span className="nre-pill">Non-registered</span><span className={`nre-pill ${isPresent ? 'is-arrived' : ''}`}>{isPresent ? 'Arrived' : 'Departed'}</span></td>
+    <td>{canEdit && <div className="nre-actions"><button type="button" disabled={Boolean(busy)} onClick={() => depart(person, isPresent)}>{isPresent ? 'Depart' : 'Undo departure'}</button></div>}</td></tr>;
 }
 
-function GroupDetailsModal({ group, details, busy, canEdit, isAdmin, onClose, onReveal, onEdit, onMember, onDepart, onRemove }) {
-  const members = details?.members || group.members || [];
+function GroupDetailsModal({ person, group, details, busy, canEdit, isAdmin, onClose, onReveal, onEdit, onDepart, onRemove }) {
+  const revealedMembers = details?.members || group.members || [];
+  const activePerson = revealedMembers.find((m) => String(m.id) === String(person?.id)) || person || revealedMembers[0];
+  const isPresent = !activePerson?.departed_at;
+  const sexLabel = activePerson?.sex ? activePerson.sex.charAt(0).toUpperCase() + activePerson.sex.slice(1) : '—';
   return <div className="nre-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="nre-modal nre-group-modal" role="dialog" aria-modal="true" aria-labelledby="nre-group-modal-title">
-      <header><div><h2 id="nre-group-modal-title">{group.head_name}</h2><p>{group.center_name} · {group.people_count} {group.people_count === 1 ? 'person' : 'people'} · {group.present_count} on-site</p></div>
-        <button type="button" onClick={onClose} aria-label="Close group details"><FontAwesomeIcon icon={faXmark} /></button></header>
+      <header><div><h2 id="nre-group-modal-title">{activePerson?.name || group.head_name}</h2><p>{group.center_name} · Non-registered individual · {isPresent ? 'On-site' : 'Departed'}</p></div>
+        <button type="button" onClick={onClose} aria-label="Close arrival details"><FontAwesomeIcon icon={faXmark} /></button></header>
       <div className="nre-modal-body">
-        <div className="nre-group-summary"><span><strong>Arrival</strong>{formatTime(group.arrived_at)}</span><span><strong>Status</strong>{group.present_count ? 'Arrived' : 'Departed'}</span><span><strong>Room</strong>{group.room_name ? `${formatRoomLabel(group.room_name)}${group.building_name ? ` · ${group.building_name}` : ''}${group.floor ? ` · ${formatFloorLabel(group.floor)}` : ''}` : 'No room assigned'}</span></div>
-        <div className="nre-group-detail-heading"><h3>People in this group</h3><button type="button" className="nre-secondary" disabled={Boolean(busy)} onClick={onReveal}>{busy ? 'Loading…' : details ? 'Contact and medical details shown' : 'View contact numbers and medical needs'}</button></div>
-        {members.length === 0 ? <p className="nre-group-no-members">Member details are unavailable.</p> : <div className="nre-member-list">{members.map((person) => <article key={person.id}>
-          <div><strong>{person.name}{person.is_group_head ? ' · Head' : ''}</strong><p>{person.sex} · {person.age_years} years · {person.departed_at ? `Departed ${formatTime(person.departed_at)}` : 'On-site'}</p>
-            {person.address && <p>{person.address}</p>}{Object.hasOwn(person, 'contact_number') && <p>Contact: {person.contact_number || 'Not provided'} · Needs: {[person.is_pwd && 'PWD', person.is_pregnant && 'Pregnant', person.is_lactating && 'Lactating', person.is_solo_parent && 'Solo parent', person.needs_assistance && 'Needs assistance', person.needs_medical && 'Medical attention'].filter(Boolean).join(', ') || 'None recorded'}{person.notes ? ` · ${person.notes}` : ''}</p>}</div>
-          <div className="nre-actions">{canEdit && <><button type="button" disabled={Boolean(busy)} onClick={() => onEdit(person)}>Edit</button><button type="button" disabled={Boolean(busy)} onClick={() => onDepart(person, !person.departed_at)}>{person.departed_at ? 'Undo departure' : 'Departed'}</button></>}{isAdmin && <button type="button" disabled={Boolean(busy)} onClick={() => onRemove(person)}>Delete</button>}</div>
-        </article>)}</div>}
+        <div className="nre-group-summary"><span><strong>Arrival</strong>{formatTime(activePerson?.arrived_at || group.arrived_at)}</span><span><strong>Status</strong>{isPresent ? 'Arrived' : 'Departed'}</span><span><strong>Room</strong>{group.room_name ? `${formatRoomLabel(group.room_name)}${group.building_name ? ` · ${group.building_name}` : ''}${group.floor ? ` · ${formatFloorLabel(group.floor)}` : ''}` : 'No room assigned'}</span></div>
+        <div className="nre-group-detail-heading"><h3>Evacuee details</h3><button type="button" className="nre-secondary" disabled={Boolean(busy)} onClick={onReveal}>{busy ? 'Loading…' : details ? 'Contact and medical details shown' : 'View contact numbers and medical needs'}</button></div>
+        {!activePerson ? <p className="nre-group-no-members">Details are unavailable.</p> : <div className="nre-member-list"><article key={activePerson.id}>
+          <div><strong>{activePerson.name}</strong><p>{sexLabel} · {activePerson.age_years} years · {activePerson.departed_at ? `Departed ${formatTime(activePerson.departed_at)}` : 'On-site'}</p>
+            {activePerson.address && <p>{activePerson.address}</p>}{Object.hasOwn(activePerson, 'contact_number') && <p>Contact: {activePerson.contact_number || 'Not provided'} · Needs: {[activePerson.is_pwd && 'PWD', activePerson.is_pregnant && 'Pregnant', activePerson.is_lactating && 'Lactating', activePerson.is_solo_parent && 'Solo parent', activePerson.needs_assistance && 'Needs assistance', activePerson.needs_medical && 'Medical attention'].filter(Boolean).join(', ') || 'None recorded'}{activePerson.notes ? ` · ${activePerson.notes}` : ''}</p>}</div>
+          <div className="nre-actions">{canEdit && <><button type="button" disabled={Boolean(busy)} onClick={() => onEdit(activePerson)}>Edit</button><button type="button" disabled={Boolean(busy)} onClick={() => onDepart(activePerson, !activePerson.departed_at)}>{activePerson.departed_at ? 'Undo departure' : 'Departed'}</button></>}{isAdmin && <button type="button" disabled={Boolean(busy)} onClick={() => onRemove(activePerson)}>Delete</button>}</div>
+        </article></div>}
       </div>
-      <footer><button type="button" className="nre-secondary" onClick={onClose}>Close</button>{canEdit && <button type="button" className="nre-add-button" onClick={onMember}>Add member</button>}</footer>
+      <footer><button type="button" className="nre-secondary" onClick={onClose}>Close</button></footer>
     </section>
   </div>;
 }

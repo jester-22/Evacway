@@ -2339,6 +2339,8 @@ def add_family():
             return jsonify({'error': 'Selected evacuation center was not found'}), 404
         if not assignment_center.is_active:
             return jsonify({'error': 'Cannot assign a family to an inactive center'}), 400
+        if assignment_center.geom is None:
+            return jsonify({'error': 'Cannot assign a family to an evacuation center that is not mapped yet. Place the center on the map first.'}), 400
 
         raw_room_id = assignment.get('room_id')
         assign_structure_mode = getattr(assignment_center, 'structure_mode', None) or 'buildings_and_rooms'
@@ -2358,6 +2360,13 @@ def add_family():
                 return jsonify({'error': 'Cannot assign a family to an inactive or missing room'}), 400
             if assignment_room.evacuation_center_id != assignment_center.id:
                 return jsonify({'error': 'Selected room does not belong to the selected center'}), 400
+            if assign_structure_mode == 'buildings_and_rooms':
+                if not assignment_room.building:
+                    return jsonify({'error': 'Cannot assign a family to a room that is not linked to a building.'}), 400
+                if assignment_room.building.status != 'open':
+                    return jsonify({'error': f"Cannot assign a family to a room in a building with status '{assignment_room.building.status}'. Only 'open' buildings can receive new assignments."}), 400
+                if assignment_room.building.geom is None:
+                    return jsonify({'error': f"Cannot assign a family to a room in '{assignment_room.building.name or 'this building'}' because the building is not mapped yet. Place the building on the map first."}), 400
             room_usage = assignment_room.capacity_usage()
             needed_spaces = len(parsed_members) + 1
             if room_usage['available_slots'] < 1:
@@ -2912,6 +2921,8 @@ def assign_family(family_id):
         return jsonify({"error": "Evacuation center not found"}), 404
     if not center.is_active:
         return jsonify({"error": "Cannot assign to an inactive evacuation center"}), 400
+    if center.geom is None:
+        return jsonify({"error": "Cannot assign to an evacuation center that is not mapped yet. Place the center on the map first."}), 400
 
     # Enforce structure_mode rules for room_id
     structure_mode = getattr(center, 'structure_mode', None) or 'buildings_and_rooms'
@@ -2936,10 +2947,14 @@ def assign_family(family_id):
         if room.evacuation_center_id != center.id:
             return jsonify({"error": "Room does not belong to the selected evacuation center"}), 400
 
-        # Check building status for buildings_and_rooms structure
-        if structure_mode == 'buildings_and_rooms' and room.building:
+        # Check building status and mapping for buildings_and_rooms structure
+        if structure_mode == 'buildings_and_rooms':
+            if not room.building:
+                return jsonify({"error": "Cannot assign to a room that is not linked to a building."}), 400
             if room.building.status != 'open':
                 return jsonify({"error": f"Cannot assign to a room in a building with status '{room.building.status}'. Only 'open' buildings can receive new assignments."}), 400
+            if room.building.geom is None:
+                return jsonify({"error": f"Cannot assign to a room in '{room.building.name or 'this building'}' because the building is not mapped yet. Place the building on the map first."}), 400
 
     # A family must not have multiple active assignments
     existing_assignment = (
@@ -3064,6 +3079,9 @@ def move_family(family_id):
         if not target_center or not target_center.is_active:
             return jsonify({"error": "Target evacuation center is inactive or not found"}), 400
 
+    if target_center.geom is None:
+        return jsonify({"error": "Cannot move to an evacuation center that is not mapped yet. Place the center on the map first."}), 400
+
     # Enforce structure_mode rules for room_id
     target_structure_mode = getattr(target_center, 'structure_mode', None) or 'buildings_and_rooms'
     is_target_direct_venue = (target_structure_mode == 'open_area')
@@ -3072,10 +3090,14 @@ def move_family(family_id):
     if not is_target_direct_venue and not new_room:
         return jsonify({"error": f"Room ID is required for {target_center.center_type_name or 'room-based'} centers"}), 400
 
-    # Check building status for buildings_and_rooms structure
-    if target_structure_mode == 'buildings_and_rooms' and new_room and new_room.building:
+    # Check building status and mapping for buildings_and_rooms structure
+    if target_structure_mode == 'buildings_and_rooms' and new_room:
+        if not new_room.building:
+            return jsonify({"error": "Cannot move to a room that is not linked to a building."}), 400
         if new_room.building.status != 'open':
             return jsonify({"error": f"Cannot move to a room in a building with status '{new_room.building.status}'. Only 'open' buildings can receive new assignments."}), 400
+        if new_room.building.geom is None:
+            return jsonify({"error": f"Cannot move to a room in '{new_room.building.name or 'this building'}' because the building is not mapped yet. Place the building on the map first."}), 400
 
     current_assignments = (
         db.session.query(EvacuationAssignment)

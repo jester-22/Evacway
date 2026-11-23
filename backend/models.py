@@ -622,6 +622,8 @@ class EvacuationCenter(BaseModel):
             "hazard_exposure_score": self.hazard_exposure_score,
             "contact_number": self.contact_number,
             "is_active": self.is_active,
+            "has_map": self.geom is not None,
+            "is_mapped": self.geom is not None,
             "evacuation_open_date": (
                 self.evacuation_open_date.isoformat()
                 if self.evacuation_open_date
@@ -1903,10 +1905,10 @@ class EvacuationCenterRoom(BaseModel):
                 assigned_by_room.setdefault(room_id, {})[resident_id] = family_id
 
             try:
-                walkin_rows = (
+                walkin_group_rows = (
                     db.session.query(
                         NonRegisteredEvacuee.room_id,
-                        db.func.count(db.func.distinct(NonRegisteredEvacuee.group_code)),
+                        NonRegisteredEvacuee.group_code,
                         db.func.count(NonRegisteredEvacuee.id),
                     )
                     .join(
@@ -1918,13 +1920,26 @@ class EvacuationCenterRoom(BaseModel):
                         NonRegisteredEvacuee.departed_at.is_(None),
                         EvacuationOperation.status == 'active',
                     )
-                    .group_by(NonRegisteredEvacuee.room_id)
+                    .group_by(
+                        NonRegisteredEvacuee.room_id,
+                        NonRegisteredEvacuee.group_code,
+                    )
                     .all()
                 )
-                for room_id, walk_in_slots, walk_in_spaces in walkin_rows:
-                    walkin_by_room[room_id] = (
-                        int(walk_in_slots or 0),
-                        int(walk_in_spaces or 0),
+                slots_acc = {}
+                spaces_acc = {}
+                for room_id, _group_code, group_count in walkin_group_rows:
+                    cnt = int(group_count or 0)
+                    if cnt <= 0:
+                        continue
+                    spaces_acc[room_id] = spaces_acc.get(room_id, 0) + cnt
+                    # Solo non-registered individuals (cnt == 1) only consume a people space, not a family slot.
+                    if cnt > 1:
+                        slots_acc[room_id] = slots_acc.get(room_id, 0) + 1
+                for r_id in set(slots_acc.keys()) | set(spaces_acc.keys()):
+                    walkin_by_room[r_id] = (
+                        slots_acc.get(r_id, 0),
+                        spaces_acc.get(r_id, 0),
                     )
             except Exception:
                 db.session.rollback()
@@ -1979,6 +1994,8 @@ class EvacuationCenterRoom(BaseModel):
             ),
             "building_floors": self.building.floors if self.building is not None else None,
             "building_status": self.building.status if self.building is not None else None,
+            "building_is_mapped": bool(self.building is not None and self.building.geom is not None),
+            "center_is_mapped": bool(self.evacuation_center is not None and self.evacuation_center.geom is not None),
             "room_number": self.room_number,
             "family_slots": self.family_slots,
             "people_spaces": self.people_spaces,

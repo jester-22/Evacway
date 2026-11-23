@@ -403,6 +403,9 @@ export default function BuildingDetail({
           <div className="ec-bldg-title-row">
             <h1 className="ec-bldg-title">{building.name}</h1>
             <StatusPill variant={statusMeta.variant} label={statusMeta.label} />
+            {!building.is_mapped && (
+              <StatusPill variant="unmapped" label="Not mapped on map" />
+            )}
           </div>
           <p className="ec-bldg-subtitle">
             {summary.totalRooms} {summary.totalRooms === 1 ? 'room' : 'rooms'} across {floorCount}{' '}
@@ -411,6 +414,15 @@ export default function BuildingDetail({
         </div>
 
         <div className="ec-bldg-actions">
+          {!building.is_mapped && onPlaceBuilding && (
+            <Button
+              variant="secondary"
+              onClick={() => onPlaceBuilding(building, 'place_building')}
+            >
+              <FontAwesomeIcon icon={faDrawPolygon} aria-hidden="true" />
+              <span>Place building on map</span>
+            </Button>
+          )}
           <div className="ec-bldg-menu-wrap" ref={menuWrapRef}>
             <button
               type="button"

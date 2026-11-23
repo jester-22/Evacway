@@ -5,6 +5,7 @@ import { faCircleNotch, faXmark, faTriangleExclamation, faTrash, faCheck, faCirc
 import { stripDigits, centerNeedsMapping, resolveCenterStructureMode } from './utils';
 import { formatRoomLabel, formatFloorLabel } from '../../utils/formatRoomLabel';
 import { displayEntityName } from '../../utils/displayEntityName';
+import { sanitizePhoneInput, validateContactNumber } from '../../utils/formValidation';
 import BarangaysServedPicker from '../BarangaysServedPicker/BarangaysServedPicker';
 import './ModalShell.css';
 
@@ -382,6 +383,15 @@ export function CenterFormModal({
         newErrors.barangays = 'Select at least one barangay served by this center.';
         valid = false;
       }
+    } else if (step === 3) {
+      const phoneErr = validateContactNumber(centerForm.contact_number, {
+        required: false,
+        label: 'Contact number',
+      });
+      if (phoneErr) {
+        newErrors.contact_number = phoneErr;
+        valid = false;
+      }
     }
 
     setFieldErrors((prev) => {
@@ -392,6 +402,8 @@ export function CenterFormModal({
         delete next.capacity;
       } else if (step === 2) {
         delete next.barangays;
+      } else if (step === 3) {
+        delete next.contact_number;
       }
       return { ...next, ...newErrors };
     });
@@ -942,14 +954,14 @@ export function CenterFormModal({
               </label>
               <input
                 id="center-contact"
-                type="text"
+                type="tel"
                 maxLength={20}
                 className={`cfm-input ${fieldErrors.contact_number ? 'is-invalid' : ''}`}
-                placeholder="e.g. 0917-123-4567"
+                placeholder="e.g. 0917 123 4567"
                 value={centerForm.contact_number || ''}
                 onChange={(e) => {
                   clearFieldError('contact_number');
-                  onChange({ ...centerForm, contact_number: e.target.value });
+                  onChange({ ...centerForm, contact_number: sanitizePhoneInput(e.target.value) });
                 }}
               />
               {fieldErrors.contact_number && <p className="cfm-field-error">{fieldErrors.contact_number}</p>}
@@ -1626,9 +1638,38 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
   const selectedFamilyName = selectedFamily
     ? displayEntityName(selectedFamily.household_head_name || selectedFamily.head_name)
     : '';
+  const centerStructureMode = resolveCenterStructureMode(selectedCenter);
+  const isCenterMappedReady =
+    selectedCenter == null
+      ? true
+      : Boolean(
+          isCenterMapped(selectedCenter) ||
+          selectedCenter?.has_map ||
+          selectedCenter?.is_mapped ||
+          (selectedCenter?.latitude != null && selectedCenter?.longitude != null) ||
+          (selectedCenter?.lat != null && selectedCenter?.lng != null) ||
+          selectedCenter?.capacity != null
+        ) && selectedCenter?.has_map !== false && selectedCenter?.is_mapped !== false;
+  const isRoomBuildingMapped = (room) => {
+    if (!room) return false;
+    if (centerStructureMode !== 'buildings_and_rooms') return true;
+    const bldg =
+      room.building_id != null
+        ? buildings.find((item) => String(item.id ?? item.properties?.id) === String(room.building_id))
+        : null;
+    const bldgStatus = room.building_status || bldg?.status || bldg?.properties?.status || 'open';
+    if (bldgStatus !== 'open') return false;
+    if (room.building_is_mapped != null) return Boolean(room.building_is_mapped);
+    if (bldg && (bldg.is_mapped != null || bldg.properties?.is_mapped != null)) {
+      return Boolean(bldg.is_mapped ?? bldg.properties?.is_mapped);
+    }
+    if (buildings.length > 0 && room.building_id == null) return false;
+    return true;
+  };
   const roomOptions = allowRoomSelection
     ? rooms.filter((room) => {
         if (!room || room.is_active === false) return false;
+        if (!isRoomBuildingMapped(room)) return false;
         const usage = roomCapacityUsage(room);
         return usage.availableSlots > 0 && usage.availableSpaces > 0 && (!selectedFamily || memCount <= usage.availableSpaces);
       })
@@ -1661,6 +1702,8 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
 
   const targetCapacity = isSingleVenue ? centerCapacity : selectedRoom ? roomCapacity : 0;
   const isChoosingRoom = allowRoomSelection && !selectedRoom;
+  const isTargetUnmapped =
+    !isCenterMappedReady || (!isSingleVenue && selectedRoom && !isRoomBuildingMapped(selectedRoom));
   const isTargetFull = isSingleVenue
     ? targetCapacity <= 0 || remaining <= 0
     : Boolean(selectedRoom && (roomUsage.availableSlots <= 0 || remaining <= 0));
@@ -1697,7 +1740,7 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
       onPrimary={onConfirm}
       loading={assigningFamily}
       primaryLabel={assigningFamily ? 'Assigning...' : 'Confirm Assignment'}
-      primaryDisabled={!selectedFamilyIdToAssign || assigningFamily || isOverCapacity || isTargetFull || (allowRoomSelection && !selectedRoom)}
+      primaryDisabled={!selectedFamilyIdToAssign || assigningFamily || isOverCapacity || isTargetFull || isTargetUnmapped || (allowRoomSelection && !selectedRoom)}
       dialogClassName="afm-dialog"
     >
       <div className="afm-content">
@@ -1945,14 +1988,33 @@ export function MoveFamilyModal({ open = false, movingFamily, selectedRoom, cent
   const isTargetOpenArea = Boolean(targetCenter && targetStructure === 'open_area');
   const isTargetBuildings = Boolean(targetCenter && targetStructure === 'buildings_and_rooms');
 
-  const buildingList = isTargetBuildings ? (Array.isArray(targetCenterBuildings) ? targetCenterBuildings : []) : [];
+  const buildingList = isTargetBuildings
+    ? (Array.isArray(targetCenterBuildings) ? targetCenterBuildings : []).filter((b) => {
+        const status = b.status || b.properties?.status || 'open';
+        if (status !== 'open') return false;
+        const mapped = b.is_mapped ?? b.properties?.is_mapped;
+        return mapped !== false;
+      })
+    : [];
   const hasBuildings = isTargetBuildings && (buildingList.length > 0 || targetCenterRooms.some((r) => r.building_id != null));
 
-  const roomsForDropdown = hasBuildings && selectedBuildingId
-    ? targetCenterRooms.filter((r) =>
-        selectedBuildingId === 'unlinked' ? r.building_id == null : String(r.building_id) === String(selectedBuildingId)
-      )
+  const mappedTargetRooms = isTargetBuildings
+    ? targetCenterRooms.filter((r) => {
+        if (r.building_is_mapped === false) return false;
+        if (r.building_status && r.building_status !== 'open') return false;
+        if ((Array.isArray(targetCenterBuildings) && targetCenterBuildings.length > 0) || r.building_is_mapped != null) {
+          if (r.building_id == null) return false;
+          if (Array.isArray(targetCenterBuildings) && targetCenterBuildings.length > 0) {
+            return buildingList.some((b) => String(b.id ?? b.properties?.id) === String(r.building_id));
+          }
+        }
+        return true;
+      })
     : targetCenterRooms;
+
+  const roomsForDropdown = hasBuildings && selectedBuildingId
+    ? mappedTargetRooms.filter((r) => String(r.building_id) === String(selectedBuildingId))
+    : mappedTargetRooms;
 
   const dest = !isTargetOpenArea && targetRoomId ? targetCenterRooms.find((r) => String(r.id) === String(targetRoomId)) : null;
   const destUsage = roomCapacityUsage(dest);
@@ -1991,7 +2053,19 @@ export function MoveFamilyModal({ open = false, movingFamily, selectedRoom, cent
           disabled={loadingTargetRooms || moving}
         >
           <option value="">Select destination center...</option>
-          {(centers?.features || []).filter((c) => (c.properties || c).is_active).map((feature) => {
+          {(centers?.features || [])
+            .filter((feature) => {
+              const c = feature.properties || feature;
+              if (!c.is_active) return false;
+              if (c.has_map === false || c.is_mapped === false) return false;
+              if (feature.geometry === null && !c.has_map && !c.is_mapped) return false;
+              const mode = resolveCenterStructureMode(c);
+              if (mode === 'buildings_and_rooms' && Array.isArray(c.buildings)) {
+                return c.buildings.some((b) => b.is_mapped !== false && (b.status || 'open') === 'open');
+              }
+              return true;
+            })
+            .map((feature) => {
             const c = feature.properties || feature;
             const cCap = Number(c.capacity || 0);
             const cAss = Number(c.assigned ?? c.total_assigned ?? c.occupied ?? 0);
@@ -2021,11 +2095,8 @@ export function MoveFamilyModal({ open = false, movingFamily, selectedRoom, cent
           >
             <option value="">All buildings...</option>
             {buildingList.map((b) => (
-              <option key={b.id} value={b.id}>{b.name || b.properties?.name}</option>
+              <option key={b.id ?? b.properties?.id} value={b.id ?? b.properties?.id}>{b.name || b.properties?.name}</option>
             ))}
-            {targetCenterRooms.some((r) => r.building_id == null) && (
-              <option value="unlinked">Unlinked rooms</option>
-            )}
           </select>
         </div>
       )}

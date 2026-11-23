@@ -300,6 +300,8 @@ def _center_metrics(center):
     structure_mode = getattr(center, "structure_mode", None) or "buildings_and_rooms"
     is_venue_or_private = structure_mode in ("open_area", "rooms_only")
     building_count = len(center_buildings)
+    mapped_building_count = 0 if is_venue_or_private else sum(1 for b in center_buildings if b.geom is not None)
+    unmapped_building_count = 0 if is_venue_or_private else sum(1 for b in center_buildings if b.geom is None)
     unmapped_room_count = 0 if is_venue_or_private else sum(1 for room in rooms if room.building_id is None)
     mapped_room_count = 0 if is_venue_or_private else sum(1 for room in rooms if room.building_id is not None)
 
@@ -340,6 +342,8 @@ def _center_metrics(center):
             or (not rooms and effective_capacity > 0 and total_assigned >= effective_capacity)
         ),
         "building_count": building_count,
+        "mapped_building_count": mapped_building_count,
+        "unmapped_building_count": unmapped_building_count,
         "buildings": [
             {
                 "id": b.id,
@@ -654,6 +658,8 @@ def _bulk_center_metrics(centers):
         center_buildings = buildings_by_center.get(cid, [])
         is_venue_or_private = structure_mode in ("open_area", "rooms_only")
         building_count = len(center_buildings)
+        mapped_building_count = 0 if is_venue_or_private else sum(1 for b in center_buildings if b.geom is not None)
+        unmapped_building_count = 0 if is_venue_or_private else sum(1 for b in center_buildings if b.geom is None)
         unmapped_room_count = 0 if is_venue_or_private else sum(1 for room in rooms if room.building_id is None)
         mapped_room_count = 0 if is_venue_or_private else sum(1 for room in rooms if room.building_id is not None)
 
@@ -704,6 +710,8 @@ def _bulk_center_metrics(centers):
                 or (not rooms and effective_capacity > 0 and total_assigned >= effective_capacity)
             ),
             "building_count": building_count,
+            "mapped_building_count": mapped_building_count,
+            "unmapped_building_count": unmapped_building_count,
             "buildings": [
                 {
                     "id": b.id,
@@ -1718,6 +1726,108 @@ def get_evacuation_center_details(center_id):
         }
         for row in assigned_families_query
     ]
+
+    # Include active on-site non-registered walk-in individuals and groups in this center
+    try:
+        rooms_by_id_map = {r.id: r for r in rooms}
+        walkin_rows = (
+            db.session.query(NonRegisteredEvacuee)
+            .join(EvacuationOperation, NonRegisteredEvacuee.operation_id == EvacuationOperation.id)
+            .filter(
+                NonRegisteredEvacuee.center_id == center_id,
+                NonRegisteredEvacuee.departed_at.is_(None),
+                EvacuationOperation.status == 'active',
+            )
+            .order_by(
+                NonRegisteredEvacuee.group_code,
+                NonRegisteredEvacuee.is_group_head.desc(),
+                NonRegisteredEvacuee.id.asc(),
+            )
+            .all()
+        )
+        walkin_groups = defaultdict(list)
+        for row in walkin_rows:
+            walkin_groups[str(row.group_code)].append(row)
+
+        for g_code, g_rows in walkin_groups.items():
+            head_row = next((r for r in g_rows if r.is_group_head), g_rows[0])
+            head_full_name = " ".join(
+                p for p in (head_row.first_name, head_row.middle_name, head_row.last_name) if p
+            ).strip()
+            is_indiv = len(g_rows) == 1
+            rm_obj = rooms_by_id_map.get(head_row.room_id) if head_row.room_id else None
+            bldg_obj = rm_obj.building if rm_obj else None
+            nre_members = []
+            group_flags = []
+            for r in g_rows:
+                r_name = " ".join(p for p in (r.first_name, r.middle_name, r.last_name) if p).strip()
+                r_age = int(r.age_years) if r.age_years is not None else None
+                r_flags = []
+                if r.is_pwd:
+                    r_flags.append("PWD")
+                if r_age is not None and r_age >= 60:
+                    r_flags.append("Senior")
+                if r_age is not None and r_age <= 2:
+                    r_flags.append("Infant")
+                if r.is_pregnant:
+                    r_flags.append("Pregnant")
+                if r.is_lactating:
+                    r_flags.append("Lactating")
+                if r.is_solo_parent:
+                    r_flags.append("Solo Parent")
+                if r.needs_assistance:
+                    r_flags.append("Needs Assistance")
+                if r.needs_medical:
+                    r_flags.append("Medical")
+                for fl in r_flags:
+                    if fl not in group_flags:
+                        group_flags.append(fl)
+                nre_members.append({
+                    "id": f"nre-person-{r.id}",
+                    "non_registered_id": r.id,
+                    "full_name": r_name,
+                    "name": r_name,
+                    "first_name": r.first_name,
+                    "middle_name": r.middle_name,
+                    "last_name": r.last_name,
+                    "gender": r.sex,
+                    "age": r_age,
+                    "is_head_of_family": bool(r.is_group_head),
+                    "relationship_to_head": "Individual (Walk-in)" if is_indiv else ("Group Head" if r.is_group_head else "Group Member"),
+                    "is_checked_in": True,
+                    "checked_in_at": to_utc_iso(r.arrived_at),
+                    "checkin_status": "Checked in",
+                    "special_needs": r_flags,
+                    "is_non_registered": True,
+                })
+            families_data.append({
+                "id": f"nre-{g_code}",
+                "family_id": None,
+                "group_code": g_code,
+                "family_code": "WALK-IN",
+                "is_non_registered": True,
+                "is_individual": is_indiv,
+                "head_name": head_full_name,
+                "household_head_name": head_full_name,
+                "member_count": len(g_rows),
+                "contact_number": head_row.contact_number,
+                "evacuation_status": "Non-registered",
+                "assignment_status": "Non-registered",
+                "is_assigned": True,
+                "room_id": head_row.room_id,
+                "room_number": rm_obj.room_number if rm_obj else None,
+                "floor": rm_obj.floor if rm_obj else None,
+                "building_id": rm_obj.building_id if rm_obj else None,
+                "building_name": (bldg_obj.name or f"Building #{bldg_obj.id}") if bldg_obj else None,
+                "assigned_members": len(g_rows),
+                "checked_in_members": len(g_rows),
+                "is_checked_in": True,
+                "checkin_status": "Checked in",
+                "special_needs": group_flags,
+                "members": nre_members,
+            })
+    except Exception:
+        db.session.rollback()
 
     return jsonify({
         **feature,
@@ -2783,11 +2893,22 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
         tot_assigned = center_assigned_totals.get(c.id, 0)
         tot_checked = center_checked_totals.get(c.id, 0)
         cap = int(c.capacity or 0)
+        c_mode = getattr(c, 'structure_mode', None) or 'buildings_and_rooms'
+        c_is_mapped = c.geom is not None
+        c_has_mapped_bldg = (
+            any(b.geom is not None and (b.status or 'open') == 'open' for b in (c.buildings or []))
+            if c_mode == 'buildings_and_rooms'
+            else True
+        )
         if is_historical and target_op:
             centers_summary.append({
                 "id": c.id,
                 "name": c.name,
                 "center_type": c.center_type or "campus",
+                "structure_mode": c_mode,
+                "is_mapped": c_is_mapped,
+                "has_map": c_is_mapped,
+                "has_mapped_building": c_has_mapped_bldg,
                 "capacity": cap,
                 "assigned": tot_assigned,
                 "checked_in": tot_checked,
@@ -2813,6 +2934,10 @@ def _get_checkin_dataset(center_id_param=None, search_query='', status_filter='a
                 "id": c.id,
                 "name": c.name,
                 "center_type": c.center_type or "campus",
+                "structure_mode": c_mode,
+                "is_mapped": c_is_mapped,
+                "has_map": c_is_mapped,
+                "has_mapped_building": c_has_mapped_bldg,
                 "capacity": cap,
                 "assigned": tot_assigned,
                 "checked_in": tot_checked,

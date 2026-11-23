@@ -1045,7 +1045,8 @@ function BarangayManager() {
                 className="bm-breadcrumb-link"
                 onClick={() => openCentersSection(null, null)}
               >
-                Evacuation Centers
+                <FontAwesomeIcon icon={faArrowLeft} className="bm-breadcrumb-icon" />
+                <span>Evacuation Centers</span>
               </button>
               <FontAwesomeIcon icon={faChevronRight} className="bm-breadcrumb-sep" />
               <button
@@ -1053,7 +1054,7 @@ function BarangayManager() {
                 className="bm-breadcrumb-link"
                 onClick={() => openCentersSection(activeCenter.id, null)}
               >
-                {activeCenter.name}
+                <span>{activeCenter.name}</span>
               </button>
               <FontAwesomeIcon icon={faChevronRight} className="bm-breadcrumb-sep" />
               <span className="bm-breadcrumb-current">{activeRoom.room_name}</span>
@@ -1352,7 +1353,8 @@ function BarangayManager() {
                 className="bm-breadcrumb-link"
                 onClick={() => openCentersSection(null, null)}
               >
-                Evacuation Centers
+                <FontAwesomeIcon icon={faArrowLeft} className="bm-breadcrumb-icon" />
+                <span>Evacuation Centers</span>
               </button>
               <FontAwesomeIcon icon={faChevronRight} className="bm-breadcrumb-sep" />
               <span className="bm-breadcrumb-current">{activeCenter.name}</span>
@@ -2629,12 +2631,15 @@ function BarangayManager() {
                     closeBarangay();
                   }}
                 >
-                  <ArrowLeft size={16} strokeWidth={2} aria-hidden="true" />
+                  <FontAwesomeIcon
+                    icon={faArrowLeft}
+                    className="bm-detail-breadcrumb-icon"
+                    aria-hidden="true"
+                  />
                   <span>Barangays</span>
                 </Link>
-                <ChevronRight
-                  size={15}
-                  strokeWidth={2}
+                <FontAwesomeIcon
+                  icon={faChevronRight}
                   className="bm-detail-breadcrumb-sep"
                   aria-hidden="true"
                 />

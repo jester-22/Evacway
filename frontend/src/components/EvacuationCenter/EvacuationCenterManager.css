@@ -3070,37 +3070,51 @@
 }
 
 .ecm-breadcrumb-nav {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
-  color: #475569;
+  color: #64748b;
 }
 
 .ecm-breadcrumb-link {
-  background: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
   border: none;
-  padding: 4px 8px;
-  margin-left: -8px;
-  border-radius: 8px;
-  color: #2563eb;
+  padding: 0;
+  margin: 0;
+  color: #64748b;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
+  font-family: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
   cursor: pointer;
-  transition: background-color 150ms ease;
+  transition: color 0.15s ease;
+}
+
+.ecm-breadcrumb-link span {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 .ecm-breadcrumb-link:hover {
-  background: #eff6ff;
+  background: transparent;
+  color: #1d4ed8;
 }
 
 .ecm-breadcrumb-sep {
-  font-size: 11px;
-  color: #94a3b8;
+  font-size: 10px;
+  color: #cbd5e1;
 }
 
 .ecm-breadcrumb-current {
+  font-size: 13px;
   font-weight: 600;
   color: #0f172a;
 }

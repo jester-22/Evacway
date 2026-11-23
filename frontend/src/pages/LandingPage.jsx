@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePublicOperationAlert, usePublicStatusSummary } from "../hooks/useEvacuationQueries";
-import { getLandingText, landingLocaleOptions } from "../locales/landing";
+import { getLandingText } from "../locales/landing";
 import { emergencyContacts } from "../config/emergencyContacts";
 import { formatManilaTime } from "../utils/dateTime";
 import "./LandingPage.css";
@@ -749,25 +749,7 @@ export default function LandingPage() {
     if (typeof window === "undefined" || isStandalone()) return null;
     return window.deferredPrompt || null;
   });
-  const [language, setLanguage] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem("evacway-landing-language");
-      return ["en", "fil", "ceb"].includes(saved) ? saved : "en";
-    } catch {
-      return "en";
-    }
-  });
-  const t = (key) => getLandingText(language, key);
-
-  const changeLanguage = (event) => {
-    const nextLanguage = event.target.value;
-    setLanguage(nextLanguage);
-    try {
-      window.localStorage.setItem("evacway-landing-language", nextLanguage);
-    } catch {
-      // Language selection still applies for this visit if storage is unavailable.
-    }
-  };
+  const t = (key) => getLandingText("en", key);
 
   const handleInstallClick = async () => {
     const promptEvent = deferredPrompt || (typeof window !== "undefined" ? window.deferredPrompt : null);
@@ -943,16 +925,6 @@ export default function LandingPage() {
               <a href="#ew-key-title">{t("nav.features")}</a>
               <a href="#ew-steps-title">{t("nav.howItWorks")}</a>
             </nav>
-            <label className="ew-language-control">
-              <span className="sr-only">{t("language.label")}</span>
-              <select value={language} onChange={changeLanguage} aria-label={t("language.label")}>
-                {landingLocaleOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {t(`language.${option.labelKey}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
             {deferredPrompt && (
               <button
                 type="button"

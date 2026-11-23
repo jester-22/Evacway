@@ -67,8 +67,14 @@ class NonRegisteredEvacueeTests(unittest.TestCase):
         self.staff = User(name='Fake Staff', email='staff@example.invalid', password_hash='fake-hash', role='lgu_personnel', is_active=True)
         kind = CenterType(code='fake-open-area', name='Fake Shelter Type', structure_mode='open_area')
         db.session.add_all([self.admin, self.staff, kind]); db.session.flush()
-        self.center = EvacuationCenter(name='Fake Test Shelter', capacity=4, center_type_id=kind.id,
-                                       evacuation_open_date=date.today(), evacuation_cutoff_date=date.today(), evacuation_status='open', is_active=True)
+        from geoalchemy2.shape import from_shape
+        from shapely.geometry import Polygon
+        self.center = EvacuationCenter(
+            name='Fake Test Shelter', capacity=4, center_type_id=kind.id,
+            evacuation_open_date=date.today(), evacuation_cutoff_date=date.today(),
+            evacuation_status='open', is_active=True,
+            geom=from_shape(Polygon([(124.98, 10.39), (124.99, 10.39), (124.99, 10.40), (124.98, 10.39)]), srid=4326),
+        )
         self.resident = Resident(first_name='Fakeresident', last_name='Testperson', gender='Female', date_of_birth=date(1990, 1, 1))
         db.session.add_all([self.center, self.resident]); db.session.flush()
         self.operation = EvacuationOperation(event_name='Fake Test Operation', open_date=date.today(), cutoff_date=date.today(), status='active')

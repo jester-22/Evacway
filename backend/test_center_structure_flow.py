@@ -57,10 +57,25 @@ class CenterStructureFlowTests(unittest.TestCase):
 
         @event.listens_for(db.engine, 'connect')
         def _register_sqlite_spatial_funcs(dbapi_connection, _connection_record):
-            dbapi_connection.create_function('AsEWKB', 1, lambda x: x)
-            dbapi_connection.create_function('GeomFromEWKT', 1, lambda x: x)
-            dbapi_connection.create_function('ST_AsEWKB', 1, lambda x: x)
-            dbapi_connection.create_function('ST_GeomFromEWKT', 1, lambda x: x)
+            from shapely import wkt as shapely_wkt
+
+            def _to_wkb_hex(val):
+                if not val:
+                    return val
+                if isinstance(val, (bytes, bytearray)):
+                    return bytes(val)
+                s = str(val)
+                if ';' in s:
+                    s = s.split(';', 1)[1]
+                try:
+                    return shapely_wkt.loads(s).wkb_hex
+                except Exception:
+                    return val
+
+            dbapi_connection.create_function('AsEWKB', 1, _to_wkb_hex)
+            dbapi_connection.create_function('GeomFromEWKT', 1, _to_wkb_hex)
+            dbapi_connection.create_function('ST_AsEWKB', 1, _to_wkb_hex)
+            dbapi_connection.create_function('ST_GeomFromEWKT', 1, _to_wkb_hex)
             dbapi_connection.create_function('ST_Distance', 2, lambda a, b: 0.0)
             dbapi_connection.create_function('ST_DWithin', 3, lambda a, b, d: False)
 
@@ -517,7 +532,13 @@ class CenterStructureFlowTests(unittest.TestCase):
         created = self.client.post(
             '/api/evacuation-centers',
             headers=self.headers,
-            json={'name': 'Plaza Court', 'center_type': 'single_venue', 'capacity': 5, 'barangay_ids': [1]},
+            json={
+                'name': 'Plaza Court',
+                'center_type': 'single_venue',
+                'capacity': 5,
+                'barangay_ids': [1],
+                'polygon': [[124.98, 10.39], [124.99, 10.39], [124.99, 10.40], [124.98, 10.39]],
+            },
         )
         self.assertEqual(created.status_code, 201, created.get_data(as_text=True))
         cid = created.get_json()['properties']['id']
@@ -610,7 +631,12 @@ class CenterStructureFlowTests(unittest.TestCase):
         created = self.client.post(
             '/api/evacuation-centers',
             headers=self.headers,
-            json={'name': 'Perez Residence', 'center_type': 'private_property', 'barangay_ids': [1]},
+            json={
+                'name': 'Perez Residence',
+                'center_type': 'private_property',
+                'barangay_ids': [1],
+                'polygon': [[124.98, 10.39], [124.99, 10.39], [124.99, 10.40], [124.98, 10.39]],
+            },
         )
         self.assertEqual(created.status_code, 201, created.get_data(as_text=True))
         cid = created.get_json()['properties']['id']
@@ -720,6 +746,82 @@ class CenterStructureFlowTests(unittest.TestCase):
         rules2 = self.client.get(f'/api/evacuation-centers/{cid}/allowed-center-types', headers=self.headers).get_json()
         self.assertFalse(rules2['private_property']['allowed'])
         self.assertFalse(rules2['single_venue']['allowed'])
+
+    def test_unmapped_center_and_building_block_assignments(self):
+        # 1. Create an unmapped campus center -> assignment must be blocked
+        unmapped_center = self.client.post(
+            '/api/evacuation-centers',
+            headers=self.headers,
+            json={'name': 'Unmapped School', 'center_type': 'campus', 'barangay_ids': [1]},
+        )
+        self.assertEqual(unmapped_center.status_code, 201)
+        cid = unmapped_center.get_json()['properties']['id']
+
+        bld_res = self.client.post(
+            f'/api/evacuation-centers/{cid}/buildings',
+            headers=self.headers,
+            json={'name': 'Unmapped Wing', 'floors': 1},
+        )
+        self.assertEqual(bld_res.status_code, 201)
+        bid = bld_res.get_json()['building']['id']
+
+        rm_res = self.client.post(
+            f'/api/evacuation-centers/{cid}/rooms',
+            headers=self.headers,
+            json={'room_number': '101', 'capacity': 25, 'building_id': bid, 'floor': 1},
+        )
+        self.assertEqual(rm_res.status_code, 201)
+        rid = rm_res.get_json()['room']['id']
+
+        fam1 = self._create_family('Unmapped Test Family', 3)
+
+        # Center is unmapped -> blocked
+        assign_unmapped_center = self.client.post(
+            f'/api/families/{fam1}/assign',
+            headers=self.headers,
+            json={'center_id': cid, 'room_id': rid},
+        )
+        self.assertEqual(assign_unmapped_center.status_code, 400)
+        self.assertIn('not mapped', assign_unmapped_center.get_json()['error'].lower())
+
+        # 2. Map the center polygon, but keep the building unmapped -> still blocked
+        map_center = self.client.put(
+            f'/api/evacuation-centers/{cid}',
+            headers=self.headers,
+            json={'polygon': [[124.980, 10.390], [124.990, 10.390], [124.990, 10.400], [124.980, 10.390]]},
+        )
+        self.assertEqual(map_center.status_code, 200)
+
+        assign_unmapped_building = self.client.post(
+            f'/api/families/{fam1}/assign',
+            headers=self.headers,
+            json={'center_id': cid, 'room_id': rid},
+        )
+        self.assertEqual(assign_unmapped_building.status_code, 400)
+        self.assertIn('not mapped', assign_unmapped_building.get_json()['error'].lower())
+
+        bulk_unmapped_building = self.client.post(
+            f'/api/rooms/{rid}/assign-families',
+            headers=self.headers,
+            json={'family_ids': [fam1]},
+        )
+        self.assertEqual(bulk_unmapped_building.status_code, 400)
+        self.assertIn('not mapped', bulk_unmapped_building.get_json()['error'].lower())
+
+        # 3. Map the building polygon inside the center -> assignment now succeeds
+        map_building = self.client.put(
+            f'/api/buildings/{bid}',
+            headers=self.headers,
+            json={'coordinates': [[124.982, 10.392], [124.985, 10.392], [124.985, 10.395], [124.982, 10.392]]},
+        )
+        self.assertEqual(map_building.status_code, 200)
+
+        assign_mapped = self.client.post(
+            f'/api/families/{fam1}/assign',
+            headers=self.headers,
+            json={'center_id': cid, 'room_id': rid},
+        )
+        self.assertEqual(assign_mapped.status_code, 200, assign_mapped.get_data(as_text=True))
 
 
 if __name__ == '__main__':

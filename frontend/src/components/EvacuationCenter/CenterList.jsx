@@ -552,6 +552,15 @@ export default function CenterList({
                   const assigned = Number(props.assigned || 0)
                   const arrived = Number(props.occupied || 0)
                   const statusMeta = getCenterStatusMeta(feature, props, arrived, assigned, cap)
+                  const isCampusCenter = resolveCenterStructureMode(props) === 'buildings_and_rooms'
+                  const unmappedBldgsCount = isCampusCenter
+                    ? Number(
+                        props.unmapped_building_count ??
+                          (Array.isArray(props.buildings)
+                            ? props.buildings.filter((b) => !b?.is_mapped).length
+                            : 0)
+                      )
+                    : 0
 
                   return (
                     <a
@@ -601,8 +610,14 @@ export default function CenterList({
                       </div>
 
                       {/* STATUS */}
-                      <div className="ec-cell-status" role="cell">
+                      <div className="ec-cell-status" role="cell" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                         <StatusPill variant={statusMeta.variant} label={statusMeta.label} />
+                        {statusMeta.mapped && unmappedBldgsCount > 0 && (
+                          <StatusPill
+                            variant="unmapped"
+                            label={`${unmappedBldgsCount} ${unmappedBldgsCount === 1 ? 'bldg unmapped' : 'bldgs unmapped'}`}
+                          />
+                        )}
                       </div>
 
                       {/* CHEVRON */}
@@ -639,6 +654,15 @@ export default function CenterList({
               const assigned = Number(props.assigned || 0)
               const arrived = Number(props.occupied || 0)
               const statusMeta = getCenterStatusMeta(feature, props, arrived, assigned, cap)
+              const isCampusCenter = resolveCenterStructureMode(props) === 'buildings_and_rooms'
+              const unmappedBldgsCount = isCampusCenter
+                ? Number(
+                    props.unmapped_building_count ??
+                      (Array.isArray(props.buildings)
+                        ? props.buildings.filter((b) => !b?.is_mapped).length
+                        : 0)
+                  )
+                : 0
 
               return (
                 <a
@@ -681,7 +705,15 @@ export default function CenterList({
                       )}
                       {brgyShown.length === 0 && <span className="ec-brgy-empty">—</span>}
                     </div>
-                    <StatusPill variant={statusMeta.variant} label={statusMeta.label} />
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <StatusPill variant={statusMeta.variant} label={statusMeta.label} />
+                      {statusMeta.mapped && unmappedBldgsCount > 0 && (
+                        <StatusPill
+                          variant="unmapped"
+                          label={`${unmappedBldgsCount} ${unmappedBldgsCount === 1 ? 'bldg unmapped' : 'bldgs unmapped'}`}
+                        />
+                      )}
+                    </div>
                   </div>
 
                   <div className="ec-center-card__occ">

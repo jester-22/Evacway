@@ -43,6 +43,7 @@
 .ec-breadcrumb {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
   color: #64748b;
@@ -57,34 +58,48 @@
   color: #64748b;
   font-size: 13px;
   font-weight: 500;
-  text-decoration: none;
+  font-family: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
   cursor: pointer;
-  padding: 3px 6px;
-  margin-left: -6px;
-  border-radius: 6px;
-  transition: all 0.15s ease;
+  padding: 0;
+  margin: 0;
+  transition: color 0.15s ease;
+}
+
+.ec-breadcrumb-link span {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 .ec-breadcrumb-link:hover {
-  background: #f1f5f9;
+  background: transparent;
+  color: #1d4ed8;
+}
+
+.ec-breadcrumb-link:hover .ec-breadcrumb-icon {
   color: #1d4ed8;
 }
 
 .ec-breadcrumb-icon {
   font-size: 12px;
   color: #94a3b8;
+  transition: color 0.15s ease;
 }
 
 .ec-breadcrumb-separator {
   color: #cbd5e1;
-  font-size: 14px;
+  font-size: 10px;
   user-select: none;
   line-height: 1;
 }
 
 .ec-breadcrumb-current {
+  font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: #0f172a;
 }
 
 .ec-title-row {

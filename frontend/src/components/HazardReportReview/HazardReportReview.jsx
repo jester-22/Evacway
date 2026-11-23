@@ -1044,11 +1044,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
         <div className="hr-top-section hr-top-redesigned">
           <header className="hr-top-header-v2">
             <div className="hr-header-titles-v2">
-              <span className="hr-command-chip">
-                <span className="hr-command-chip-dot" aria-hidden="true" />
-                <span>Incident command feed</span>
-              </span>
-              <h1 className="hr-main-title-v2">Hazard Reports &amp; Road Dispatch</h1>
+              <h1 className="hr-main-title-v2">Hazard Reports</h1>
               <p className="hr-subtitle-v2">
                 Verify citizen-submitted road hazards, monitor 100m impact zones, and control dynamic route closures.
               </p>

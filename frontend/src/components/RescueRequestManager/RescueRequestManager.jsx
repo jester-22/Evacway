@@ -734,10 +734,6 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
       <div className="rq-top-section">
         <header className="rq-header">
           <div className="rq-header-titles">
-            <span className="rq-label-chip">
-              <span className="rq-label-chip-dot" aria-hidden="true" />
-              <span>Emergency operations · Dispatch center</span>
-            </span>
             <h1 className="rq-title">Rescue Alerts</h1>
             <p className="rq-subtitle">
               Review and respond to emergency rescue requests from residents in real-time.

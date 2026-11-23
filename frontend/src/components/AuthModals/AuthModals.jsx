@@ -17,19 +17,20 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
+import {
+  evaluatePasswordRules,
+  getLocalMinDobIso,
+  getLocalYesterdayIso,
+  sanitizeNameInput,
+  sanitizePhoneInput,
+  validateContactNumber,
+  validateEmail,
+  validatePassword,
+  validatePastBirthdate,
+  validatePersonName,
+} from "../../utils/formValidation";
 import PublicMapDialogShell from "../PublicMapDialogShell/PublicMapDialogShell";
 import "./AuthModals.css";
-
-const NAME_REGEX = /^[a-zA-Z\u00C0-\u024FñÑ\s'.-]+$/;
-
-function getLocalYesterdayIso() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 const FIELD_ORDER = [
   "first_name",
@@ -48,42 +49,16 @@ function validateField(name, currentValues) {
   const val = (currentValues[name] || "").trim();
   switch (name) {
     case "first_name":
-      if (!val) return "First name is required.";
-      if (val.length < 2 || val.length > 50) return "First name must be between 2 and 50 characters.";
-      if (!NAME_REGEX.test(val)) {
-        return "First name can only contain letters, spaces, hyphens, apostrophes, and periods.";
-      }
-      return "";
+      return validatePersonName(val, { label: "First name", required: true, min: 2, max: 50 });
 
     case "middle_name":
-      if (!val) return "";
-      if (val.length < 2 || val.length > 50) return "Middle name must be between 2 and 50 characters.";
-      if (!NAME_REGEX.test(val)) {
-        return "Middle name can only contain letters, spaces, hyphens, apostrophes, and periods.";
-      }
-      return "";
+      return validatePersonName(val, { label: "Middle name", required: false, min: 2, max: 50 });
 
     case "last_name":
-      if (!val) return "Last name is required.";
-      if (val.length < 2 || val.length > 50) return "Last name must be between 2 and 50 characters.";
-      if (!NAME_REGEX.test(val)) {
-        return "Last name can only contain letters, spaces, hyphens, apostrophes, and periods.";
-      }
-      return "";
+      return validatePersonName(val, { label: "Last name", required: true, min: 2, max: 50 });
 
-    case "birthdate": {
-      if (!val) return "Birthdate is required.";
-      const dateObj = new Date(val + "T00:00:00");
-      if (isNaN(dateObj.getTime())) return "Enter a valid date.";
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (dateObj >= today) return "Birthdate must be a past date.";
-      const minDate = new Date();
-      minDate.setFullYear(minDate.getFullYear() - 120);
-      minDate.setHours(0, 0, 0, 0);
-      if (dateObj < minDate) return "Birthdate cannot be more than 120 years ago.";
-      return "";
-    }
+    case "birthdate":
+      return validatePastBirthdate(val, { label: "Birthdate", required: true });
 
     case "barangay":
       if (!val) return "Select your barangay.";
@@ -94,30 +69,14 @@ function validateField(name, currentValues) {
       if (val.length < 3 || val.length > 100) return "Address must be between 3 and 100 characters.";
       return "";
 
-    case "contact_number": {
-      if (!val) return "Contact number is required.";
-      const clean = val.replace(/[\s-]/g, "");
-      if (!/^(09\d{9}|\+639\d{9})$/.test(clean)) {
-        return "Enter a valid Philippine mobile number (e.g. 09XX XXX XXXX or +639XX XXX XXXX).";
-      }
-      return "";
-    }
+    case "contact_number":
+      return validateContactNumber(val, { required: true, label: "Contact number" });
 
-    case "email": {
-      if (!val) return "Email is required.";
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-      if (!emailRegex.test(val)) return "Enter a valid email address.";
-      return "";
-    }
+    case "email":
+      return validateEmail(val, { label: "Email", required: true });
 
-    case "password": {
-      const pwd = currentValues.password || "";
-      if (!pwd) return "Password is required.";
-      if (pwd.length < 8) return "Password must be at least 8 characters.";
-      if (!/[a-zA-Z]/.test(pwd)) return "Password must include at least one letter.";
-      if (!/[0-9]/.test(pwd)) return "Password must include at least one number.";
-      return "";
-    }
+    case "password":
+      return validatePassword(currentValues.password || "");
 
     case "confirm_password": {
       const cpwd = currentValues.confirm_password || "";
@@ -240,7 +199,13 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin, 
   }
 
   function updateField(event) {
-    const { name, value } = event.target;
+    const { name, value: rawValue } = event.target;
+    const value =
+      name === "first_name" || name === "middle_name" || name === "last_name"
+        ? sanitizeNameInput(rawValue)
+        : name === "contact_number"
+          ? sanitizePhoneInput(rawValue)
+          : rawValue;
     const nextValues = { ...values, [name]: value };
     setValues(nextValues);
     setFormError("");
@@ -351,12 +316,7 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin, 
   const pwdVal = values.password || "";
   const cpwdVal = values.confirm_password || "";
 
-  const passwordRules = {
-    minLen: pwdVal.length >= 8,
-    letter: /[a-zA-Z]/.test(pwdVal),
-    number: /[0-9]/.test(pwdVal),
-    match: Boolean(pwdVal) && pwdVal === cpwdVal,
-  };
+  const passwordRules = evaluatePasswordRules(pwdVal, cpwdVal);
 
   const showPasswordGuide =
     passwordFocused ||
@@ -437,6 +397,7 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin, 
             onBlur={() => handleBlur(name)}
             ref={(el) => { fieldRefs.current[name] = el; }}
             autoComplete={options.autoComplete}
+            min={type === "date" ? getLocalMinDobIso() : undefined}
             max={type === "date" ? getLocalYesterdayIso() : undefined}
             aria-invalid={isInvalid ? "true" : "false"}
             aria-describedby={describedBy}
@@ -581,17 +542,30 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin, 
                         At least 8 characters
                       </span>
                     </li>
-                    <li className={`ew-guide-item ${passwordRules.letter ? "is-met" : ""}`}>
+                    <li className={`ew-guide-item ${passwordRules.upper ? "is-met" : ""}`}>
                       <span className="ew-guide-bullet" aria-hidden="true">
-                        {passwordRules.letter ? (
+                        {passwordRules.upper ? (
                           <FontAwesomeIcon icon={faCheck} className="ew-guide-icon-check" />
                         ) : (
                           <span className="ew-guide-dot" />
                         )}
                       </span>
                       <span>
-                        <span className="sr-only">{passwordRules.letter ? "Rule met: " : "Requirement: "}</span>
-                        At least one letter (A to Z)
+                        <span className="sr-only">{passwordRules.upper ? "Rule met: " : "Requirement: "}</span>
+                        At least one uppercase letter (A to Z)
+                      </span>
+                    </li>
+                    <li className={`ew-guide-item ${passwordRules.lower ? "is-met" : ""}`}>
+                      <span className="ew-guide-bullet" aria-hidden="true">
+                        {passwordRules.lower ? (
+                          <FontAwesomeIcon icon={faCheck} className="ew-guide-icon-check" />
+                        ) : (
+                          <span className="ew-guide-dot" />
+                        )}
+                      </span>
+                      <span>
+                        <span className="sr-only">{passwordRules.lower ? "Rule met: " : "Requirement: "}</span>
+                        At least one lowercase letter (a to z)
                       </span>
                     </li>
                     <li className={`ew-guide-item ${passwordRules.number ? "is-met" : ""}`}>
@@ -605,6 +579,19 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin, 
                       <span>
                         <span className="sr-only">{passwordRules.number ? "Rule met: " : "Requirement: "}</span>
                         At least one number (0 to 9)
+                      </span>
+                    </li>
+                    <li className={`ew-guide-item ${passwordRules.special ? "is-met" : ""}`}>
+                      <span className="ew-guide-bullet" aria-hidden="true">
+                        {passwordRules.special ? (
+                          <FontAwesomeIcon icon={faCheck} className="ew-guide-icon-check" />
+                        ) : (
+                          <span className="ew-guide-dot" />
+                        )}
+                      </span>
+                      <span>
+                        <span className="sr-only">{passwordRules.special ? "Rule met: " : "Requirement: "}</span>
+                        At least one special character (!@#$%...)
                       </span>
                     </li>
                     <li className={`ew-guide-item ${passwordRules.match ? "is-met" : ""}`}>

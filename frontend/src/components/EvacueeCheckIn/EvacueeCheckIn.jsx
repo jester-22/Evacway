@@ -1202,7 +1202,11 @@ export default function EvacueeCheckIn() {
             label="Non-registered"
             value={nonRegisteredQuery.data?.summary?.people ?? "—"}
             showProgress={false}
-            helper={`${nonRegisteredQuery.data?.summary?.groups ?? 0} groups · ${nonRegisteredQuery.data?.summary?.present ?? 0} on-site`}
+            helper={`${nonRegisteredQuery.data?.summary?.present ?? 0} on-site · ${Math.max(
+              0,
+              Number(nonRegisteredQuery.data?.summary?.people || 0) -
+                Number(nonRegisteredQuery.data?.summary?.present || 0)
+            )} departed`}
             active={activeUrlFilter === "non-registered"}
             onClick={() => handleFilterChipChange("non-registered")}
           />
@@ -1817,8 +1821,7 @@ export default function EvacueeCheckIn() {
           status={nonRegisteredStatus} setStatus={setNonRegisteredStatus} page={nonRegisteredPage} setPage={setNonRegisteredPage}
           canEdit={canAddNonRegistered} isAdmin={isAdmin} onChanged={refreshArrivals}
           onEdit={(person, group) => setNonRegisteredModal({ kind: 'edit', person, group })}
-          onMember={(group) => setNonRegisteredModal({ kind: 'member', group })}
-          onAdd={() => setNonRegisteredModal({ kind: 'choose' })} addDisabled={!canAddNonRegistered} />}
+          onAdd={() => setNonRegisteredModal({ kind: 'create' })} addDisabled={!canAddNonRegistered} />}
       </section>
 
       {/* Member Checklist Modal (For Partial / Individual Arrival) */}

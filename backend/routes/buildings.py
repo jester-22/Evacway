@@ -764,19 +764,20 @@ def get_building_details(building_id):
     full_room_count = 0
     total_occupied = 0
 
+    usage_by_room = EvacuationCenterRoom.bulk_capacity_usage(rooms)
+
     for r in rooms:
         r_assignments = assignments_by_room.get(r.id, [])
+        r_usage = usage_by_room.get(r.id) or r.capacity_usage()
         r_family_slots = int(r.family_slots or 0)
         r_people_spaces = int(r.people_spaces or 0)
-        r_used_spaces = len({a.resident_id for a in r_assignments})
-        household_keys = set()
-        for assignment in r_assignments:
-            resident = residents_by_id.get(assignment.resident_id)
-            household_keys.add(('family', resident.family_id) if resident and resident.family_id is not None else ('resident', assignment.resident_id))
-        r_used_slots = len(household_keys)
-        r_is_full = r_used_slots >= r_family_slots or r_used_spaces >= r_people_spaces
-        r_over_capacity = r_used_slots > r_family_slots or r_used_spaces > r_people_spaces
-        r_occupied = sum(1 for a in r_assignments if a.checked_in_at is not None)
+        r_used_slots = int(r_usage['used_slots'])
+        r_used_spaces = int(r_usage['used_spaces'])
+        r_is_full = bool(r_usage['is_full'])
+        r_over_capacity = bool(r_usage['is_over_capacity'])
+        reg_used_spaces = len({a.resident_id for a in r_assignments})
+        walkin_spaces = max(0, r_used_spaces - reg_used_spaces)
+        r_occupied = sum(1 for a in r_assignments if a.checked_in_at is not None) + walkin_spaces
         total_family_slots += r_family_slots
         total_people_spaces += r_people_spaces
         total_used_slots += r_used_slots

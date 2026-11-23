@@ -138,6 +138,13 @@ def create_group():
     center = db.session.get(EvacuationCenter, center_id)
     if not center or not center.is_active or center.evacuation_status in ('closed', 'concluded'):
         raise InvalidInput({'center_id': 'Select an open, active shelter.'})
+    if center.geom is None:
+        raise InvalidInput({'center_id': 'This shelter is not mapped yet. Place the shelter on the map before assigning evacuees.'})
+    structure_mode = getattr(center, 'structure_mode', None) or 'buildings_and_rooms'
+    if structure_mode == 'buildings_and_rooms' and not any(
+        b.geom is not None and (b.status or 'open') == 'open' for b in (center.buildings or [])
+    ):
+        raise InvalidInput({'center_id': 'This shelter has no mapped buildings yet. Place at least one open building on the map first.'})
     operation = operation_for(data.get('operation_id'), center_id, writable=True)
     people = data.get('people')
     if not isinstance(people, list) or not 1 <= len(people) <= 30:
@@ -155,10 +162,18 @@ def create_group():
         room = EvacuationCenterRoom.query.filter_by(id=room_id, evacuation_center_id=center_id, is_active=True).with_for_update().first()
         if room is None:
             raise InvalidInput({'room_id': 'Choose an active room in the selected shelter.'})
-        if room.building is not None and room.building.status != 'open':
+        if structure_mode == 'buildings_and_rooms':
+            if room.building is None:
+                raise InvalidInput({'room_id': 'Choose a room that belongs to a mapped building.'})
+            if room.building.status != 'open':
+                raise InvalidInput({'room_id': 'Choose a room in an open building.'})
+            if room.building.geom is None:
+                raise InvalidInput({'room_id': 'This room’s building is not mapped yet. Choose a room in a mapped building.'})
+        elif room.building is not None and room.building.status != 'open':
             raise InvalidInput({'room_id': 'Choose a room in an open building.'})
         usage = room.capacity_usage()
-        if usage['available_slots'] < 1:
+        needed_slots = 1 if len(validated) > 1 else 0
+        if usage['available_slots'] < needed_slots:
             raise InvalidInput({'room_id': 'This room has no available family slots. Choose another room.'})
         if usage['available_spaces'] < len(validated):
             raise InvalidInput({'room_id': f"This room has only {usage['available_spaces']} people spaces left; {len(validated)} are needed."})
@@ -249,6 +264,9 @@ def add_member(code):
         if room.building is not None and room.building.status != 'open':
             raise InvalidInput({'room_id': 'The assigned room is in a building that is closed or under repair.'})
         usage = room.capacity_usage()
+        present_in_room = sum(1 for row in rows if row.room_id == head.room_id and row.departed_at is None)
+        if present_in_room == 1 and usage['available_slots'] < 1:
+            raise InvalidInput({'room_id': 'Adding a member turns this individual arrival into a family, and this room has no available family slots.'})
         if usage['available_spaces'] < 1:
             raise InvalidInput({'room_id': 'This room has no remaining people spaces. Move the group or choose another room before adding a member.'})
     person = NonRegisteredEvacuee(**values, group_code=head.group_code, is_group_head=False,
@@ -273,11 +291,12 @@ def change_departure(rows, data):
             if room.building is not None and room.building.status != 'open':
                 raise InvalidInput({'room_id': 'The assigned room is in a building that is closed or under repair.'})
             usage = room.capacity_usage()
-            group_already_present = any(
-                row.room_id == room_id and row.departed_at is None
-                for row in NonRegisteredEvacuee.query.filter_by(group_code=rows[0].group_code).all()
-            )
-            needed_slots = 0 if group_already_present else 1
+            all_group_rows = NonRegisteredEvacuee.query.filter_by(group_code=rows[0].group_code).all()
+            present_before = sum(1 for row in all_group_rows if row.room_id == room_id and row.departed_at is None)
+            present_after = present_before + len(returning)
+            slots_before = 1 if present_before > 1 else 0
+            slots_after = 1 if present_after > 1 else 0
+            needed_slots = max(0, slots_after - slots_before)
             if usage['available_slots'] < needed_slots:
                 raise InvalidInput({'room_id': 'This room has no available family slots. Choose another room before restoring this arrival.'})
             if usage['available_spaces'] < len(returning):

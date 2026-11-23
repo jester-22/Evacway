@@ -173,11 +173,14 @@ def _validate_registration(data):
     if not (
         isinstance(password, str)
         and len(password) >= 8
-        and re.search(r'[a-zA-Z]', password)
+        and re.search(r'[A-Z]', password)
+        and re.search(r'[a-z]', password)
         and re.search(r'[0-9]', password)
+        and re.search(r'[^A-Za-z0-9\s]', password)
     ):
         return None, (
-            'Password must be at least 8 characters, with at least one letter and one number.'
+            'Password must have at least 8 characters, including an uppercase letter, '
+            'a lowercase letter, a number, and a special character.'
         )
 
     return {

@@ -26,6 +26,7 @@ const DEFAULT_AUTH_CONTEXT = {
   loginStaff: async () => null,
   completeStaffLogin: () => null,
   logout: () => {},
+  clearSession: () => {},
   updateUser: () => {},
 };
 
@@ -102,11 +103,15 @@ export function AuthProvider({ children }) {
     return saveLoginSession(response);
   }
 
-  function logout() {
+  function clearSession() {
     queryClient.clear();
     localStorage.removeItem("evacway_token");
     localStorage.removeItem("evacway_user");
     setUser(null);
+  }
+
+  function logout() {
+    clearSession();
     navigate("/", { replace: true });
   }
 
@@ -116,7 +121,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loginResident, loginStaff, completeStaffLogin, logout, updateUser }}>
+    <AuthContext.Provider value={{ user, loginResident, loginStaff, completeStaffLogin, logout, clearSession, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

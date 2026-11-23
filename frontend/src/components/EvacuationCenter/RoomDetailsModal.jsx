@@ -336,7 +336,23 @@ export default function RoomDetailsModal({
                     >
                       <div className="admin-map-family-top">
                         <strong className="admin-map-family-name">{headName}</strong>
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                          {fam.is_non_registered && (
+                            <span
+                              style={{
+                                padding: "2px 7px",
+                                borderRadius: "999px",
+                                fontSize: "10px",
+                                fontWeight: 700,
+                                backgroundColor: "#eff6ff",
+                                color: "#1d4ed8",
+                                border: "1px solid #bfdbfe",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {fam.is_individual ? "Non-registered · Individual" : "Non-registered"}
+                            </span>
+                          )}
                           <span
                             style={{
                               padding: "2px 7px",

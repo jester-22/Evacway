@@ -1,11 +1,11 @@
 import { Link } from 'react-router-dom'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
-import { faBuildingColumns, faChevronRight } from '@fortawesome/free-solid-svg-icons'
+import { faArrowLeft, faChevronRight } from '@fortawesome/free-solid-svg-icons'
 import './ui.css'
 
 export default function Breadcrumb({
   items = [],
-  icon = faBuildingColumns,
+  icon = faArrowLeft,
   ariaLabel = 'Breadcrumb',
   className = '',
 }) {

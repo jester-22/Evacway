@@ -775,23 +775,24 @@
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
   line-height: 1.4;
-  color: var(--muted);
+  color: #64748b;
 }
 
 .ui-breadcrumb__icon {
   font-size: 12px;
-  color: var(--muted);
+  color: #94a3b8;
   flex-shrink: 0;
+  transition: color 0.15s ease;
 }
 
 .ui-breadcrumb__list {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -800,12 +801,12 @@
 .ui-breadcrumb__item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .ui-breadcrumb__sep {
   font-size: 10px;
-  color: var(--neutral-dot);
+  color: #cbd5e1;
   flex-shrink: 0;
 }
 
@@ -814,21 +815,32 @@
   align-items: center;
   gap: 6px;
   padding: 0;
+  margin: 0;
   border: none;
   background: transparent;
-  color: var(--muted);
+  color: #64748b;
   font: inherit;
   font-size: 13px;
   font-weight: 500;
-  text-decoration: none;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
   cursor: pointer;
-  transition: color 150ms ease;
+  transition: color 0.15s ease;
+}
+
+.ui-breadcrumb__link span {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 .ui-breadcrumb__link:hover {
-  color: var(--primary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  color: #1d4ed8;
+}
+
+.ui-breadcrumb__link:hover .ui-breadcrumb__icon {
+  color: #1d4ed8;
 }
 
 .ui-breadcrumb__link:focus-visible {
@@ -840,7 +852,7 @@
 .ui-breadcrumb__current {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text);
+  color: #0f172a;
 }
 
 /* --------------------------------------------------

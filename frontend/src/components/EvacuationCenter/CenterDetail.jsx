@@ -361,6 +361,33 @@ export function CenterHeader({
   const structureMode = resolveCenterStructureMode(center)
   const isSingleVenue = structureMode === 'open_area'
   const canAddRoom = !isSingleVenue
+  const buildingRecords =
+    Array.isArray(buildings) && buildings.length > 0
+      ? buildings
+      : Array.isArray(center?.buildings)
+        ? center.buildings
+        : []
+  const unmappedBuildingsCount =
+    structureMode === 'buildings_and_rooms'
+      ? buildingRecords.length > 0
+        ? buildingRecords.filter(
+            (b) => !Boolean(b?.is_mapped || b?.properties?.is_mapped)
+          ).length
+        : Number(center?.unmapped_building_count || 0)
+      : 0
+  const hasMappedBuilding =
+    structureMode !== 'buildings_and_rooms' ||
+    buildingRecords.some(
+      (b) =>
+        Boolean(b?.is_mapped || b?.properties?.is_mapped) &&
+        (b?.status || b?.properties?.status || 'open') === 'open'
+    )
+  const canAssignHousehold = isMapped && hasMappedBuilding
+  const assignDisabledReason = !isMapped
+    ? 'Place this evacuation center on the map before assigning families.'
+    : !hasMappedBuilding
+      ? 'Place at least one open building on the map before assigning families.'
+      : undefined
 
   const kebabItems = []
   if (canAddRoom && onAddRooms) {
@@ -412,6 +439,12 @@ export function CenterHeader({
             <div className="ec-title-line">
               <h1 className="ec-detail-title">{name}</h1>
               <HeaderStatusPill status={status} />
+              {isMapped && unmappedBuildingsCount > 0 && (
+                <StatusPill
+                  variant="unmapped"
+                  label={`${unmappedBuildingsCount} bldg${unmappedBuildingsCount > 1 ? 's' : ''} unmapped`}
+                />
+              )}
             </div>
 
             <div className="ec-title-meta-line">
@@ -460,6 +493,8 @@ export function CenterHeader({
               type="button"
               className="ec-btn-primary-action"
               onClick={onAssignHousehold}
+              disabled={!canAssignHousehold}
+              title={assignDisabledReason}
             >
               <FontAwesomeIcon icon={faPlus} />
               <span>Assign Family</span>
@@ -756,6 +791,11 @@ export function OverviewTab({
             ...center,
             room_count: center?.room_count ?? center?.total_rooms ?? rooms.length,
             building_count: center?.building_count ?? buildings.length,
+            buildings: buildings.length > 0 ? buildings : center?.buildings,
+            unmapped_building_count:
+              buildings.length > 0
+                ? buildings.filter((b) => !b?.is_mapped).length
+                : center?.unmapped_building_count,
           }}
           onPlaceOnMap={onPlaceOnMap}
           onAddRooms={onAddRooms}
@@ -897,12 +937,26 @@ export function RoomDetailPage({
 }) {
   const [familyToView, setFamilyToView] = useState(null)
 
-  const familiesAssigned = families.length
-  const familiesArrived = families.filter((family) => Boolean(family?.is_checked_in)).length
+  const registeredFamilies = families.filter((family) => !family?.is_non_registered)
+  const walkInOccupants = families.filter((family) => Boolean(family?.is_non_registered))
+  const walkInFamilies = walkInOccupants.filter(
+    (family) => !family?.is_individual && Number(family?.member_count || family?.family_members || 1) > 1
+  )
+  const walkInIndividuals = walkInOccupants.filter(
+    (family) => family?.is_individual || Number(family?.member_count || family?.family_members || 1) === 1
+  )
+  const familiesAssigned = registeredFamilies.length + walkInFamilies.length
+  const familiesArrived =
+    registeredFamilies.filter((family) => Boolean(family?.is_checked_in)).length + walkInFamilies.length
   const memberCounts = families.map((family) =>
     Number(family?.member_count || family?.family_members || family?.assigned_members || 1)
   )
   const totalMembers = memberCounts.reduce((sum, count) => sum + count, 0)
+  const registeredMemberCount = registeredFamilies.reduce(
+    (sum, family) => sum + Number(family?.member_count || family?.family_members || family?.assigned_members || 1),
+    0
+  )
+  const walkInMemberCount = totalMembers - registeredMemberCount
 
   const familySlots = Math.max(1, Number(room?.family_slots ?? 5))
   const peopleSpaces = Math.max(1, Number(room?.people_spaces ?? room?.capacity ?? 25))
@@ -934,6 +988,40 @@ export function RoomDetailPage({
   const resolvedBuildingName = buildingName || building?.name || ''
   const resolvedFloorLabel = formatFloorLabel(room?.floor ?? (hasBuilding ? 1 : null))
   const subtitleParts = [resolvedBuildingName || 'Unassigned building', resolvedFloorLabel].filter(Boolean)
+
+  const centerStructureMode = resolveCenterStructureMode(center)
+  const isCenterMappedFlag =
+    room?.center_is_mapped != null
+      ? Boolean(room.center_is_mapped)
+      : center
+        ? Boolean(
+            isCenterMapped(center) ||
+              center?.has_map ||
+              center?.is_mapped ||
+              (center?.latitude != null && center?.longitude != null) ||
+              (center?.lat != null && center?.lng != null)
+          )
+        : true
+  const isBuildingMappedFlag =
+    centerStructureMode !== 'buildings_and_rooms'
+      ? true
+      : building?.is_mapped != null
+        ? Boolean(building.is_mapped)
+        : room?.building_is_mapped != null
+          ? Boolean(room.building_is_mapped)
+          : true
+  const isBuildingOpenFlag =
+    centerStructureMode !== 'buildings_and_rooms'
+      ? true
+      : (building?.status || room?.building_status || 'open') === 'open'
+  const isRoomAssignable = !isInactive && isCenterMappedFlag && isBuildingMappedFlag && isBuildingOpenFlag
+  const unmappedAssignReason = !isCenterMappedFlag
+    ? 'This evacuation center is not mapped yet. Place the center on the map before assigning families.'
+    : !isBuildingMappedFlag
+      ? `${resolvedBuildingName || 'This building'} is not mapped yet. Place the building on the map before assigning families to its rooms.`
+      : !isBuildingOpenFlag
+        ? `${resolvedBuildingName || 'This building'} is currently not open for assignments.`
+        : null
 
   const breadcrumbItems = [
     {
@@ -972,25 +1060,38 @@ export function RoomDetailPage({
         ? 'No spaces left'
         : `${spacesLeft} ${spacesLeft === 1 ? 'space' : 'spaces'} still free`
 
+  const walkInIndivNote =
+    walkInIndividuals.length > 0
+      ? ` · ${walkInIndividuals.length} walk-in ${walkInIndividuals.length === 1 ? 'individual' : 'individuals'} on-site`
+      : ''
+
   const arrivedFooter =
     familiesAssigned === 0
-      ? 'No families assigned yet'
+      ? walkInIndividuals.length > 0
+        ? `${walkInIndividuals.length} walk-in ${walkInIndividuals.length === 1 ? 'individual' : 'individuals'} arrived`
+        : 'No families assigned yet'
       : familiesArrived === 0
-        ? 'Nobody checked in yet'
+        ? walkInIndividuals.length > 0
+          ? `0 families · ${walkInIndividuals.length} walk-in ${walkInIndividuals.length === 1 ? 'individual' : 'individuals'} arrived`
+          : 'Nobody checked in yet'
         : familiesArrived >= familiesAssigned
-          ? 'All families checked in'
-          : `${familiesAssigned - familiesArrived} not yet arrived`
+          ? `All families checked in${walkInIndivNote}`
+          : `${familiesAssigned - familiesArrived} not yet arrived${walkInIndivNote}`
 
   const assignedMembersFooter =
-    familiesAssigned === 0
+    totalMembers === 0
       ? 'No families assigned yet'
-      : familiesAssigned === 1
-        ? 'Across 1 family'
-        : familiesAssigned === 2
-          ? `${memberCounts[0]} + ${memberCounts[1]} across both families`
-          : familiesAssigned <= 4
-            ? `${memberCounts.join(' + ')} across ${familiesAssigned} families`
-            : `Across ${familiesAssigned} families`
+      : walkInMemberCount > 0 && registeredFamilies.length > 0
+        ? `${registeredMemberCount} assigned (${registeredFamilies.length} ${registeredFamilies.length === 1 ? 'family' : 'families'}) + ${walkInMemberCount} non-registered`
+        : walkInMemberCount > 0
+          ? `${walkInMemberCount} non-registered ${walkInMemberCount === 1 ? 'occupant' : 'occupants'}`
+          : familiesAssigned === 1
+            ? 'Across 1 family'
+            : familiesAssigned === 2
+              ? `${memberCounts[0]} + ${memberCounts[1]} across both families`
+              : familiesAssigned <= 4
+                ? `${memberCounts.join(' + ')} across ${familiesAssigned} families`
+                : `Across ${familiesAssigned} families`
 
   let fullCapacityNote = null
   if (isFull && !isInactive) {
@@ -1054,7 +1155,12 @@ export function RoomDetailPage({
             </Button>
           )}
           {onAddHousehold && (
-            <Button variant="primary" onClick={onAddHousehold}>
+            <Button
+              variant="primary"
+              onClick={onAddHousehold}
+              disabled={!isRoomAssignable}
+              title={unmappedAssignReason || undefined}
+            >
               <FontAwesomeIcon icon={faPlus} size="xs" aria-hidden="true" />
               <span>Add family</span>
             </Button>
@@ -1104,14 +1210,14 @@ export function RoomDetailPage({
         />
       </section>
 
-      {fullCapacityNote && (
+      {(unmappedAssignReason || fullCapacityNote) && (
         <div className="ec-room-cap-note" role="status">
           <FontAwesomeIcon
             icon={faTriangleExclamation}
             className="ec-room-cap-note-icon"
             aria-hidden="true"
           />
-          <span>{fullCapacityNote}</span>
+          <span>{unmappedAssignReason || fullCapacityNote}</span>
         </div>
       )}
 
@@ -1150,9 +1256,16 @@ export function RoomDetailPage({
                 <FontAwesomeIcon icon={faPeopleGroup} />
               </span>
               <h3>No families assigned yet</h3>
-              <p>Add a family to begin managing who is assigned to {roomTitle}.</p>
+              <p>
+                {unmappedAssignReason || `Add a family to begin managing who is assigned to ${roomTitle}.`}
+              </p>
               {onAddHousehold && (
-                <Button variant="primary" onClick={onAddHousehold}>
+                <Button
+                  variant="primary"
+                  onClick={onAddHousehold}
+                  disabled={!isRoomAssignable}
+                  title={unmappedAssignReason || undefined}
+                >
                   <FontAwesomeIcon icon={faPlus} size="xs" aria-hidden="true" />
                   <span>Add family</span>
                 </Button>
@@ -1174,6 +1287,8 @@ export function RoomDetailPage({
                   family.member_count || family.family_members || family.assigned_members || 1
                 )
                 const arrived = Boolean(family.is_checked_in)
+                const isNonReg = Boolean(family.is_non_registered)
+                const isIndivWalkIn = isNonReg && (family.is_individual || members === 1)
 
                 return (
                   <div key={id} className="ec-room-family-row" role="listitem">
@@ -1192,6 +1307,14 @@ export function RoomDetailPage({
                           <span>
                             {members} {members === 1 ? 'member' : 'members'}
                           </span>
+                          {isNonReg && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="ec-room-arrival-pill">
+                                Non-registered
+                              </span>
+                            </>
+                          )}
                           <span aria-hidden="true">·</span>
                           <span
                             className={`ec-room-arrival-pill ${arrived ? 'is-arrived' : 'is-not-arrived'}`}
@@ -1202,7 +1325,7 @@ export function RoomDetailPage({
                       </span>
                     </button>
 
-                    {onUnassignHousehold && (
+                    {onUnassignHousehold && !isNonReg && (
                       <Button
                         variant="danger-outline"
                         onClick={() => onUnassignHousehold(family)}
@@ -1224,7 +1347,7 @@ export function RoomDetailPage({
           family={familyToView}
           onClose={() => setFamilyToView(null)}
           onUnassign={
-            onUnassignHousehold
+            onUnassignHousehold && !familyToView?.is_non_registered
               ? () => {
                   setFamilyToView(null)
                   onUnassignHousehold(familyToView)
@@ -1274,7 +1397,11 @@ function HouseholdMembersModal({ family, onClose, onReassign, onUnassign }) {
         <header className="ec-household-members-header">
           <div>
             <h2 id="ec-household-members-title">{householdName}</h2>
-            <p>Family members</p>
+            <p>
+              {family?.is_non_registered
+                ? 'Non-registered evacuee (on-site)'
+                : 'Family members'}
+            </p>
           </div>
           <button type="button" className="ec-household-modal-close" onClick={onClose} aria-label="Close members dialog">
             <FontAwesomeIcon icon={faXmark} />
@@ -1566,6 +1693,20 @@ export function StructureTab({
       </div>
       {canAddBuilding ? (
         <div className="ec-structure-building-overview">
+          {buildings.some((b) => !b?.is_mapped) && (
+            <div className="ec-room-cap-note" role="status" style={{ marginBottom: '12px' }}>
+              <FontAwesomeIcon
+                icon={faTriangleExclamation}
+                className="ec-room-cap-note-icon"
+                aria-hidden="true"
+              />
+              <span>
+                {buildings.filter((b) => !b?.is_mapped).length} of {buildings.length}{' '}
+                {buildings.length === 1 ? 'building is' : 'buildings are'} not mapped on the map yet.
+                Families cannot be assigned to rooms in unmapped buildings until they are placed on the map.
+              </span>
+            </div>
+          )}
           <div className="ec-building-cards">
             {filteredGroups.filter(({ building }) => Boolean(building)).map(({ building, rooms: groupRooms }) => {
               const matching = groupRooms.filter(isRoomMatching)
@@ -1578,10 +1719,19 @@ export function StructureTab({
               const progress = Math.min(100, Math.round(Math.max(usedSlots / Math.max(slots, 1), usedSpaces / Math.max(spaces, 1)) * 100))
               const status = building.status || 'open'
               const statusLabel = status === 'under_repair' ? 'Under repair' : status === 'closed' ? 'Closed' : 'Open'
+              const isBuildingMapped = Boolean(building.is_mapped)
               return (
                 <article className="ec-building-card" key={building.id}>
                   <button type="button" className="ec-building-card-main" onClick={() => onOpenBuilding?.(building)}>
-                    <span className="ec-building-card-top"><strong className="ec-building-card-title">{building.name}</strong><span className={'ec-sb-status-pill is-' + status}><span className="ec-sb-status-dot" />{statusLabel}</span></span>
+                    <span className="ec-building-card-top">
+                      <strong className="ec-building-card-title">{building.name}</strong>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        {!isBuildingMapped && (
+                          <StatusPill variant="unmapped" label="Not mapped" />
+                        )}
+                        <span className={'ec-sb-status-pill is-' + status}><span className="ec-sb-status-dot" />{statusLabel}</span>
+                      </span>
+                    </span>
                     <span className="ec-building-card-meta">{Number(building.floors || 1)} {Number(building.floors || 1) === 1 ? 'floor' : 'floors'} · {matching.length} {matching.length === 1 ? 'room' : 'rooms'} · Slots {usedSlots}/{slots} · Spaces {usedSpaces}/{spaces}</span>
                     <span className="ec-building-card-progress"><span style={{ width: progress + '%' }} /></span>
                     <span className="ec-building-card-footer"><span>{availableRooms} {availableRooms === 1 ? 'room' : 'rooms'} available</span><span>{matching.filter((room) => roomCapacityUsage(room).over).length} over capacity</span></span>
@@ -1836,7 +1986,13 @@ export function HouseholdsTab({
                           </div>
                           <div className="ec-household-text">
                             <span className="ec-household-name" title={headName}>{headName}</span>
-                            <span className="ec-household-role">Family Head</span>
+                            <span className="ec-household-role">
+                              {fam.is_non_registered
+                                ? fam.is_individual
+                                  ? 'Non-registered · Individual'
+                                  : 'Non-registered · Family'
+                                : 'Family Head'}
+                            </span>
                           </div>
                         </div>
                       </button>

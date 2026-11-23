@@ -24,16 +24,18 @@ import { queryKeys } from "../../hooks/useEvacuationQueries";
 import { useQueryClient } from "@tanstack/react-query";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { formatManilaDate } from "../../utils/dateTime";
+import {
+  PASSWORD_REQUIREMENTS_MESSAGE,
+  PASSWORD_RULES,
+  sanitizeNameInput,
+  sanitizePhoneInput,
+  validateContactNumber,
+  validateEmail,
+  validatePassword,
+  validatePersonName,
+} from "../../utils/formValidation";
 import Sidebar from "../../components/Sidebar/Sidebar";
 import "./ManageProfile.css";
-
-const PASSWORD_RULES = [
-  { id: "length", label: "At least 8 characters", test: (p) => p.length >= 8 },
-  { id: "upper", label: "An uppercase letter (A-Z)", test: (p) => /[A-Z]/.test(p) },
-  { id: "lower", label: "A lowercase letter (a-z)", test: (p) => /[a-z]/.test(p) },
-  { id: "number", label: "A number (0-9)", test: (p) => /[0-9]/.test(p) },
-  { id: "special", label: "A special character (!@#$%...)", test: (p) => /[^A-Za-z0-9\s]/.test(p) },
-];
 
 export default function ManageProfile() {
   const { user, logout, updateUser } = useAuth();
@@ -187,25 +189,25 @@ export default function ManageProfile() {
 
   function validateProfileForm() {
     const errors = {};
-    const name = profileForm.name.trim();
-    const email = profileForm.email.trim();
-    const phone = profileForm.contact_number.trim();
+    const nameError = validatePersonName(profileForm.name, {
+      label: "Full name",
+      required: true,
+      min: 2,
+      max: 100,
+    });
+    if (nameError) errors.name = nameError;
 
-    if (!name) {
-      errors.name = "Full name is required";
-    } else if (name.length > 100) {
-      errors.name = "Full name must be 100 characters or fewer";
-    }
+    const emailError = validateEmail(profileForm.email, {
+      label: "Email address",
+      required: true,
+    });
+    if (emailError) errors.email = emailError;
 
-    if (!email) {
-      errors.email = "Email address is required";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      errors.email = "Please enter a valid email address";
-    }
-
-    if (phone && phone.length > 20) {
-      errors.contact_number = "Contact number must be 20 characters or fewer";
-    }
+    const phoneError = validateContactNumber(profileForm.contact_number, {
+      required: false,
+      label: "Contact number",
+    });
+    if (phoneError) errors.contact_number = phoneError;
 
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -262,14 +264,9 @@ export default function ManageProfile() {
       return;
     }
 
-    // Validate rules
-    for (const rule of PASSWORD_RULES) {
-      if (!rule.test(passwordForm.next)) {
-        setPasswordErrorMsg(
-          "Password must be at least 8 characters and include uppercase, lowercase, number, and special character."
-        );
-        return;
-      }
+    if (validatePassword(passwordForm.next)) {
+      setPasswordErrorMsg(PASSWORD_REQUIREMENTS_MESSAGE);
+      return;
     }
 
     setPasswordSaving(true);
@@ -443,7 +440,7 @@ export default function ManageProfile() {
                         maxLength={100}
                         value={profileForm.name}
                         onChange={(e) => {
-                          setProfileForm({ ...profileForm, name: e.target.value });
+                          setProfileForm({ ...profileForm, name: sanitizeNameInput(e.target.value) });
                           if (fieldErrors.name) setFieldErrors({ ...fieldErrors, name: "" });
                         }}
                         className={`profile-input ${fieldErrors.name ? "is-invalid" : ""}`}
@@ -493,7 +490,7 @@ export default function ManageProfile() {
                         maxLength={20}
                         value={profileForm.contact_number}
                         onChange={(e) => {
-                          setProfileForm({ ...profileForm, contact_number: e.target.value });
+                          setProfileForm({ ...profileForm, contact_number: sanitizePhoneInput(e.target.value) });
                           if (fieldErrors.contact_number)
                             setFieldErrors({ ...fieldErrors, contact_number: "" });
                         }}

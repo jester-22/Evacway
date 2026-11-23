@@ -921,9 +921,123 @@ def get_room_families(room_id):
             "members": residents_in_room
         })
 
+    # Include active non-registered walk-in individuals and groups currently inhabiting this room
+    walkin_people_count = 0
+    try:
+        walkin_rows = (
+            db.session.query(NonRegisteredEvacuee)
+            .join(EvacuationOperation, NonRegisteredEvacuee.operation_id == EvacuationOperation.id)
+            .filter(
+                NonRegisteredEvacuee.room_id == room_id,
+                NonRegisteredEvacuee.departed_at.is_(None),
+                EvacuationOperation.status == 'active',
+            )
+            .order_by(
+                NonRegisteredEvacuee.group_code,
+                NonRegisteredEvacuee.is_group_head.desc(),
+                NonRegisteredEvacuee.id.asc(),
+            )
+            .all()
+        )
+        walkin_groups = defaultdict(list)
+        for row in walkin_rows:
+            walkin_groups[str(row.group_code)].append(row)
+
+        for g_code, g_rows in walkin_groups.items():
+            walkin_people_count += len(g_rows)
+            head_row = next((r for r in g_rows if r.is_group_head), g_rows[0])
+            head_full_name = " ".join(
+                p for p in (head_row.first_name, head_row.middle_name, head_row.last_name) if p
+            ).strip()
+            is_indiv = len(g_rows) == 1
+            nre_members = []
+            group_flags = []
+            for r in g_rows:
+                r_name = " ".join(p for p in (r.first_name, r.middle_name, r.last_name) if p).strip()
+                r_age = int(r.age_years) if r.age_years is not None else None
+                r_senior = bool(r_age is not None and r_age >= 60)
+                r_infant = bool(r_age is not None and r_age <= 2)
+                r_flags = []
+                if r.is_pwd:
+                    r_flags.append("PWD")
+                if r_senior:
+                    r_flags.append("Senior")
+                if r_infant:
+                    r_flags.append("Infant")
+                if r.is_pregnant:
+                    r_flags.append("Pregnant")
+                if r.is_lactating:
+                    r_flags.append("Lactating")
+                if r.is_solo_parent:
+                    r_flags.append("Solo Parent")
+                if r.needs_assistance:
+                    r_flags.append("Needs Assistance")
+                if r.needs_medical:
+                    r_flags.append("Medical")
+                for fl in r_flags:
+                    if fl not in group_flags:
+                        group_flags.append(fl)
+                nre_members.append({
+                    "id": f"nre-person-{r.id}",
+                    "non_registered_id": r.id,
+                    "full_name": r_name,
+                    "name": r_name,
+                    "first_name": r.first_name,
+                    "middle_name": r.middle_name,
+                    "last_name": r.last_name,
+                    "household_head_name": head_full_name,
+                    "gender": r.sex,
+                    "age": r_age,
+                    "address": r.address,
+                    "contact_number": r.contact_number,
+                    "is_head_of_family": bool(r.is_group_head),
+                    "relationship_to_head": "Individual (Walk-in)" if is_indiv else ("Group Head" if r.is_group_head else "Group Member"),
+                    "is_pwd": bool(r.is_pwd),
+                    "is_pregnant": bool(r.is_pregnant),
+                    "is_lactating": bool(r.is_lactating),
+                    "is_solo_parent": bool(r.is_solo_parent),
+                    "is_senior": r_senior,
+                    "is_infant": r_infant,
+                    "special_needs": r_flags,
+                    "remarks": r.notes,
+                    "is_checked_in": True,
+                    "checked_in_at": to_utc_iso(r.arrived_at),
+                    "checkin_status": "Checked in",
+                    "is_non_registered": True,
+                })
+
+            families.append({
+                "id": f"nre-{g_code}",
+                "family_id": None,
+                "group_code": g_code,
+                "family_code": "WALK-IN",
+                "is_non_registered": True,
+                "is_individual": is_indiv,
+                "household_head_name": head_full_name,
+                "head_name": head_full_name,
+                "barangay": None,
+                "barangay_id": None,
+                "address": head_row.address,
+                "contact_number": head_row.contact_number,
+                "member_count": len(g_rows),
+                "family_members": len(g_rows),
+                "assigned_members": len(g_rows),
+                "checked_in_members": len(g_rows),
+                "is_checked_in": True,
+                "checkin_status": "Checked in",
+                "total_members": len(g_rows),
+                "special_needs": group_flags,
+                "evacuation_status": "Non-registered",
+                "assignment_status": "Non-registered",
+                "members": nre_members,
+            })
+    except Exception:
+        db.session.rollback()
+
     center = EvacuationCenter.query.get(room.evacuation_center_id)
-    is_assigned = total_assigned > 0
     room_usage = room.capacity_usage()
+    total_occupied_with_walkins = total_occupied + walkin_people_count
+    is_assigned = (total_assigned + walkin_people_count) > 0
 
     return jsonify({
         "room_id": room.id,
@@ -931,6 +1045,9 @@ def get_room_families(room_id):
         "building_id": room.building_id,
         "building_name": (room.building.name or f"Building #{room.building.id}") if room.building else None,
         "building_floors": room.building.floors if room.building else None,
+        "building_status": room.building.status if room.building else None,
+        "building_is_mapped": bool(room.building and room.building.geom is not None),
+        "center_is_mapped": bool(center and center.geom is not None),
         "floor": room.floor,
         "center_id": room.evacuation_center_id,
         "center_name": center.name if center else "Unknown",
@@ -938,8 +1055,9 @@ def get_room_families(room_id):
         "family_slots": room.family_slots,
         "people_spaces": room.people_spaces,
         **room_usage,
-        "occupied": total_occupied,
+        "occupied": total_occupied_with_walkins,
         "assigned": total_assigned,
+        "walk_in_count": walkin_people_count,
         "available": room_usage['available_spaces'],
         "unassigned": room_usage['available_spaces'],
         "is_active": room.is_active,
@@ -1036,6 +1154,17 @@ def assign_families(room_id):
     center = EvacuationCenter.query.get(room.evacuation_center_id)
     if not center or not center.is_active:
         return jsonify({"error": "Cannot assign families to a room in an inactive evacuation center"}), 400
+    if center.geom is None:
+        return jsonify({"error": "Cannot assign families to an evacuation center that is not mapped yet. Place the center on the map first."}), 400
+
+    structure_mode = getattr(center, 'structure_mode', None) or 'buildings_and_rooms'
+    if structure_mode == 'buildings_and_rooms':
+        if not room.building:
+            return jsonify({"error": "Cannot assign families to a room that is not linked to a building."}), 400
+        if room.building.status != 'open':
+            return jsonify({"error": f"Cannot assign families to a room in a building with status '{room.building.status}'. Only 'open' buildings can receive new assignments."}), 400
+        if room.building.geom is None:
+            return jsonify({"error": f"Cannot assign families to a room in '{room.building.name or 'this building'}' because the building is not mapped yet. Place the building on the map first."}), 400
 
     linked_barangay_ids = {
         link.barangay_id for link in center.barangay_links

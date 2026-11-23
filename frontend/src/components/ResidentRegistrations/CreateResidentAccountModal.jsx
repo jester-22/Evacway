@@ -13,6 +13,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../../services/api";
 import { formatManilaDate } from "../../utils/dateTime";
+import { validateEmail } from "../../utils/formValidation";
 
 function formatDate(val) {
   if (!val) return "Not provided";
@@ -145,8 +146,9 @@ function CreateResidentAccountDialog({ onClose, onSuccess }) {
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) {
-      setFormError("Please enter a valid email address.");
+    const emailErr = validateEmail(cleanEmail, { label: "Email address", required: true });
+    if (emailErr) {
+      setFormError(emailErr);
       return;
     }
 

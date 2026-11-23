@@ -1056,7 +1056,34 @@ export default function EvacuationCenterManager({
 
 
   function handleAssignHouseholdClick() {
-    const isSingle = resolveCenterStructureMode(selectedCenter) === 'open_area';
+    const centerMapped = Boolean(
+      isCenterMapped(selectedCenter) ||
+      selectedCenter?.has_map ||
+      selectedCenter?.is_mapped
+    );
+    if (!centerMapped) {
+      setError("Cannot assign families: This evacuation center is not mapped yet. Place the center on the map first.");
+      return;
+    }
+    const mode = resolveCenterStructureMode(selectedCenter);
+    const isSingle = mode === 'open_area';
+    if (mode === 'buildings_and_rooms') {
+      const hasMappedOpenBuilding =
+        buildings.some(
+          (b) =>
+            Boolean(b?.is_mapped || b?.properties?.is_mapped) &&
+            (b?.status || b?.properties?.status || 'open') === 'open'
+        ) ||
+        centerRooms.some(
+          (r) =>
+            Boolean(r?.building_is_mapped) &&
+            (!r?.building_status || r.building_status === 'open')
+        );
+      if (!hasMappedOpenBuilding) {
+        setError("Cannot assign families: Place at least one open building on the map first.");
+        return;
+      }
+    }
     if (isSingle) {
       const cap = Number(selectedCenter?.capacity || 0);
       const assigned = Number(selectedCenter?.assigned ?? selectedCenter?.total_assigned ?? selectedCenter?.occupied ?? 0);
@@ -1150,7 +1177,27 @@ export default function EvacuationCenterManager({
         ) : routeRoomId || roomDetail ? (
           <RoomDetailPage
             center={selectedCenter}
-            room={routedRoom || roomDetail}
+            room={
+              (routedRoom || roomDetail)
+                ? {
+                    ...(routedRoom || roomDetail),
+                    ...(roomFamiliesQuery.data
+                      ? {
+                          used_slots: roomFamiliesQuery.data.used_slots ?? (routedRoom || roomDetail)?.used_slots,
+                          used_spaces: roomFamiliesQuery.data.used_spaces ?? (routedRoom || roomDetail)?.used_spaces,
+                          available_slots: roomFamiliesQuery.data.available_slots ?? (routedRoom || roomDetail)?.available_slots,
+                          available_spaces: roomFamiliesQuery.data.available_spaces ?? (routedRoom || roomDetail)?.available_spaces,
+                          is_full: roomFamiliesQuery.data.is_full ?? (routedRoom || roomDetail)?.is_full,
+                          is_over_capacity: roomFamiliesQuery.data.is_over_capacity ?? (routedRoom || roomDetail)?.is_over_capacity,
+                          occupied: roomFamiliesQuery.data.occupied ?? (routedRoom || roomDetail)?.occupied,
+                          building_is_mapped: roomFamiliesQuery.data.building_is_mapped ?? (routedRoom || roomDetail)?.building_is_mapped,
+                          center_is_mapped: roomFamiliesQuery.data.center_is_mapped ?? (routedRoom || roomDetail)?.center_is_mapped,
+                          building_status: roomFamiliesQuery.data.building_status ?? (routedRoom || roomDetail)?.building_status,
+                        }
+                      : {}),
+                  }
+                : null
+            }
             building={routedRoomBuilding}
             buildingName={routedRoomBuilding?.name}
             buildingFloors={routedRoomBuilding?.floors}

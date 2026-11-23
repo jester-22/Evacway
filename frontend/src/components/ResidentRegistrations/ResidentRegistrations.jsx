@@ -23,6 +23,16 @@ import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
 import { queryKeys, useBarangays } from "../../hooks/useEvacuationQueries";
 import { formatManilaDate } from "../../utils/dateTime";
+import {
+  getLocalMinDobIso,
+  getLocalYesterdayIso,
+  sanitizeNameInput,
+  sanitizePhoneInput,
+  validateContactNumber,
+  validateEmail,
+  validatePastBirthdate,
+  validatePersonName,
+} from "../../utils/formValidation";
 import { Button, StatCard, StatusPill } from "../ui";
 import CreateResidentAccountModal from "./CreateResidentAccountModal";
 import "./ResidentRegistrations.css";
@@ -50,15 +60,6 @@ function normalizedName(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
-}
-
-function getLocalYesterdayIso() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }
 
 function formatDate(value) {
@@ -513,8 +514,42 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
   async function saveRegistrationEdit(event) {
     event.preventDefault();
     if (!selectedRequest || editSaving) return;
-    setEditSaving(true);
     setEditError("");
+    const firstErr = validatePersonName(editForm.first_name, { label: "First name", required: true, min: 2, max: 50 });
+    if (firstErr) {
+      setEditError(firstErr);
+      return;
+    }
+    const middleErr = validatePersonName(editForm.middle_name, { label: "Middle name", required: false, min: 2, max: 50 });
+    if (middleErr) {
+      setEditError(middleErr);
+      return;
+    }
+    const lastErr = validatePersonName(editForm.last_name, { label: "Last name", required: true, min: 2, max: 50 });
+    if (lastErr) {
+      setEditError(lastErr);
+      return;
+    }
+    const emailErr = validateEmail(editForm.email, { label: "Email address", required: true });
+    if (emailErr) {
+      setEditError(emailErr);
+      return;
+    }
+    const dobErr = validatePastBirthdate(editForm.birthdate, { label: "Birthdate", required: true });
+    if (dobErr) {
+      setEditError(dobErr);
+      return;
+    }
+    if (!editForm.barangay.trim()) {
+      setEditError("Barangay is required.");
+      return;
+    }
+    const phoneErr = validateContactNumber(editForm.contact_number, { required: false, label: "Contact number" });
+    if (phoneErr) {
+      setEditError(phoneErr);
+      return;
+    }
+    setEditSaving(true);
     try {
       const result = await api.updateResidentRegistration(selectedRequest.id, {
         first_name: editForm.first_name.trim(),
@@ -974,10 +1009,6 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
       {/* 1. Top Header */}
       <header className="rr-header">
         <div className="rr-header-titles">
-          <span className="rr-label-chip">
-            <span className="rr-label-chip-dot" aria-hidden="true" />
-            <span>Resident management</span>
-          </span>
           <h1 id="resident-registrations-title" className="rr-title">
             Resident Registrations
           </h1>
@@ -1382,9 +1413,9 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                       <input
                         type="text"
                         required
-                        maxLength={100}
+                        maxLength={50}
                         value={editForm.first_name}
-                        onChange={(e) => setEditForm((f) => ({ ...f, first_name: e.target.value }))}
+                        onChange={(e) => setEditForm((f) => ({ ...f, first_name: sanitizeNameInput(e.target.value) }))}
                         disabled={editSaving}
                       />
                     </label>
@@ -1392,9 +1423,9 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                       <span>Middle name</span>
                       <input
                         type="text"
-                        maxLength={100}
+                        maxLength={50}
                         value={editForm.middle_name}
-                        onChange={(e) => setEditForm((f) => ({ ...f, middle_name: e.target.value }))}
+                        onChange={(e) => setEditForm((f) => ({ ...f, middle_name: sanitizeNameInput(e.target.value) }))}
                         disabled={editSaving}
                       />
                     </label>
@@ -1403,9 +1434,9 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                       <input
                         type="text"
                         required
-                        maxLength={100}
+                        maxLength={50}
                         value={editForm.last_name}
-                        onChange={(e) => setEditForm((f) => ({ ...f, last_name: e.target.value }))}
+                        onChange={(e) => setEditForm((f) => ({ ...f, last_name: sanitizeNameInput(e.target.value) }))}
                         disabled={editSaving}
                       />
                     </label>
@@ -1428,6 +1459,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                       <input
                         type="date"
                         required
+                        min={getLocalMinDobIso()}
                         max={getLocalYesterdayIso()}
                         value={editForm.birthdate}
                         onChange={(e) => setEditForm((f) => ({ ...f, birthdate: e.target.value }))}
@@ -1460,7 +1492,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                         type="text"
                         maxLength={20}
                         value={editForm.contact_number}
-                        onChange={(e) => setEditForm((f) => ({ ...f, contact_number: e.target.value }))}
+                        onChange={(e) => setEditForm((f) => ({ ...f, contact_number: sanitizePhoneInput(e.target.value) }))}
                         placeholder="09XXXXXXXXX"
                         disabled={editSaving}
                       />

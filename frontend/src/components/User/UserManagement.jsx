@@ -28,6 +28,13 @@ import {
 import { api } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { queryKeys, useUsers } from "../../hooks/useEvacuationQueries";
+import {
+  sanitizeNameInput,
+  sanitizePhoneInput,
+  validateContactNumber,
+  validateEmail,
+  validatePersonName,
+} from "../../utils/formValidation";
 import { Button, RoleChip, StatCard, StatusPill, MobileFilterButton } from "../ui";
 import AdminMfaRecoveryApprovals from "./AdminMfaRecoveryApprovals";
 import "./UserManagement.css";
@@ -470,8 +477,23 @@ function UserManagement() {
 
   async function handleCreate(e) {
     e.preventDefault();
-    setSaving(true);
     setFormError("");
+    const nameErr = validatePersonName(form.name, { label: "Full name", required: true, min: 2, max: 100 });
+    if (nameErr) {
+      setFormError(nameErr);
+      return;
+    }
+    const emailErr = validateEmail(form.email, { label: "Email address", required: true });
+    if (emailErr) {
+      setFormError(emailErr);
+      return;
+    }
+    const phoneErr = validateContactNumber(form.contact_number, { required: false, label: "Contact number" });
+    if (phoneErr) {
+      setFormError(phoneErr);
+      return;
+    }
+    setSaving(true);
     try {
       const email = form.email.trim().toLowerCase();
       const isAvailable = await checkEmailAvailability(email);
@@ -484,6 +506,7 @@ function UserManagement() {
         ...form,
         name: form.name.trim(),
         email,
+        contact_number: form.contact_number.trim() || null,
       });
       setForm({
         name: "",
@@ -520,8 +543,30 @@ function UserManagement() {
   async function handleUpdateUser(event) {
     event.preventDefault();
     if (!selectedUser) return;
-    setSavingUser(true);
     setEditError("");
+    const nameErr = validatePersonName(editForm.name, { label: "Full name", required: true, min: 2, max: 100 });
+    if (nameErr) {
+      setEditError(nameErr);
+      return;
+    }
+    const emailErr = validateEmail(editForm.email, { label: "Email address", required: true });
+    if (emailErr) {
+      setEditError(emailErr);
+      return;
+    }
+    if ((editForm.recovery_email || "").trim()) {
+      const recErr = validateEmail(editForm.recovery_email, { label: "Recovery email", required: false });
+      if (recErr) {
+        setEditError(recErr);
+        return;
+      }
+    }
+    const phoneErr = validateContactNumber(editForm.contact_number, { required: false, label: "Contact number" });
+    if (phoneErr) {
+      setEditError(phoneErr);
+      return;
+    }
+    setSavingUser(true);
     try {
       const updated = await api.updateUser(selectedUser.id, {
         ...editForm,
@@ -1166,7 +1211,7 @@ function UserManagement() {
                     id="add-name"
                     placeholder="Juan Dela Cruz"
                     value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    onChange={(e) => setForm({ ...form, name: sanitizeNameInput(e.target.value) })}
                     className="um-input"
                     required
                     autoFocus
@@ -1235,7 +1280,7 @@ function UserManagement() {
                     placeholder="09xx xxx xxxx"
                     value={form.contact_number}
                     onChange={(e) =>
-                      setForm({ ...form, contact_number: e.target.value })
+                      setForm({ ...form, contact_number: sanitizePhoneInput(e.target.value) })
                     }
                     className="um-input"
                   />
@@ -1344,7 +1389,7 @@ function UserManagement() {
                       aria-invalid={editErrorField === "name" ? "true" : undefined}
                       aria-describedby={editErrorField === "name" ? "edit-name-error" : undefined}
                       onChange={(e) =>
-                        setEditForm({ ...editForm, name: e.target.value })
+                        setEditForm({ ...editForm, name: sanitizeNameInput(e.target.value) })
                       }
                       autoFocus
                     />
@@ -1438,7 +1483,7 @@ function UserManagement() {
                       onChange={(e) =>
                         setEditForm({
                           ...editForm,
-                          contact_number: e.target.value,
+                          contact_number: sanitizePhoneInput(e.target.value),
                         })
                       }
                     />

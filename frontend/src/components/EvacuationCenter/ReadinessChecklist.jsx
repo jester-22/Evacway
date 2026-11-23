@@ -31,14 +31,23 @@ export default function ReadinessChecklist({
   const buildingCount = Number(
     center.building_count ?? center.buildings?.length ?? 0
   )
+  const unmappedBuildingCount = Number(
+    center.unmapped_building_count ??
+      (Array.isArray(center.buildings)
+        ? center.buildings.filter((b) => !b?.is_mapped).length
+        : 0)
+  )
+  const mappedBuildingCount = Math.max(0, buildingCount - unmappedBuildingCount)
   const hasRooms = roomCount > 0
   const hasBuildings = buildingCount > 0
+  const allBuildingsMapped = hasBuildings && unmappedBuildingCount === 0
 
   const roomsRequired = !isOpenArea
   const buildingsRequired = isBuildingsAndRooms
 
   const roomsOk = roomsRequired ? hasRooms : true
   const buildingsOk = buildingsRequired ? hasBuildings : true
+  const buildingsMappedOk = buildingsRequired ? allBuildingsMapped : true
 
   const items = [
     {
@@ -67,6 +76,15 @@ export default function ReadinessChecklist({
             ok: buildingsOk,
             fix: buildingsRequired && !buildingsOk ? onAddBuilding : undefined,
             actionLabel: 'Add building',
+          },
+          {
+            key: 'buildings_mapped',
+            label: hasBuildings
+              ? `Buildings Mapped (${mappedBuildingCount}/${buildingCount})`
+              : 'Buildings Mapped on Map',
+            ok: buildingsMappedOk,
+            fix: !buildingsMappedOk ? (hasBuildings ? onPlaceOnMap : onAddBuilding) : undefined,
+            actionLabel: hasBuildings ? 'Map buildings' : 'Add building',
           },
         ]
       : []),

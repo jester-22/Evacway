@@ -8,9 +8,12 @@ import {
   faEyeSlash,
 } from "@fortawesome/free-solid-svg-icons";
 import { api } from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
+import { PASSWORD_REQUIREMENTS_MESSAGE, validatePassword } from "../../utils/formValidation";
 import "./PasswordSetup.css";
 
 function PasswordSetup() {
+  const { clearSession } = useAuth();
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token") || "";
   const [password, setPassword] = useState("");
@@ -18,6 +21,7 @@ function PasswordSetup() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [complete, setComplete] = useState(false);
+  const [signInPath, setSignInPath] = useState("/login");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event) {
@@ -28,14 +32,9 @@ function PasswordSetup() {
       setError("This password link is missing its security token. Request a new email.");
       return;
     }
-    if (
-      password.length < 8 ||
-      !/[A-Z]/.test(password) ||
-      !/[a-z]/.test(password) ||
-      !/[0-9]/.test(password) ||
-      !/[^A-Za-z0-9\s]/.test(password)
-    ) {
-      setError("Use at least 8 characters, including an uppercase letter, a lowercase letter, a number, and a special character.");
+    const pwdError = validatePassword(password);
+    if (pwdError) {
+      setError(PASSWORD_REQUIREMENTS_MESSAGE);
       return;
     }
     if (password !== confirmation) {
@@ -45,7 +44,13 @@ function PasswordSetup() {
 
     setSubmitting(true);
     try {
-      await api.completePasswordSetup(token, password);
+      const res = await api.completePasswordSetup(token, password);
+      // Clear any active session in this browser (e.g., an Admin who triggered the reset link)
+      // so clicking "Return to sign in" never auto-redirects into the old logged-in account.
+      clearSession();
+      const isResident =
+        res?.account_type === "resident_account" || res?.role === "resident";
+      setSignInPath(isResident ? "/" : "/login");
       setComplete(true);
       setPassword("");
       setConfirmation("");
@@ -70,7 +75,7 @@ function PasswordSetup() {
             </span>
             <h1 id="password-setup-title">Password updated</h1>
             <p>Your account is ready. Sign in with your new password.</p>
-            <Link className="password-setup-submit ds-btn ds-btn--primary" to="/">Return to sign in</Link>
+            <Link className="password-setup-submit ds-btn ds-btn--primary" to={signInPath}>Return to sign in</Link>
           </div>
         ) : (
           <>

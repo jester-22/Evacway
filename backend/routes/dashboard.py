@@ -13,6 +13,7 @@ from models import (
     Family,
     NonRegisteredEvacuee,
     Resident,
+    RosterYear,
     User,
     db,
 )
@@ -55,17 +56,23 @@ def get_dashboard_summary():
     """
     today = date.today()
     senior_cutoff = _sixty_years_ago(today)
+    active_year_row = (
+        RosterYear.query.filter_by(is_active=True)
+        .order_by(RosterYear.year.desc())
+        .first()
+    )
+    active_year_id = active_year_row.id if active_year_row else None
 
     # 1. Barangays + household counts + resident demographics in 1 SQL round-trip
-    fam_subq = (
-        db.session.query(
-            Family.barangay_id.label("barangay_id"),
-            func.count(Family.id).label("household_count"),
-        )
-        .group_by(Family.barangay_id)
-        .subquery()
+    fam_q = db.session.query(
+        Family.barangay_id.label("barangay_id"),
+        func.count(Family.id).label("household_count"),
     )
-    demo_subq = (
+    if active_year_id is not None:
+        fam_q = fam_q.filter(Family.roster_year_id == active_year_id)
+    fam_subq = fam_q.group_by(Family.barangay_id).subquery()
+
+    demo_q = (
         db.session.query(
             Family.barangay_id.label("barangay_id"),
             func.count(Resident.id).label("resident_count"),
@@ -76,9 +83,10 @@ def get_dashboard_summary():
             func.coalesce(func.sum(case((Resident.needs_assistance.is_(True), 1), else_=0)), 0).label("needs_assistance"),
         )
         .join(Family, Resident.family_id == Family.id)
-        .group_by(Family.barangay_id)
-        .subquery()
     )
+    if active_year_id is not None:
+        demo_q = demo_q.filter(Family.roster_year_id == active_year_id)
+    demo_subq = demo_q.group_by(Family.barangay_id).subquery()
     brgy_rows = (
         db.session.query(
             Barangay.id,
@@ -125,15 +133,21 @@ def get_dashboard_summary():
         })
 
     # 2. Family & resident arrival status (1 SQL round-trip)
-    family_arrival_rows = (
+    arrival_q = (
         db.session.query(
             Resident.family_id,
             func.count(Resident.id).label("member_count"),
             func.count(EvacuationAssignment.id).label("assigned_count"),
             func.count(EvacuationAssignment.checked_in_at).label("checked_in_count"),
         )
+        .join(Family, Resident.family_id == Family.id)
         .outerjoin(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
         .filter(Resident.family_id.isnot(None))
+    )
+    if active_year_id is not None:
+        arrival_q = arrival_q.filter(Family.roster_year_id == active_year_id)
+    family_arrival_rows = (
+        arrival_q
         .group_by(Resident.family_id)
         .having(func.count(EvacuationAssignment.id) > 0)
         .all()
@@ -177,16 +191,19 @@ def get_dashboard_summary():
         EvacuationAssignment.evacuation_center_id,
         EvacuationCenterRoom.evacuation_center_id,
     )
-    assign_subq = (
+    assign_q = (
         db.session.query(
             effective_center_id.label("center_id"),
             func.count(EvacuationAssignment.id).label("assigned_count"),
             func.count(EvacuationAssignment.checked_in_at).label("checked_in_count"),
         )
+        .join(Resident, EvacuationAssignment.resident_id == Resident.id)
+        .join(Family, Resident.family_id == Family.id)
         .outerjoin(EvacuationCenterRoom, EvacuationAssignment.room_id == EvacuationCenterRoom.id)
-        .group_by(effective_center_id)
-        .subquery()
     )
+    if active_year_id is not None:
+        assign_q = assign_q.filter(Family.roster_year_id == active_year_id)
+    assign_subq = assign_q.group_by(effective_center_id).subquery()
 
     center_rows = (
         db.session.query(

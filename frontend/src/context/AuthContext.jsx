@@ -3,12 +3,34 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import { useNavigate } from "react-router-dom";
 
-const AuthContext = createContext(null);
+const DEFAULT_AUTH_CONTEXT = {
+  user: null,
+  loginResident: async () => null,
+  loginStaff: async () => null,
+  completeStaffLogin: () => null,
+  logout: () => {},
+  updateUser: () => {},
+};
+
+// Preserve the same Context identity across Vite HMR updates so consumers
+// never read a stale/null default context during dev reloads.
+const AuthContext =
+  (import.meta.hot && import.meta.hot.data && import.meta.hot.data.AuthContext) ||
+  createContext(DEFAULT_AUTH_CONTEXT);
+
+if (import.meta.hot) {
+  import.meta.hot.data.AuthContext = AuthContext;
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem("evacway_user");
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem("evacway_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      localStorage.removeItem("evacway_user");
+      return null;
+    }
   });
 
   const navigate = useNavigate();
@@ -64,5 +86,5 @@ export function AuthProvider({ children }) {
 }
 
 export function useAuth() {
-  return useContext(AuthContext);
+  return useContext(AuthContext) || DEFAULT_AUTH_CONTEXT;
 }

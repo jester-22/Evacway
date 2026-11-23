@@ -23,6 +23,7 @@ from models import (
     Barangay,
     Family,
     Resident,
+    ResidentAccount,
     EvacuationAssignment,
     EvacuationCenterBuilding,
     EvacuationCenterRoom,
@@ -115,6 +116,16 @@ def get_or_create_active_year():
     except Exception:
         db.session.rollback()
         return RosterYear.query.filter_by(year=current_year).first() or RosterYear.query.filter_by(is_active=True).first()
+
+
+def get_active_roster_year_id():
+    """Return the active RosterYear id without mutating state (or None if unseeded)."""
+    row = (
+        RosterYear.query.filter_by(is_active=True)
+        .order_by(RosterYear.year.desc())
+        .first()
+    )
+    return row.id if row else None
 
 
 def _normalize_text(value):
@@ -335,12 +346,16 @@ def _family_query(search='', barangay_id='', assignment_status='', building_id='
             query = query.filter(Family.roster_year_id == int(raw_ry_id))
         except (TypeError, ValueError):
             pass
-    elif raw_year:
+    elif raw_year and raw_year.lower() != 'all':
         try:
             target_year = int(raw_year)
             query = query.join(RosterYear, Family.roster_year_id == RosterYear.id).filter(RosterYear.year == target_year)
         except (TypeError, ValueError):
             pass
+    elif raw_year.lower() != 'all':
+        active_year_id = get_active_roster_year_id()
+        if active_year_id is not None:
+            query = query.filter(Family.roster_year_id == active_year_id)
 
     return query
 
@@ -1411,15 +1426,48 @@ def _preview_family_workbook(file_storage, target_barangay=None):
             )
 
     # -------------------------------------------------------------------------
-    # CLASSIFY AGAINST DATABASE: NEW / UPDATED / SKIPPED / CONFLICT
-    # Eager load residents and barangays to prevent N+1 queries during matching
+    # CLASSIFY AGAINST ACTIVE-YEAR DATABASE: NEW / UPDATED / SKIPPED / CONFLICT
+    # Eager load residents and barangays to prevent N+1 queries during matching.
+    # Also compare new families against the most recent previous archived year
+    # so admins see which households are returning unchanged vs updated vs brand new.
     # -------------------------------------------------------------------------
-    db_families = Family.query.options(
+    active_year_row = (
+        RosterYear.query.filter_by(is_active=True)
+        .order_by(RosterYear.year.desc())
+        .first()
+    )
+    active_year_id = active_year_row.id if active_year_row else None
+
+    db_fam_query = Family.query.options(
         selectinload(Family.residents),
         joinedload(Family.barangay)
-    ).all()
+    )
+    if active_year_id is not None:
+        db_fam_query = db_fam_query.filter(Family.roster_year_id == active_year_id)
+    db_families = db_fam_query.all()
     db_by_code = {f.family_code.casefold(): f for f in db_families}
     db_by_head_brgy = {(f.barangay_id, _normalize_text(f.head_name)): f for f in db_families}
+
+    prev_year_row = None
+    prev_by_code = {}
+    prev_by_head_brgy = {}
+    if active_year_row is not None:
+        prev_year_row = (
+            RosterYear.query.filter(RosterYear.year < active_year_row.year)
+            .order_by(RosterYear.year.desc())
+            .first()
+        )
+        if prev_year_row is not None:
+            prev_families = (
+                Family.query.options(
+                    selectinload(Family.residents),
+                    joinedload(Family.barangay),
+                )
+                .filter(Family.roster_year_id == prev_year_row.id)
+                .all()
+            )
+            prev_by_code = {f.family_code.casefold(): f for f in prev_families}
+            prev_by_head_brgy = {(f.barangay_id, _normalize_text(f.head_name)): f for f in prev_families}
 
     for family in families:
         code_str = family['family_code'].strip()
@@ -1500,6 +1548,34 @@ def _preview_family_workbook(file_storage, target_barangay=None):
             family['members_to_fill'] = []
             family['existing_members'] = []
 
+            # Compare against most recent archived year so admins know returning vs brand-new families
+            prev_match = prev_by_code.get(code_str.casefold()) or prev_by_head_brgy.get(
+                (family['barangay_id'], _normalize_text(family['head_name']))
+            )
+            if prev_match is not None:
+                prev_residents = prev_match.residents or []
+                same_member_count = len(prev_residents) == len(family['members'])
+                all_members_matched = True
+                has_member_changes = False
+                for fm in family['members']:
+                    matched_pm = next((pm for pm in prev_residents if _member_matches(fm, pm)), None)
+                    if matched_pm is None:
+                        all_members_matched = False
+                        break
+                    if _compute_resident_fill(matched_pm, fm):
+                        has_member_changes = True
+                same_contact = _normalize_text(prev_match.contact_number) == _normalize_text(family.get('contact_number'))
+                same_address = _normalize_text(prev_match.address) == _normalize_text(family.get('address'))
+                family['previous_year_family_id'] = prev_match.id
+                family['previous_year_match'] = (
+                    'unchanged'
+                    if (same_member_count and all_members_matched and not has_member_changes and same_contact and same_address)
+                    else 'changed'
+                )
+            else:
+                family['previous_year_family_id'] = None
+                family['previous_year_match'] = None
+
         family['member_count'] = len(family['members'])
 
     new_households = sum(1 for f in families if f.get('status') == 'new')
@@ -1507,6 +1583,24 @@ def _preview_family_workbook(file_storage, target_barangay=None):
     skipped_households = sum(1 for f in families if f.get('status') == 'skipped')
     new_members_to_add = sum(len(f.get('new_members', [])) for f in families if f.get('status') == 'updated')
     members_to_fill = sum(len(f.get('members_to_fill', [])) for f in families)
+    returning_unchanged_households = sum(
+        1 for f in families if f.get('status') == 'new' and f.get('previous_year_match') == 'unchanged'
+    )
+    returning_changed_households = sum(
+        1 for f in families if f.get('status') == 'new' and f.get('previous_year_match') == 'changed'
+    )
+    brand_new_households = sum(
+        1 for f in families if f.get('status') == 'new' and f.get('previous_year_match') is None
+    )
+
+    if prev_year_row is not None and (returning_unchanged_households > 0 or returning_changed_households > 0):
+        warnings.append(
+            f'Compared with archived {prev_year_row.year} roster: '
+            f'{returning_unchanged_households} unchanged, '
+            f'{returning_changed_households} with updates, '
+            f'{brand_new_households} brand-new household(s). '
+            f'Existing resident login accounts will automatically relink to {active_year_row.year}.'
+        )
 
     if skipped_households > 0:
         warnings.insert(
@@ -1542,6 +1636,8 @@ def _preview_family_workbook(file_storage, target_barangay=None):
             'members_to_fill': f.get('members_to_fill', []),
             'existing_members': f.get('existing_members', []),
             'members': f.get('members', []),
+            'previous_year_family_id': f.get('previous_year_family_id'),
+            'previous_year_match': f.get('previous_year_match'),
         }
         for f in families
     ]
@@ -1557,6 +1653,10 @@ def _preview_family_workbook(file_storage, target_barangay=None):
         'skipped_households': skipped_households,
         'new_members_to_add': new_members_to_add,
         'members_to_fill': members_to_fill,
+        'previous_year': prev_year_row.year if prev_year_row else None,
+        'returning_unchanged_households': returning_unchanged_households,
+        'returning_changed_households': returning_changed_households,
+        'brand_new_households': brand_new_households,
         'other_barangay_rows': other_barangay_rows,
         'other_barangay_skipped': len(other_barangay_rows),
         'target_barangay': {
@@ -1565,6 +1665,29 @@ def _preview_family_workbook(file_storage, target_barangay=None):
         } if target_barangay else None,
         'can_import': can_import,
     }
+
+
+def _relink_previous_year_resident_accounts(prev_family_id, new_member_pairs):
+    """When a returning family is imported into a new active year, relink existing ResidentAccounts."""
+    if not prev_family_id or not new_member_pairs:
+        return 0
+    prev_residents = Resident.query.filter_by(family_id=prev_family_id).all()
+    if not prev_residents:
+        return 0
+    prev_res_ids = [r.id for r in prev_residents]
+    accounts_by_res_id = {
+        acct.resident_id: acct
+        for acct in ResidentAccount.query.filter(ResidentAccount.resident_id.in_(prev_res_ids)).all()
+    }
+    if not accounts_by_res_id:
+        return 0
+    relinked = 0
+    for member_dict, new_res in new_member_pairs:
+        matched_prev = next((pr for pr in prev_residents if _member_matches(member_dict, pr)), None)
+        if matched_prev and matched_prev.id in accounts_by_res_id:
+            accounts_by_res_id[matched_prev.id].resident_id = new_res.id
+            relinked += 1
+    return relinked
 
 
 @families_bp.route('/api/families/import', methods=['POST'])
@@ -1629,14 +1752,18 @@ def import_families():
                 db.session.flush()
                 affected_barangay_ids.add(item['barangay_id'])
 
+                created_pairs = []
                 for member in item['members']:
                     res = _make_resident_model(
                         member, family, item['head_name'], item['barangay'], item['address'], get_jwt_identity()
                     )
                     db.session.add(res)
+                    created_pairs.append((member, res))
                     residents_created += 1
 
                 db.session.flush()
+                if item.get('previous_year_family_id'):
+                    _relink_previous_year_resident_accounts(item['previous_year_family_id'], created_pairs)
                 _sync_household_and_barangay(family)
                 created_count += 1
 
@@ -1890,14 +2017,18 @@ def commit_family_import():
                 db.session.flush()
                 affected_barangay_ids.add(item['barangay_id'])
 
+                created_pairs = []
                 for member in item['members']:
                     res = _make_resident_model(
                         member, family, item['head_name'], item['barangay'], item['address'], get_jwt_identity()
                     )
                     db.session.add(res)
+                    created_pairs.append((member, res))
                     residents_created += 1
 
                 db.session.flush()
+                if item.get('previous_year_family_id'):
+                    _relink_previous_year_resident_accounts(item['previous_year_family_id'], created_pairs)
                 _sync_household_and_barangay(family)
                 created_count += 1
 
@@ -3258,4 +3389,244 @@ def get_roster_years():
         }
         for y in years
     ]), 200
+
+
+# =========================================================
+# CARRY OVER PREVIOUS ROSTER YEAR INTO ACTIVE YEAR (ADMIN)
+# =========================================================
+@families_bp.route('/api/roster-years/<int:source_year>/carry-over', methods=['POST'])
+@jwt_required()
+@role_required('admin')
+def carry_over_roster_year(source_year):
+    """
+    Idempotently copy families and resident members from an archived census year
+    into the current active census year. Existing family_codes in the active year
+    are skipped (never overwritten), ResidentAccount logins are relinked to the
+    new active-year resident rows, and shelter assignments can optionally carry
+    over with fresh (unchecked-in) arrival status.
+    """
+    source_ry = RosterYear.query.filter_by(year=source_year).first()
+    if not source_ry:
+        return jsonify({'error': f'Census Year {source_year} was not found.'}), 404
+
+    target_ry = get_or_create_active_year()
+    if not target_ry:
+        return jsonify({'error': 'Could not resolve the active census year.'}), 500
+
+    if source_ry.id == target_ry.id:
+        return jsonify({
+            'error': f'Census Year {source_year} is already the active census year.'
+        }), 400
+
+    payload = request.get_json(silent=True) or {}
+    include_assignments = payload.get('include_assignments', True)
+    if isinstance(include_assignments, str):
+        include_assignments = include_assignments.strip().lower() not in ('0', 'false', 'no', 'off')
+    else:
+        include_assignments = bool(include_assignments)
+
+    raw_barangay_id = payload.get('barangay_id')
+    barangay_filter_id = None
+    if raw_barangay_id not in (None, ''):
+        try:
+            barangay_filter_id = int(raw_barangay_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid barangay_id filter.'}), 400
+
+    raw_family_ids = payload.get('family_ids')
+    selected_family_ids = None
+    if raw_family_ids is not None:
+        if not isinstance(raw_family_ids, list):
+            return jsonify({'error': 'family_ids must be a list of family IDs.'}), 400
+        try:
+            selected_family_ids = [int(fid) for fid in raw_family_ids]
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid family_ids list.'}), 400
+        if len(selected_family_ids) == 0:
+            return jsonify({'error': 'Select at least one family to carry over.'}), 400
+
+    source_query = (
+        Family.query.options(
+            selectinload(Family.residents).selectinload(Resident.assignments)
+        )
+        .filter(Family.roster_year_id == source_ry.id)
+        .order_by(Family.id.asc())
+    )
+    if barangay_filter_id is not None:
+        source_query = source_query.filter(Family.barangay_id == barangay_filter_id)
+    if selected_family_ids is not None:
+        source_query = source_query.filter(Family.id.in_(selected_family_ids))
+
+    source_families = source_query.all()
+    if not source_families:
+        return jsonify({
+            'message': f'No families found in Census Year {source_ry.year} to carry over.',
+            'source_year': source_ry.year,
+            'target_year': target_ry.year,
+            'copied_families': 0,
+            'copied_residents': 0,
+            'skipped_families': 0,
+            'relinked_accounts': 0,
+            'carried_assignments': 0,
+        }), 200
+
+    existing_codes = {
+        _normalize_text(code)
+        for (code,) in db.session.query(Family.family_code)
+        .filter(Family.roster_year_id == target_ry.id)
+        .all()
+    }
+
+    source_resident_ids = [
+        res.id for fam in source_families for res in (fam.residents or [])
+    ]
+    accounts_by_resident_id = {}
+    if source_resident_ids:
+        for acct in ResidentAccount.query.filter(
+            ResidentAccount.resident_id.in_(source_resident_ids)
+        ).all():
+            accounts_by_resident_id[acct.resident_id] = acct
+
+    active_center_ids = set()
+    active_room_ids = set()
+    if include_assignments:
+        active_center_ids = {
+            cid for (cid,) in db.session.query(EvacuationCenter.id)
+            .filter(EvacuationCenter.is_active.is_(True))
+            .all()
+        }
+        active_room_ids = {
+            rid for (rid,) in db.session.query(EvacuationCenterRoom.id)
+            .filter(EvacuationCenterRoom.is_active.is_(True))
+            .all()
+        }
+
+    actor_id = get_jwt_identity()
+    try:
+        actor_int = int(actor_id) if actor_id is not None else None
+    except (TypeError, ValueError):
+        actor_int = None
+
+    copied_families = 0
+    copied_residents = 0
+    skipped_families = 0
+    relinked_accounts = 0
+    carried_assignments = 0
+
+    for src_fam in source_families:
+        norm_code = _normalize_text(src_fam.family_code)
+        if norm_code in existing_codes:
+            skipped_families += 1
+            continue
+
+        new_fam = Family(
+            roster_year_id=target_ry.id,
+            barangay_id=src_fam.barangay_id,
+            family_code=src_fam.family_code,
+            head_name=src_fam.head_name,
+            member_count=src_fam.member_count,
+            contact_number=src_fam.contact_number,
+            evacuation_status='unassigned',
+            address=src_fam.address,
+            vulnerable_members=src_fam.vulnerable_members,
+            remarks=src_fam.remarks,
+            find_someone_opt_out=bool(src_fam.find_someone_opt_out),
+            searchable=bool(src_fam.searchable),
+            uploaded_by=actor_int or src_fam.uploaded_by,
+        )
+        db.session.add(new_fam)
+        db.session.flush()
+        existing_codes.add(norm_code)
+        copied_families += 1
+
+        family_has_carried_assignment = False
+        for src_res in sorted(src_fam.residents or [], key=lambda r: r.id):
+            new_res = Resident(
+                family_id=new_fam.id,
+                first_name=src_res.first_name,
+                middle_name=src_res.middle_name,
+                last_name=src_res.last_name,
+                suffix=src_res.suffix,
+                date_of_birth=src_res.date_of_birth,
+                gender=src_res.gender,
+                alternate_contact=src_res.alternate_contact,
+                relationship_to_head=src_res.relationship_to_head,
+                is_head_of_family=bool(src_res.is_head_of_family),
+                is_pwd=bool(src_res.is_pwd),
+                disability_type=src_res.disability_type,
+                disability_notes=src_res.disability_notes,
+                is_pregnant=bool(src_res.is_pregnant),
+                is_lactating=bool(src_res.is_lactating),
+                is_solo_parent=bool(src_res.is_solo_parent),
+                needs_assistance=bool(src_res.needs_assistance),
+                medical_notes=src_res.medical_notes,
+                notes=src_res.notes,
+            )
+            db.session.add(new_res)
+            db.session.flush()
+            copied_residents += 1
+
+            account = accounts_by_resident_id.get(src_res.id)
+            if account is not None:
+                account.resident_id = new_res.id
+                relinked_accounts += 1
+
+            if include_assignments and src_res.assignments:
+                src_assign = src_res.assignments[0]
+                target_center_id = (
+                    src_assign.evacuation_center_id
+                    if src_assign.evacuation_center_id in active_center_ids
+                    else None
+                )
+                target_room_id = (
+                    src_assign.room_id
+                    if src_assign.room_id in active_room_ids
+                    else None
+                )
+                if target_center_id is not None or target_room_id is not None:
+                    db.session.add(
+                        EvacuationAssignment(
+                            resident_id=new_res.id,
+                            evacuation_center_id=target_center_id,
+                            room_id=target_room_id,
+                            checked_in_at=None,
+                        )
+                    )
+                    carried_assignments += 1
+                    family_has_carried_assignment = True
+
+        if family_has_carried_assignment:
+            new_fam.evacuation_status = 'assigned'
+
+    db.session.add(
+        SystemLog(
+            user_id=actor_int,
+            action=(
+                f"Carried over {copied_families} families ({copied_residents} residents) "
+                f"from Census Year {source_ry.year} to {target_ry.year}"
+            ),
+        )
+    )
+    db.session.commit()
+
+    parts = [
+        f"Carried over {copied_families:,} famil{'y' if copied_families == 1 else 'ies'} "
+        f"({copied_residents:,} resident{'s' if copied_residents != 1 else ''}) "
+        f"from {source_ry.year} to {target_ry.year}."
+    ]
+    if skipped_families:
+        parts.append(f"Skipped {skipped_families:,} already in {target_ry.year}.")
+    if relinked_accounts:
+        parts.append(f"Relinked {relinked_accounts:,} resident login account(s).")
+
+    return jsonify({
+        'message': ' '.join(parts),
+        'source_year': source_ry.year,
+        'target_year': target_ry.year,
+        'copied_families': copied_families,
+        'copied_residents': copied_residents,
+        'skipped_families': skipped_families,
+        'relinked_accounts': relinked_accounts,
+        'carried_assignments': carried_assignments,
+    }), 200
 

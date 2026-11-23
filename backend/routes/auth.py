@@ -24,7 +24,7 @@ from models import (
 from werkzeug.security import check_password_hash, generate_password_hash
 from flask_jwt_extended import create_access_token, decode_token, get_jwt_identity
 from sqlalchemy import func
-from services.mailer import send_password_setup_email
+from services.mailer import send_password_setup_email, send_staff_mfa_email_code
 from services.password_setup import (
     create_password_setup_token,
     is_token_password_current,
@@ -36,7 +36,122 @@ auth_bp = Blueprint('auth', __name__)
 
 _login_rate_buckets = defaultdict(list)
 _login_rate_lock = Lock()
+_email_otp_send_times = {}
+_consumed_email_otp_jtis = {}
+_email_otp_lock = Lock()
+_EMAIL_OTP_EXPIRES_MINUTES = 10
+_EMAIL_OTP_RESEND_COOLDOWN_SECONDS = 30
 _DUMMY_PASSWORD_HASH = generate_password_hash('EvacWay invalid login timing sentinel')
+
+
+_NON_ROUTABLE_EMAIL_SUFFIXES = ('.local', '.localhost', '.invalid', '.internal', '.lan')
+
+
+def _is_deliverable_email(email):
+    raw = str(email or '').strip().lower()
+    if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', raw):
+        return False
+    domain = raw.rsplit('@', 1)[1]
+    return not any(domain.endswith(suffix) for suffix in _NON_ROUTABLE_EMAIL_SUFFIXES)
+
+
+def _staff_verification_email(user):
+    recovery = str(getattr(user, 'recovery_email', None) or '').strip().lower()
+    if recovery and _is_deliverable_email(recovery):
+        return recovery
+    primary = str(getattr(user, 'email', None) or '').strip().lower()
+    if primary and _is_deliverable_email(primary):
+        return primary
+    return ''
+
+
+def _mask_email(email):
+    raw = str(email or '').strip()
+    if '@' not in raw:
+        return ''
+    local, domain = raw.split('@', 1)
+    if len(local) <= 2:
+        masked_local = local[0] + '*' if local else '*'
+    else:
+        masked_local = f'{local[0]}***{local[-1]}'
+    return f'{masked_local}@{domain}'
+
+
+def _email_otp_digest(user_id, jti, code):
+    jwt_secret = str(current_app.config.get('JWT_SECRET_KEY') or '').encode('utf-8')
+    if not jwt_secret:
+        raise RuntimeError('JWT_SECRET_KEY must be configured for email verification codes.')
+    normalized = re.sub(r'[\s-]+', '', str(code or ''))
+    message = f'EvacWay email OTP v1\0{user_id}\0{jti}\0{normalized}'.encode('utf-8')
+    return hmac.new(jwt_secret, message, hashlib.sha256).hexdigest()
+
+
+def _create_email_otp_token(user, code):
+    jti = secrets.token_urlsafe(16)
+    issued_at_ts = int(time.time())
+    token = create_access_token(
+        identity=str(user.id),
+        expires_delta=timedelta(minutes=_EMAIL_OTP_EXPIRES_MINUTES),
+        additional_claims={
+            'account_type': 'user',
+            'mfa_flow': 'staff_email_otp_challenge',
+            'mfa_version': int(user.mfa_version or 0),
+            'otp_jti': jti,
+            'otp_iat': issued_at_ts,
+            'otp_hash': _email_otp_digest(user.id, jti, code),
+        },
+    )
+    return token
+
+
+def _resolve_email_otp_token(token):
+    if not token or not isinstance(token, str):
+        return None, None
+    try:
+        claims = decode_token(token)
+        if (
+            claims.get('account_type') != 'user'
+            or claims.get('mfa_flow') != 'staff_email_otp_challenge'
+        ):
+            return None, None
+        user_id = int(claims.get('sub'))
+    except Exception:
+        return None, None
+    user = db.session.get(User, user_id)
+    if not user or not user.is_active or user.role not in ('admin', 'lgu_personnel'):
+        return None, None
+    if int(claims.get('mfa_version', -1)) != int(user.mfa_version or 0):
+        return None, None
+    return user, claims
+
+
+def _is_email_otp_replayed(user, claims):
+    jti = str(claims.get('otp_jti') or '')
+    now_mono = time.monotonic()
+    with _email_otp_lock:
+        # Prune expired JTIs older than 15 minutes
+        expired = [k for k, ts in _consumed_email_otp_jtis.items() if now_mono - ts > 900]
+        for k in expired:
+            _consumed_email_otp_jtis.pop(k, None)
+        if jti in _consumed_email_otp_jtis:
+            return True
+
+    # Multi-worker replay protection: if user already completed a sign-in after this OTP was issued
+    otp_iat = claims.get('otp_iat')
+    if otp_iat is not None and user.last_login_at is not None:
+        last_login_ts = user.last_login_at.timestamp() if user.last_login_at.tzinfo else (
+            user.last_login_at.replace(tzinfo=utc_now().tzinfo).timestamp()
+        )
+        if last_login_ts >= float(otp_iat):
+            return True
+    return False
+
+
+def _mark_email_otp_consumed(jti):
+    if not jti:
+        return
+    with _email_otp_lock:
+        _consumed_email_otp_jtis[str(jti)] = time.monotonic()
 
 
 def _generic_login_failure():
@@ -219,19 +334,34 @@ def _backup_code_index(code, hashes):
 
 
 def _begin_staff_second_factor(user):
+    delivery_email = _staff_verification_email(user)
+    email_otp_available = bool(delivery_email)
+    masked_email = _mask_email(delivery_email) if email_otp_available else ''
     if user.totp_enabled and user.totp_secret_encrypted:
+        methods = ['totp', 'backup_code']
+        if email_otp_available:
+            methods.append('email_otp')
         return jsonify({
             'totp_required': True,
             'challenge_token': _mfa_flow_token(user, 'staff_totp_challenge'),
+            'masked_email': masked_email,
+            'email_otp_available': email_otp_available,
+            'available_methods': methods,
         }), 200
 
     secret = _pending_totp_secret(user)
     db.session.commit()
+    methods = ['totp']
+    if email_otp_available:
+        methods.append('email_otp')
     return jsonify({
         'totp_enrollment_required': True,
         'setup_token': _mfa_flow_token(user, 'staff_totp_enrollment'),
         'totp_secret': secret,
         'otpauth_uri': _totp_uri(user, secret),
+        'masked_email': masked_email,
+        'email_otp_available': email_otp_available,
+        'available_methods': methods,
     }), 200
 
 
@@ -518,6 +648,103 @@ def verify_staff_totp():
         user.totp_backup_codes_hashes = hashes
         used_backup = True
     return _mfa_success(user, 'Staff signed in with backup code' if used_backup else 'Staff two-factor sign-in completed')
+
+
+@auth_bp.route('/api/auth/staff/mfa/email/send', methods=['POST'])
+def send_staff_mfa_email_otp():
+    data = _mfa_payload()
+    token = data.get('challenge_token') or data.get('setup_token')
+    user = (
+        _resolve_mfa_flow_token(token, 'staff_totp_challenge')
+        or _resolve_mfa_flow_token(token, 'staff_totp_enrollment')
+    )
+    if not user:
+        return _generic_login_failure()
+
+    blocked = _mfa_rate_and_lock_response(user)
+    if blocked:
+        return blocked
+
+    delivery_email = _staff_verification_email(user)
+    if not delivery_email:
+        return jsonify({
+            'error': 'This account uses a local placeholder address and has no recovery email configured. Add a recovery email in Users or use your authenticator app.'
+        }), 400
+
+    now_mono = time.monotonic()
+    with _email_otp_lock:
+        last_sent = _email_otp_send_times.get(user.id)
+        if last_sent is not None:
+            elapsed = now_mono - last_sent
+            if elapsed < _EMAIL_OTP_RESEND_COOLDOWN_SECONDS:
+                wait_seconds = max(1, int(_EMAIL_OTP_RESEND_COOLDOWN_SECONDS - elapsed))
+                return jsonify({
+                    'error': f'Please wait {wait_seconds}s before requesting another email code.',
+                    'retry_after_seconds': wait_seconds,
+                }), 429
+
+    code = f'{secrets.randbelow(1_000_000):06d}'
+    try:
+        send_staff_mfa_email_code(user, code, expires_minutes=_EMAIL_OTP_EXPIRES_MINUTES)
+    except Exception:
+        current_app.logger.exception('Staff MFA email verification code delivery failed for user %s', user.id)
+        return jsonify({
+            'error': 'Could not send verification email right now. Please use your authenticator app or a backup code.'
+        }), 503
+
+    with _email_otp_lock:
+        _email_otp_send_times[user.id] = time.monotonic()
+
+    email_otp_token = _create_email_otp_token(user, code)
+    masked_email = _mask_email(delivery_email)
+    db.session.add(SystemLog(
+        user_id=user.id,
+        action='Staff requested email verification code for sign in',
+        timestamp=utc_now(),
+    ))
+    db.session.commit()
+
+    return jsonify({
+        'message': f'A 6-digit verification code was sent to {masked_email}.',
+        'email_otp_token': email_otp_token,
+        'masked_email': masked_email,
+        'expires_in_seconds': _EMAIL_OTP_EXPIRES_MINUTES * 60,
+        'resend_cooldown_seconds': _EMAIL_OTP_RESEND_COOLDOWN_SECONDS,
+    }), 200
+
+
+@auth_bp.route('/api/auth/staff/mfa/email/verify', methods=['POST'])
+def verify_staff_mfa_email_otp():
+    data = _mfa_payload()
+    user, claims = _resolve_email_otp_token(data.get('email_otp_token'))
+    if not user or not claims:
+        return jsonify({'error': 'Verification code expired or invalid. Please request a new code.'}), 401
+
+    user = User.query.filter_by(id=user.id).with_for_update().populate_existing().first()
+    if not user or not user.is_active or user.role not in ('admin', 'lgu_personnel'):
+        return _generic_login_failure()
+
+    blocked = _mfa_rate_and_lock_response(user)
+    if blocked:
+        return blocked
+
+    if _is_email_otp_replayed(user, claims):
+        return jsonify({'error': 'This verification code has already been used. Please request a new code.'}), 401
+
+    normalized_code = re.sub(r'[\s-]+', '', str(data.get('code') or ''))
+    if not re.fullmatch(r'\d{6}', normalized_code):
+        _record_login_failure(user, 'staff_mfa')
+        return jsonify({'error': 'Invalid verification code. Please enter the 6-digit code from your email.'}), 401
+
+    jti = str(claims.get('otp_jti') or '')
+    stored_hash = str(claims.get('otp_hash') or '')
+    expected_hash = _email_otp_digest(user.id, jti, normalized_code)
+    if not stored_hash or not hmac.compare_digest(expected_hash, stored_hash):
+        _record_login_failure(user, 'staff_mfa')
+        return jsonify({'error': 'Invalid verification code. Please check your email and try again.'}), 401
+
+    _mark_email_otp_consumed(jti)
+    return _mfa_success(user, 'Staff signed in with email verification code')
 
 
 @auth_bp.route('/api/auth/staff/totp/recovery', methods=['POST'])

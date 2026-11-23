@@ -148,6 +148,12 @@ with app.app_context():
     except Exception as e:
         app.logger.warning("Could not ensure uploaded_files table: %s", e)
 
+    try:
+        from migrate_user_recovery_email import ensure_user_recovery_email_column
+        ensure_user_recovery_email_column(db)
+    except Exception as e:
+        app.logger.warning("Could not ensure users.recovery_email: %s", e)
+
 
 # =========================================================
 # BLUEPRINTS

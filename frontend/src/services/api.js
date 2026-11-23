@@ -131,6 +131,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ challenge_token: challengeToken, code }),
     }),
+  sendStaffEmailOtp: (flowToken) =>
+    request("/api/auth/staff/mfa/email/send", {
+      method: "POST",
+      body: JSON.stringify({ challenge_token: flowToken }),
+    }),
+  verifyStaffEmailOtp: (emailOtpToken, code) =>
+    request("/api/auth/staff/mfa/email/verify", {
+      method: "POST",
+      body: JSON.stringify({ email_otp_token: emailOtpToken, code }),
+    }),
   requestStaffTotpRecovery: (challengeToken) =>
     request("/api/auth/staff/totp/recovery", {
       method: "POST",
@@ -841,6 +851,12 @@ export const api = {
   },
 
   getRosterYears: () => request("/api/roster-years"),
+
+  carryOverRosterYear: (sourceYear, payload = {}) =>
+    request(`/api/roster-years/${sourceYear}/carry-over`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   // -------------------------------------------------------
   // BUILDINGS & ROOM MAPPING

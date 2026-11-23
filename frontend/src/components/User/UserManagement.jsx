@@ -507,6 +507,7 @@ function UserManagement() {
     setEditForm({
       name: user.name || "",
       email: user.email || "",
+      recovery_email: user.recovery_email || "",
       contact_number: user.contact_number || "",
       role: user.role || "lgu_personnel",
     });
@@ -526,6 +527,7 @@ function UserManagement() {
         ...editForm,
         name: editForm.name.trim(),
         email: editForm.email.trim().toLowerCase(),
+        recovery_email: (editForm.recovery_email || "").trim().toLowerCase(),
         contact_number: editForm.contact_number.trim(),
       });
       setSelectedUser(updated);
@@ -1370,6 +1372,25 @@ function UserManagement() {
                         <span>{editError}</span>
                       </p>
                     )}
+                  </div>
+
+                  <div className="um-form-group">
+                    <label htmlFor="edit-recovery-email" className="um-label">
+                      Recovery / 2FA email <span style={{ fontWeight: 400, color: "#64748b" }}>(optional)</span>
+                    </label>
+                    <input
+                      id="edit-recovery-email"
+                      className="um-input"
+                      type="email"
+                      placeholder="e.g. evacway599@gmail.com"
+                      value={editForm.recovery_email || ""}
+                      onChange={(e) =>
+                        setEditForm({ ...editForm, recovery_email: e.target.value })
+                      }
+                    />
+                    <span style={{ fontSize: "11.5px", color: "#64748b" }}>
+                      Used to receive 6-digit email verification codes and password resets (especially for .local accounts).
+                    </span>
                   </div>
 
                   <div className="um-form-group">

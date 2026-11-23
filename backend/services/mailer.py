@@ -17,6 +17,13 @@ class MailConfigurationError(RuntimeError):
     pass
 
 
+def _resolve_delivery_email(user_or_account):
+    recovery = str(getattr(user_or_account, "recovery_email", None) or "").strip().lower()
+    if recovery:
+        return recovery
+    return str(getattr(user_or_account, "email", None) or "").strip().lower()
+
+
 def _send_smtp_message(message):
     mailer = current_app.config.get("MAIL_MAILER", "smtp").lower()
     host = current_app.config.get("MAIL_HOST")
@@ -105,7 +112,7 @@ def send_password_setup_email(user_or_account, token, purpose="setup"):
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = formataddr((from_name, from_address))
-    message["To"] = user_or_account.email
+    message["To"] = _resolve_delivery_email(user_or_account)
     message.set_content(
         f"Hello {recipient_name},\n\n"
         f"Use this secure link to {'set' if purpose == 'setup' else 'reset'} your EvacWay password:\n"
@@ -119,6 +126,53 @@ def send_password_setup_email(user_or_account, token, purpose="setup"):
         f"{html_links}"
         "<p>This link expires in one hour. If you did not request this, you can ignore this email.</p>"
         "</body></html>",
+        subtype="html",
+    )
+
+    _send_smtp_message(message)
+
+
+def send_staff_mfa_email_code(user, code, expires_minutes=10):
+    mailer = current_app.config.get("MAIL_MAILER", "smtp").lower()
+    host = current_app.config.get("MAIL_HOST")
+    username = current_app.config.get("MAIL_USERNAME")
+    password = current_app.config.get("MAIL_PASSWORD")
+    encryption = current_app.config.get("MAIL_ENCRYPTION", "tls").lower()
+    from_address = current_app.config.get("MAIL_FROM_ADDRESS") or username
+    from_name = current_app.config.get("MAIL_FROM_NAME", "EvacWay System")
+
+    if mailer != "smtp":
+        raise MailConfigurationError("Only SMTP mail delivery is configured.")
+    if not host or not from_address or not username or not password:
+        raise MailConfigurationError("SMTP mail settings are incomplete in the backend environment.")
+    if encryption not in {"tls", "ssl"}:
+        raise MailConfigurationError("SMTP encryption must be configured as tls or ssl.")
+
+    recipient_name = (getattr(user, "name", None) or "there").strip() or "there"
+    safe_code = str(code).strip()
+
+    message = EmailMessage()
+    message["Subject"] = "Your EvacWay sign-in verification code"
+    message["From"] = formataddr((from_name, from_address))
+    message["To"] = _resolve_delivery_email(user)
+    message.set_content(
+        f"Hello {recipient_name},\n\n"
+        f"Your EvacWay two-factor sign-in code is: {safe_code}\n\n"
+        f"This code expires in {expires_minutes} minutes and can only be used once.\n"
+        "If you did not try to sign in, please ignore this email and change your password.\n"
+    )
+    message.add_alternative(
+        "<!doctype html><html><body style='margin:0;padding:24px;font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#17324d'>"
+        "<div style='max-width:480px;margin:0 auto'>"
+        "<h2 style='margin:0 0 12px;color:#174f88'>EvacWay sign-in verification</h2>"
+        f"<p style='margin:0 0 16px'>Hello {html.escape(recipient_name)},</p>"
+        "<p style='margin:0 0 16px'>Enter this 6-digit verification code to complete your sign in:</p>"
+        "<div style='margin:0 0 20px;padding:16px 20px;background:#f4f7fb;border:1px solid #dbe5f0;border-radius:8px;text-align:center'>"
+        f"<span style='font-size:28px;font-weight:700;letter-spacing:6px;color:#0f172a;font-family:monospace'>{html.escape(safe_code)}</span>"
+        "</div>"
+        f"<p style='margin:0 0 8px;color:#475569;font-size:13px'>This code expires in {int(expires_minutes)} minutes and can only be used once.</p>"
+        "<p style='margin:0;color:#64748b;font-size:12px'>If you did not attempt to sign in, you can ignore this email and consider updating your password.</p>"
+        "</div></body></html>",
         subtype="html",
     )
 

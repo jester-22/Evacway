@@ -45,6 +45,21 @@ def valid_password(password):
     )
 
 
+_NON_ROUTABLE_EMAIL_SUFFIXES = ('.local', '.localhost', '.invalid', '.internal', '.lan')
+
+
+def _parse_optional_recovery_email(raw_value):
+    val = str(raw_value or '').strip().lower()
+    if not val:
+        return None, None
+    if len(val) > 120 or not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', val):
+        return None, 'Enter a valid recovery email address'
+    domain = val.rsplit('@', 1)[1]
+    if any(domain.endswith(suffix) for suffix in _NON_ROUTABLE_EMAIL_SUFFIXES):
+        return None, 'Recovery email must be a deliverable email address (not .local)'
+    return val, None
+
+
 def current_user():
     return db.session.get(User, int(get_jwt_identity()))
 
@@ -93,11 +108,19 @@ def update_my_profile():
     name = str(data.get('name') or '').strip()
     email = str(data.get('email') or '').strip().lower()
     contact_number = str(data.get('contact_number') or '').strip() or None
+    recovery_email_provided = 'recovery_email' in data
+    recovery_email, recovery_err = (
+        _parse_optional_recovery_email(data.get('recovery_email'))
+        if recovery_email_provided
+        else (user.recovery_email, None)
+    )
 
     if not name or len(name) > 100:
         return jsonify({'error': 'Name is required and must be 100 characters or fewer'}), 400
     if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
         return jsonify({'error': 'Enter a valid email address'}), 400
+    if recovery_err:
+        return jsonify({'error': recovery_err}), 400
     if contact_number and len(contact_number) > 20:
         return jsonify({'error': 'Contact number must be 20 characters or fewer'}), 400
 
@@ -115,6 +138,8 @@ def update_my_profile():
 
     user.name = name
     user.email = email
+    if recovery_email_provided:
+        user.recovery_email = recovery_email
     user.contact_number = contact_number
     db.session.add(SystemLog(user_id=user.id, action='Updated own account details'))
     try:
@@ -171,11 +196,19 @@ def update_user(user_id):
     email = str(data.get('email') or '').strip().lower()
     contact_number = str(data.get('contact_number') or '').strip() or None
     role = data.get('role', user.role)
+    recovery_email_provided = 'recovery_email' in data
+    recovery_email, recovery_err = (
+        _parse_optional_recovery_email(data.get('recovery_email'))
+        if recovery_email_provided
+        else (user.recovery_email, None)
+    )
 
     if not name or len(name) > 100:
         return jsonify({'error': 'Name is required and must be 100 characters or fewer'}), 400
     if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
         return jsonify({'error': 'Enter a valid email address'}), 400
+    if recovery_err:
+        return jsonify({'error': recovery_err}), 400
     if contact_number and len(contact_number) > 20:
         return jsonify({'error': 'Contact number must be 20 characters or fewer'}), 400
     if role not in ('admin', 'lgu_personnel'):
@@ -197,6 +230,8 @@ def update_user(user_id):
 
     user.name = name
     user.email = email
+    if recovery_email_provided:
+        user.recovery_email = recovery_email
     user.contact_number = contact_number
     user.role = role
     db.session.add(SystemLog(
@@ -250,9 +285,14 @@ def create_user():
     ).first():
         return jsonify({"error": "A user with this email already exists"}), 409
 
+    recovery_email, recovery_err = _parse_optional_recovery_email(data.get('recovery_email'))
+    if recovery_err:
+        return jsonify({"error": recovery_err}), 400
+
     new_user = User(
         name=data['name'].strip(),
         email=email,
+        recovery_email=recovery_email,
         password_hash=generate_unusable_password_hash(),
         contact_number=data.get('contact_number'),
         role=data['role'],

@@ -9,6 +9,7 @@ from models import (
     Barangay,
     Family,
     Resident,
+    RosterYear,
     EvacuationAssignment,
     EvacuationCenterBuilding,
     EvacuationCenterRoom,
@@ -33,6 +34,15 @@ def _normalized_name_column():
     return func.lower(
         func.regexp_replace(func.trim(Barangay.name), r'\s+', ' ', 'g')
     )
+
+
+def _active_roster_year_id():
+    row = (
+        RosterYear.query.filter_by(is_active=True)
+        .order_by(RosterYear.year.desc())
+        .first()
+    )
+    return row.id if row else None
 
 
 @barangays_bp.route('/api/barangays/public', methods=['GET'])
@@ -61,24 +71,26 @@ def get_barangays():
         Barangay.name.asc()
     ).all()
 
-    family_counts = dict(
-        db.session.query(
-            Family.barangay_id,
-            func.count(func.distinct(Family.id))
-        )
-        .group_by(Family.barangay_id)
-        .all()
-    )
+    active_year_id = _active_roster_year_id()
 
-    resident_counts = dict(
+    fam_count_q = db.session.query(
+        Family.barangay_id,
+        func.count(func.distinct(Family.id))
+    )
+    if active_year_id is not None:
+        fam_count_q = fam_count_q.filter(Family.roster_year_id == active_year_id)
+    family_counts = dict(fam_count_q.group_by(Family.barangay_id).all())
+
+    res_count_q = (
         db.session.query(
             Family.barangay_id,
             func.count(func.distinct(Resident.id))
         )
         .join(Resident, Resident.family_id == Family.id)
-        .group_by(Family.barangay_id)
-        .all()
     )
+    if active_year_id is not None:
+        res_count_q = res_count_q.filter(Family.roster_year_id == active_year_id)
+    resident_counts = dict(res_count_q.group_by(Family.barangay_id).all())
 
     center_counts = dict(
         db.session.query(
@@ -91,16 +103,17 @@ def get_barangays():
         .all()
     )
 
-    assigned_family_counts = dict(
+    assigned_q = (
         db.session.query(
             Family.barangay_id,
             func.count(func.distinct(Family.id))
         )
         .join(Resident, Resident.family_id == Family.id)
         .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
-        .group_by(Family.barangay_id)
-        .all()
     )
+    if active_year_id is not None:
+        assigned_q = assigned_q.filter(Family.roster_year_id == active_year_id)
+    assigned_family_counts = dict(assigned_q.group_by(Family.barangay_id).all())
 
     result = []
 
@@ -144,24 +157,23 @@ def get_barangay(barangay_id):
             "error": "Barangay not found"
         }), 404
 
-    families = Family.query.filter(
-        Family.barangay_id == barangay.id
-    ).order_by(
-        Family.family_code.asc()
-    ).all()
+    active_year_id = _active_roster_year_id()
 
-    family_count = (
-        db.session.query(func.count(func.distinct(Family.id)))
-        .filter(Family.barangay_id == barangay.id)
-        .scalar()
-    ) or 0
+    fam_q = Family.query.filter(Family.barangay_id == barangay.id)
+    if active_year_id is not None:
+        fam_q = fam_q.filter(Family.roster_year_id == active_year_id)
+    families = fam_q.order_by(Family.family_code.asc()).all()
 
-    resident_count = (
+    family_count = len(families)
+
+    res_q = (
         db.session.query(func.count(func.distinct(Resident.id)))
         .join(Family, Resident.family_id == Family.id)
         .filter(Family.barangay_id == barangay.id)
-        .scalar()
-    ) or 0
+    )
+    if active_year_id is not None:
+        res_q = res_q.filter(Family.roster_year_id == active_year_id)
+    resident_count = res_q.scalar() or 0
 
     evacuation_center_count = CenterBarangay.query.join(
         EvacuationCenter,
@@ -593,17 +605,18 @@ def update_barangay(barangay_id):
     ))
     db.session.commit()
 
-    f_count = (
-        db.session.query(func.count(func.distinct(Family.id)))
-        .filter(Family.barangay_id == barangay.id)
-        .scalar()
-    ) or 0
-    r_count = (
+    active_year_id = _active_roster_year_id()
+    f_q = db.session.query(func.count(func.distinct(Family.id))).filter(Family.barangay_id == barangay.id)
+    r_q = (
         db.session.query(func.count(func.distinct(Resident.id)))
         .join(Family, Resident.family_id == Family.id)
         .filter(Family.barangay_id == barangay.id)
-        .scalar()
-    ) or 0
+    )
+    if active_year_id is not None:
+        f_q = f_q.filter(Family.roster_year_id == active_year_id)
+        r_q = r_q.filter(Family.roster_year_id == active_year_id)
+    f_count = f_q.scalar() or 0
+    r_count = r_q.scalar() or 0
     c_count = CenterBarangay.query.join(
         EvacuationCenter,
         EvacuationCenter.id == CenterBarangay.center_id
@@ -684,11 +697,11 @@ def get_barangay_families(barangay_id):
             "error": "Barangay not found"
         }), 404
 
-    families = Family.query.filter(
-        Family.barangay_id == barangay_id
-    ).order_by(
-        Family.family_code.asc()
-    ).all()
+    active_year_id = _active_roster_year_id()
+    fam_q = Family.query.filter(Family.barangay_id == barangay_id)
+    if active_year_id is not None:
+        fam_q = fam_q.filter(Family.roster_year_id == active_year_id)
+    families = fam_q.order_by(Family.family_code.asc()).all()
 
     from routes.families import _family_list_rows
     return jsonify(_family_list_rows(families)), 200

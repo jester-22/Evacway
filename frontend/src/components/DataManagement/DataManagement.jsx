@@ -118,6 +118,17 @@ function DataManagement() {
   const [yearPage, setYearPage] = useState(1);
   const [yearPerPage, setYearPerPage] = useState(25);
   const [expandedHouseholdIds, setExpandedHouseholdIds] = useState(new Set());
+  const [carryOverTarget, setCarryOverTarget] = useState(null);
+  const [carryOverMode, setCarryOverMode] = useState("all"); // "all" | "select"
+  const [carryOverSourceFamilies, setCarryOverSourceFamilies] = useState([]);
+  const [loadingCarryOverFamilies, setLoadingCarryOverFamilies] = useState(false);
+  const [carryOverBarangayFilter, setCarryOverBarangayFilter] = useState("");
+  const [carryOverSearch, setCarryOverSearch] = useState("");
+  const [carryOverSelectedIds, setCarryOverSelectedIds] = useState(() => new Set());
+  const [carryOverIncludeAssignments, setCarryOverIncludeAssignments] = useState(true);
+  const [carryingOver, setCarryingOver] = useState(false);
+  const [carryOverError, setCarryOverError] = useState("");
+  const [carryOverSuccess, setCarryOverSuccess] = useState("");
 
   useEffect(() => {
     fetchYears();
@@ -189,6 +200,92 @@ function DataManagement() {
     setSelectedRosterYear(year);
     setYearPage(1);
     fetchYearFamilies(year);
+  }
+
+  async function openCarryOverModal(sourceYearObj) {
+    setCarryOverError("");
+    setCarryOverMode("all");
+    setCarryOverBarangayFilter("");
+    setCarryOverSearch("");
+    setCarryOverSelectedIds(new Set());
+    setCarryOverIncludeAssignments(true);
+    setCarryOverTarget(sourceYearObj);
+    setCarryOverSourceFamilies([]);
+    setLoadingCarryOverFamilies(true);
+    try {
+      const data = await api.getFamilies({ year: sourceYearObj.year, all: "true" });
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setCarryOverSourceFamilies(items);
+    } catch {
+      setCarryOverSourceFamilies([]);
+    } finally {
+      setLoadingCarryOverFamilies(false);
+    }
+  }
+
+  const filteredCarryOverFamilies = useMemo(() => {
+    const q = carryOverSearch.trim().toLowerCase();
+    return carryOverSourceFamilies.filter((fam) => {
+      if (carryOverBarangayFilter && String(fam.barangay_id) !== String(carryOverBarangayFilter)) {
+        return false;
+      }
+      if (!q) return true;
+      const haystack = `${fam.family_code || ""} ${fam.head_name || ""} ${fam.barangay || ""} ${fam.address || ""}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [carryOverSourceFamilies, carryOverBarangayFilter, carryOverSearch]);
+
+  function toggleCarryOverFamily(familyId) {
+    setCarryOverSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(familyId)) next.delete(familyId);
+      else next.add(familyId);
+      return next;
+    });
+  }
+
+  function selectAllVisibleCarryOverFamilies() {
+    setCarryOverSelectedIds((prev) => {
+      const next = new Set(prev);
+      filteredCarryOverFamilies.forEach((fam) => next.add(fam.id));
+      return next;
+    });
+  }
+
+  function clearCarryOverSelection() {
+    setCarryOverSelectedIds(new Set());
+  }
+
+  async function handleConfirmCarryOver() {
+    if (!carryOverTarget) return;
+    if (carryOverMode === "select" && carryOverSelectedIds.size === 0) {
+      setCarryOverError("Select at least one family to carry over.");
+      return;
+    }
+    setCarryingOver(true);
+    setCarryOverError("");
+    setCarryOverSuccess("");
+    try {
+      const payload = {
+        include_assignments: carryOverIncludeAssignments,
+      };
+      if (carryOverMode === "select") {
+        payload.family_ids = Array.from(carryOverSelectedIds);
+      }
+      const res = await api.carryOverRosterYear(carryOverTarget.year, payload);
+      setCarryOverTarget(null);
+      setCarryOverSuccess(
+        res?.message ||
+          `Carried over roster from Census Year ${carryOverTarget.year} to the active year.`
+      );
+      await invalidateEvacuationQueries(queryClient);
+      await fetchYears(res?.target_year ?? null);
+      setYearViewMode("residents");
+    } catch (err) {
+      setCarryOverError(err.message || "Failed to carry over roster year.");
+    } finally {
+      setCarryingOver(false);
+    }
   }
 
   // Flatten families into individual residents for the active roster year
@@ -822,8 +919,67 @@ function DataManagement() {
   }
 
   function renderResidentDirectorySection() {
+    const activeYearEntry = years.find((y) => y.is_active) || null;
+    const latestArchivedWithFamilies =
+      years.find((y) => !y.is_active && (y.households ?? y.household_count ?? 0) > 0) || null;
+    const activeYearHasNoFamilies =
+      Boolean(activeYearEntry) &&
+      (activeYearEntry.households ?? activeYearEntry.household_count ?? 0) === 0;
+
     return (
       <div className="dm-resident-directory-section" style={{ display: "flex", flexDirection: "column", gap: "18px", marginTop: "24px", paddingTop: "20px", borderTop: "2px solid #e2e8f0" }}>
+        {carryOverSuccess && (
+          <div className="dm-alert dm-alert-success" style={{ margin: 0 }}>
+            <div className="dm-alert-content">
+              <FontAwesomeIcon icon={faCircleCheck} />
+              <span>{carryOverSuccess}</span>
+            </div>
+            <button
+              type="button"
+              className="dm-modal-close"
+              onClick={() => setCarryOverSuccess("")}
+              aria-label="Dismiss message"
+            >
+              <FontAwesomeIcon icon={faXmark} />
+            </button>
+          </div>
+        )}
+
+        {activeYearHasNoFamilies && latestArchivedWithFamilies && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: "12px",
+              padding: "14px 16px",
+              borderRadius: "10px",
+              border: "1px solid #bfdbfe",
+              background: "#eff6ff",
+            }}
+          >
+            <div>
+              <strong style={{ display: "block", fontSize: "13.5px", color: "#1e3a8a" }}>
+                Start Census Year {activeYearEntry.year} from {latestArchivedWithFamilies.year}'s roster
+              </strong>
+              <span style={{ fontSize: "12.5px", color: "#334155" }}>
+                Carry over {(latestArchivedWithFamilies.households ?? latestArchivedWithFamilies.household_count ?? 0).toLocaleString()} families and their members without re-typing unchanged households. Existing resident logins stay linked.
+              </span>
+            </div>
+            <button
+              type="button"
+              className="dm-btn dm-btn-primary"
+              onClick={() => openCarryOverModal(latestArchivedWithFamilies)}
+              disabled={carryingOver}
+              style={{ fontSize: "12.5px", padding: "8px 14px" }}
+            >
+              <FontAwesomeIcon icon={faRotate} />
+              Carry Over from {latestArchivedWithFamilies.year}
+            </button>
+          </div>
+        )}
+
         {/* Section Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", borderBottom: "1px solid var(--line, #e2e8f0)", paddingBottom: "14px" }}>
           <div>
@@ -1996,7 +2152,7 @@ function DataManagement() {
                           <span style={{ fontSize: "12px", color: "var(--muted, #64748b)" }}>residents</span>
                         </td>
                         <td>
-                          <div style={{ display: "flex", gap: "8px" }}>
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                             <button
                               type="button"
                               className="dm-btn dm-btn-primary"
@@ -2009,6 +2165,19 @@ function DataManagement() {
                               <FontAwesomeIcon icon={faUsers} />
                               Inspect {y.year} Residents
                             </button>
+                            {!y.is_active && activeYearEntry && (y.households ?? y.household_count ?? 0) > 0 && (
+                              <button
+                                type="button"
+                                className="dm-btn dm-btn-secondary"
+                                onClick={() => openCarryOverModal(y)}
+                                disabled={carryingOver}
+                                style={{ fontSize: "12px", padding: "6px 12px" }}
+                                title={`Copy families and members from ${y.year} into ${activeYearEntry.year}`}
+                              >
+                                <FontAwesomeIcon icon={faRotate} />
+                                Carry Over to {activeYearEntry.year}
+                              </button>
+                            )}
                             <button
                               type="button"
                               className="dm-btn dm-btn-secondary"
@@ -2081,7 +2250,7 @@ function DataManagement() {
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                    <div style={{ display: "flex", gap: "8px", marginTop: "4px", flexWrap: "wrap" }}>
                       <button
                         type="button"
                         className="dm-btn dm-btn-primary"
@@ -2094,6 +2263,18 @@ function DataManagement() {
                         <FontAwesomeIcon icon={faUsers} />
                         Inspect Residents
                       </button>
+                      {!y.is_active && activeYearEntry && (y.households ?? y.household_count ?? 0) > 0 && (
+                        <button
+                          type="button"
+                          className="dm-btn dm-btn-secondary"
+                          onClick={() => openCarryOverModal(y)}
+                          disabled={carryingOver}
+                          style={{ fontSize: "12px", padding: "8px 12px" }}
+                        >
+                          <FontAwesomeIcon icon={faRotate} />
+                          Carry Over
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="dm-btn dm-btn-secondary"
@@ -2425,7 +2606,22 @@ function DataManagement() {
                     </div>
                     <div className="dm-summary-card">
                       <span className="dm-summary-label">New Families</span>
-                      <span className="dm-summary-val">{stagedResult.new_households ?? 0}</span>
+                      <span className="dm-summary-val">
+                        {stagedResult.new_households ?? 0}
+                        {stagedResult.previous_year &&
+                          ((stagedResult.returning_unchanged_households ?? 0) > 0 ||
+                            (stagedResult.returning_changed_households ?? 0) > 0) && (
+                            <span className="dm-summary-sub">
+                              ({stagedResult.returning_unchanged_households ?? 0} same as {stagedResult.previous_year}
+                              {(stagedResult.returning_changed_households ?? 0) > 0
+                                ? `, ${stagedResult.returning_changed_households} updated`
+                                : ""}
+                              {(stagedResult.brand_new_households ?? 0) > 0
+                                ? `, ${stagedResult.brand_new_households} brand new`
+                                : ""})
+                            </span>
+                          )}
+                      </span>
                     </div>
                     <div className="dm-summary-card">
                       <span className="dm-summary-label">Updated Families</span>
@@ -3569,6 +3765,251 @@ function DataManagement() {
                 >
                   <FontAwesomeIcon icon={deletingBarangay ? faCircleNotch : faTrash} spin={deletingBarangay} />
                   {deletingBarangay ? "Deleting..." : "Delete Barangay"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            MODAL 5: CARRY OVER ROSTER YEAR
+            ========================================================================= */}
+        {carryOverTarget && (
+          <div className="dm-modal-overlay" onClick={() => !carryingOver && setCarryOverTarget(null)}>
+            <div
+              className="dm-modal-card"
+              style={{ maxWidth: carryOverMode === "select" ? "620px" : "480px" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="dm-modal-header">
+                <h4 className="dm-modal-title">
+                  Carry Over Census Year {carryOverTarget.year}
+                </h4>
+                <button
+                  type="button"
+                  className="dm-modal-close"
+                  onClick={() => setCarryOverTarget(null)}
+                  disabled={carryingOver}
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                </button>
+              </div>
+              <div className="dm-modal-body">
+                {carryOverError && (
+                  <div className="dm-alert dm-alert-error" style={{ margin: 0 }}>
+                    <div className="dm-alert-content">
+                      <FontAwesomeIcon icon={faTriangleExclamation} />
+                      <span>{carryOverError}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className={`dm-btn ${carryOverMode === "all" ? "dm-btn-primary" : "dm-btn-secondary"}`}
+                    onClick={() => setCarryOverMode("all")}
+                    disabled={carryingOver}
+                    style={{ fontSize: "12.5px", padding: "7px 12px" }}
+                  >
+                    All families ({(carryOverTarget.households ?? carryOverTarget.household_count ?? 0).toLocaleString()})
+                  </button>
+                  <button
+                    type="button"
+                    className={`dm-btn ${carryOverMode === "select" ? "dm-btn-primary" : "dm-btn-secondary"}`}
+                    onClick={() => setCarryOverMode("select")}
+                    disabled={carryingOver}
+                    style={{ fontSize: "12.5px", padding: "7px 12px" }}
+                  >
+                    Choose specific families ({carryOverSelectedIds.size} selected)
+                  </button>
+                </div>
+
+                {carryOverMode === "all" ? (
+                  <p style={{ margin: 0 }}>
+                    Copy all{" "}
+                    <strong>
+                      {(carryOverTarget.households ?? carryOverTarget.household_count ?? 0).toLocaleString()} families
+                    </strong>{" "}
+                    and{" "}
+                    <strong>
+                      {(carryOverTarget.residents ?? carryOverTarget.resident_count ?? 0).toLocaleString()} residents
+                    </strong>{" "}
+                    from <strong>{carryOverTarget.year}</strong> into the current active census year?
+                  </p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <input
+                        type="text"
+                        value={carryOverSearch}
+                        onChange={(e) => setCarryOverSearch(e.target.value)}
+                        placeholder="Search family code, head, or barangay..."
+                        style={{
+                          flex: "1 1 180px",
+                          padding: "7px 10px",
+                          borderRadius: "6px",
+                          border: "1px solid #cbd5e1",
+                          fontSize: "12.5px",
+                        }}
+                      />
+                      <select
+                        value={carryOverBarangayFilter}
+                        onChange={(e) => setCarryOverBarangayFilter(e.target.value)}
+                        style={{
+                          padding: "7px 10px",
+                          borderRadius: "6px",
+                          border: "1px solid #cbd5e1",
+                          fontSize: "12.5px",
+                          background: "#ffffff",
+                        }}
+                      >
+                        <option value="">All Barangays</option>
+                        {barangays.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px", color: "var(--muted, #64748b)" }}>
+                      <span>
+                        Showing {filteredCarryOverFamilies.length} of {carryOverSourceFamilies.length} families ·{" "}
+                        <strong>{carryOverSelectedIds.size} selected</strong>
+                      </span>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <button
+                          type="button"
+                          className="dm-btn dm-btn-secondary"
+                          onClick={selectAllVisibleCarryOverFamilies}
+                          disabled={loadingCarryOverFamilies || filteredCarryOverFamilies.length === 0}
+                          style={{ fontSize: "11.5px", padding: "3px 8px" }}
+                        >
+                          Select visible
+                        </button>
+                        <button
+                          type="button"
+                          className="dm-btn dm-btn-secondary"
+                          onClick={clearCarryOverSelection}
+                          disabled={carryOverSelectedIds.size === 0}
+                          style={{ fontSize: "11.5px", padding: "3px 8px" }}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        maxHeight: "220px",
+                        overflowY: "auto",
+                        border: "1px solid var(--line, #e2e8f0)",
+                        borderRadius: "8px",
+                        background: "#ffffff",
+                      }}
+                    >
+                      {loadingCarryOverFamilies ? (
+                        <p style={{ padding: "16px", margin: 0, textAlign: "center", fontSize: "12.5px", color: "#64748b" }}>
+                          Loading families from {carryOverTarget.year}...
+                        </p>
+                      ) : filteredCarryOverFamilies.length === 0 ? (
+                        <p style={{ padding: "16px", margin: 0, textAlign: "center", fontSize: "12.5px", color: "#64748b" }}>
+                          No matching families found.
+                        </p>
+                      ) : (
+                        filteredCarryOverFamilies.map((fam) => {
+                          const checked = carryOverSelectedIds.has(fam.id);
+                          return (
+                            <label
+                              key={fam.id}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "10px",
+                                padding: "8px 12px",
+                                borderBottom: "1px solid #f1f5f9",
+                                background: checked ? "#eff6ff" : "transparent",
+                                cursor: "pointer",
+                                fontSize: "12.5px",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleCarryOverFamily(fam.id)}
+                                disabled={carryingOver}
+                              />
+                              <span style={{ flex: 1, minWidth: 0 }}>
+                                <strong>{fam.head_name}</strong>{" "}
+                                <span style={{ color: "#64748b", fontSize: "11.5px" }}>({fam.family_code})</span>
+                                <span style={{ display: "block", fontSize: "11.5px", color: "#64748b" }}>
+                                  {fam.barangay || "Unassigned barangay"} · {fam.member_count ?? fam.members?.length ?? 0} member(s)
+                                </span>
+                              </span>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <p style={{ fontSize: "12.5px", color: "var(--muted, #64748b)", margin: 0 }}>
+                  Families whose family code already exists in the active year will be skipped without overwriting.
+                  Existing resident login accounts will automatically stay linked to the new year's records, and the{" "}
+                  {carryOverTarget.year} archive will remain untouched.
+                </p>
+
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "10px",
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid var(--line, #e2e8f0)",
+                    background: "#f8fafc",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={carryOverIncludeAssignments}
+                    onChange={(e) => setCarryOverIncludeAssignments(e.target.checked)}
+                    disabled={carryingOver}
+                    style={{ marginTop: "3px" }}
+                  />
+                  <span>
+                    <strong>Keep pre-assigned evacuation centers & rooms</strong>
+                    <span style={{ display: "block", fontSize: "12px", color: "var(--muted, #64748b)" }}>
+                      Arrival check-in status will reset to pending for the new year.
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <div className="dm-modal-footer">
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-secondary"
+                  disabled={carryingOver}
+                  onClick={() => setCarryOverTarget(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="dm-btn dm-btn-primary"
+                  disabled={carryingOver || (carryOverMode === "select" && carryOverSelectedIds.size === 0)}
+                  onClick={handleConfirmCarryOver}
+                >
+                  <FontAwesomeIcon icon={carryingOver ? faCircleNotch : faRotate} spin={carryingOver} />
+                  {carryingOver
+                    ? "Carrying over..."
+                    : carryOverMode === "select"
+                      ? `Carry Over ${carryOverSelectedIds.size} Selected`
+                      : `Carry Over All from ${carryOverTarget.year}`}
                 </button>
               </div>
             </div>

@@ -101,6 +101,11 @@ class User(BaseModel):
         nullable=False
     )
 
+    recovery_email = db.Column(
+        db.String(120),
+        nullable=True
+    )
+
     password_hash = db.Column(
         db.String(255),
         nullable=False
@@ -156,6 +161,7 @@ class User(BaseModel):
             "id": self.id,
             "name": self.name,
             "email": self.email,
+            "recovery_email": self.recovery_email,
             "contact_number": self.contact_number,
             "resident_id": self.resident_id,
             "role": self.role,

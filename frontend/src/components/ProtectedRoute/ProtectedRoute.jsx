@@ -4,7 +4,8 @@ import { useAuth } from "../../context/AuthContext";
 // Wrap any page that needs login with this. Pass allowedRoles to also
 // restrict by role, e.g. <ProtectedRoute allowedRoles={['admin']}>
 function ProtectedRoute({ children, allowedRoles }) {
-  const { user } = useAuth();
+  const auth = useAuth();
+  const user = auth?.user ?? null;
 
   if (!user) {
     return <Navigate to="/" replace />;

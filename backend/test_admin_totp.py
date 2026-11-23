@@ -226,6 +226,138 @@ class AdminTotpTests(unittest.TestCase):
         finally:
             self.app.config["LOGIN_RATE_LIMIT_MAX_REQUESTS"] = previous_limit
 
+    def test_email_otp_second_factor_works_and_prevents_replay(self):
+        from unittest.mock import patch
+        from routes.auth import _consumed_email_otp_jtis, _email_otp_send_times
+
+        _email_otp_send_times.clear()
+        _consumed_email_otp_jtis.clear()
+        self._enroll()
+        _login_rate_buckets.clear()
+
+        login_resp = self._login()
+        self.assertTrue(login_resp.json["totp_required"])
+        self.assertIn("email_otp", login_resp.json.get("available_methods", []))
+        self.assertTrue(login_resp.json.get("masked_email"))
+        challenge = login_resp.json["challenge_token"]
+
+        sent_codes = []
+        with patch(
+            "routes.auth.send_staff_mfa_email_code",
+            side_effect=lambda user, code, expires_minutes=10: sent_codes.append(code),
+        ):
+            send_resp = self.client.post(
+                "/api/auth/staff/mfa/email/send",
+                json={"challenge_token": challenge},
+            )
+            self.assertEqual(send_resp.status_code, 200, send_resp.json)
+            self.assertEqual(len(sent_codes), 1)
+            self.assertRegex(sent_codes[0], r"^\d{6}$")
+            email_otp_token = send_resp.json["email_otp_token"]
+
+            # Immediate resend is rate-limited by cooldown
+            cooldown_resp = self.client.post(
+                "/api/auth/staff/mfa/email/send",
+                json={"challenge_token": challenge},
+            )
+            self.assertEqual(cooldown_resp.status_code, 429)
+
+        # Wrong 6-digit code is rejected
+        wrong_code = "000000" if sent_codes[0] != "000000" else "111111"
+        bad_verify = self.client.post(
+            "/api/auth/staff/mfa/email/verify",
+            json={"email_otp_token": email_otp_token, "code": wrong_code},
+        )
+        self.assertEqual(bad_verify.status_code, 401)
+
+        # Correct 6-digit code signs in with mfa_verified=True
+        ok_verify = self.client.post(
+            "/api/auth/staff/mfa/email/verify",
+            json={"email_otp_token": email_otp_token, "code": sent_codes[0]},
+        )
+        self.assertEqual(ok_verify.status_code, 200, ok_verify.json)
+        access_token = ok_verify.json["access_token"]
+        self.assertTrue(access_token)
+
+        # Admin-protected route accepts the email-OTP-verified token
+        admin_check = self.client.get(
+            "/api/admin/mfa-recovery-requests",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        self.assertEqual(admin_check.status_code, 200)
+
+        # Replaying the same email OTP token is rejected
+        replay = self.client.post(
+            "/api/auth/staff/mfa/email/verify",
+            json={"email_otp_token": email_otp_token, "code": sent_codes[0]},
+        )
+        self.assertEqual(replay.status_code, 401)
+
+    def test_local_placeholder_email_uses_recovery_email_for_email_otp(self):
+        from unittest.mock import patch
+        from routes.auth import _consumed_email_otp_jtis, _email_otp_send_times
+
+        _email_otp_send_times.clear()
+        _consumed_email_otp_jtis.clear()
+        _login_rate_buckets.clear()
+
+        local_admin = User(
+            name="Local Admin",
+            email="admin@evacway.local",
+            recovery_email=None,
+            password_hash=generate_password_hash("Admin-password-123!"),
+            role="admin",
+            is_active=True,
+        )
+        db.session.add(local_admin)
+        db.session.commit()
+
+        # Without recovery_email, email OTP is unavailable and send returns 400
+        resp_no_rec = self.client.post("/api/auth/login", json={
+            "email": "admin@evacway.local",
+            "password": "Admin-password-123!",
+        })
+        self.assertEqual(resp_no_rec.status_code, 200)
+        self.assertFalse(resp_no_rec.json["email_otp_available"])
+        send_blocked = self.client.post(
+            "/api/auth/staff/mfa/email/send",
+            json={"challenge_token": resp_no_rec.json["setup_token"]},
+        )
+        self.assertEqual(send_blocked.status_code, 400)
+
+        # With recovery_email set to evacway599@gmail.com, email OTP works and masks recovery email
+        local_admin.recovery_email = "evacway599@gmail.com"
+        db.session.commit()
+        _login_rate_buckets.clear()
+
+        resp_with_rec = self.client.post("/api/auth/login", json={
+            "email": "admin@evacway.local",
+            "password": "Admin-password-123!",
+        })
+        self.assertEqual(resp_with_rec.status_code, 200)
+        self.assertTrue(resp_with_rec.json["email_otp_available"])
+        self.assertEqual(resp_with_rec.json["masked_email"], "e***9@gmail.com")
+
+        sent_codes = []
+        with patch(
+            "routes.auth.send_staff_mfa_email_code",
+            side_effect=lambda user, code, expires_minutes=10: sent_codes.append((user.recovery_email, code)),
+        ):
+            send_ok = self.client.post(
+                "/api/auth/staff/mfa/email/send",
+                json={"challenge_token": resp_with_rec.json["setup_token"]},
+            )
+            self.assertEqual(send_ok.status_code, 200, send_ok.json)
+            self.assertEqual(send_ok.json["masked_email"], "e***9@gmail.com")
+            self.assertEqual(sent_codes[0][0], "evacway599@gmail.com")
+
+            verify_ok = self.client.post(
+                "/api/auth/staff/mfa/email/verify",
+                json={"email_otp_token": send_ok.json["email_otp_token"], "code": sent_codes[0][1]},
+            )
+            self.assertEqual(verify_ok.status_code, 200, verify_ok.json)
+            self.assertTrue(verify_ok.json.get("access_token"))
+
 
 if __name__ == "__main__":
     unittest.main()

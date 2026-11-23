@@ -283,6 +283,9 @@ export default function CenterDetail({
           <HouseholdsTab
             center={center}
             centerFamilies={centerFamilies}
+            loading={detailsQuery.isLoading}
+            error={detailsQuery.error}
+            onRetry={() => detailsQuery.refetch()}
             rooms={rooms}
             buildings={buildings}
             onAssignHousehold={onAssignHousehold}
@@ -1604,6 +1607,9 @@ export function StructureTab({
 export function HouseholdsTab({
   center,
   centerFamilies = [],
+  loading = false,
+  error = null,
+  onRetry,
   rooms = [],
   buildings = [],
   onMove,
@@ -1732,7 +1738,26 @@ export function HouseholdsTab({
         </div>
       </div>
 
-      {filteredFamilies.length === 0 ? (
+      {loading ? (
+        <EmptyState
+          icon={faPeopleGroup}
+          title="Loading families..."
+          text="Fetching families assigned to this evacuation center."
+        />
+      ) : error ? (
+        <EmptyState
+          icon={faTriangleExclamation}
+          title="Could not load families"
+          text={error.message || 'The server took too long to respond. Please try again.'}
+          action={
+            onRetry ? (
+              <Button variant="secondary" size="sm" onClick={onRetry}>
+                Retry
+              </Button>
+            ) : null
+          }
+        />
+      ) : filteredFamilies.length === 0 ? (
         <EmptyState
           icon={faPeopleGroup}
           title={centerFamilies.length === 0 ? 'No families assigned' : 'No matching families'}

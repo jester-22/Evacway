@@ -1302,12 +1302,12 @@ def remove_family_from_room(room_id, resident_or_family_id):
         "message": f"Family '{household_name}' unassigned from room successfully",
         "room_occupied": current_occupied,
         "room_assigned": current_assigned,
-        "room_available": room.capacity_usage()['available_spaces'],
-        "room_unassigned": room.capacity_usage()['available_spaces'],
+        "room_available": current_usage['available_spaces'],
+        "room_unassigned": current_usage['available_spaces'],
         "is_assigned": is_assigned,
-        "is_fully_assigned": room.capacity_usage()['is_full'],
+        "is_fully_assigned": current_usage['is_full'],
         "family_slots": room.family_slots,
         "people_spaces": room.people_spaces,
-        **room.capacity_usage(),
+        **current_usage,
         "assignment_status": "Assigned" if is_assigned else "Unassigned"
     }), 200

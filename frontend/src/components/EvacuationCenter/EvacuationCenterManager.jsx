@@ -136,7 +136,7 @@ export default function EvacuationCenterManager({
 
   // Center details query to fetch assigned_families across the whole center
   const centerDetailsQuery = useQuery({
-    queryKey: ["evacuation-center-details", selectedCenter?.id],
+    queryKey: queryKeys.centerDetails(selectedCenter?.id),
     queryFn: () => api.getEvacuationCenter(selectedCenter.id),
     enabled: Boolean(selectedCenter?.id),
   });

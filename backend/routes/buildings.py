@@ -913,12 +913,18 @@ def get_building_details(building_id):
         b_status_color = "#16a34a" if total_people_spaces > 0 else "#94a3b8"
 
     if not is_staff:
+        usage_by_room = EvacuationCenterRoom.bulk_capacity_usage(rooms)
         return jsonify({
             "id": building.id,
             "name": building.name or f"Building #{building.id}",
             "status": building.status or "open",
             "rooms": [
-                public_room_payload(room, room.id in my_room_ids)
+                public_room_payload(
+                    room,
+                    room.id in my_room_ids,
+                    usage=usage_by_room.get(room.id),
+                    building=building,
+                )
                 for room in rooms
             ],
         })

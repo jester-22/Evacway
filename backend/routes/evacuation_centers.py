@@ -1515,56 +1515,24 @@ def get_evacuation_center_details(center_id):
     if not center:
         return jsonify({"error": "Evacuation center not found"}), 404
 
-    feature = center_to_feature(center)
+    include_snap = str(request.args.get('include_entrance_snap', '')).strip().lower() in ('1', 'true', 'yes')
+    feature = center_to_feature(center, include_entrance_snap=include_snap)
 
-    # Load rooms
-    rooms = EvacuationCenterRoom.query.filter_by(
-        evacuation_center_id=center_id
-    ).order_by(EvacuationCenterRoom.room_number.asc()).all()
-
-    linked_by_id = {
-        item["id"]: item for item in _center_barangays(center)
-    }
-    rooms_data = []
-    for room in rooms:
-        assigned = EvacuationAssignment.query.filter_by(room_id=room.id).count()
-        occupied = EvacuationAssignment.query.filter(
-            EvacuationAssignment.room_id == room.id,
-            EvacuationAssignment.checked_in_at.isnot(None)
-        ).count()
-        is_assigned = assigned > 0
-        room_usage = room.capacity_usage()
-        room_dict = room.to_dict()
-        room_dict["occupied"] = occupied
-        room_dict["assigned"] = assigned
-        room_dict.update(room_usage)
-        room_dict["family_slots"] = room.family_slots
-        room_dict["people_spaces"] = room.people_spaces
-        room_dict["capacity"] = room.people_spaces
-        room_dict["available"] = room_usage['available_spaces']
-        room_dict["unassigned"] = room_usage['available_spaces']
-        room_dict["is_assigned"] = is_assigned
-        room_dict["is_fully_assigned"] = room_usage['is_full']
-        room_dict["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
-        assigned_bid = (
-            db.session.query(Family.barangay_id)
-            .join(Resident, Resident.family_id == Family.id)
-            .join(EvacuationAssignment, EvacuationAssignment.resident_id == Resident.id)
-            .filter(EvacuationAssignment.room_id == room.id)
-            .first()
-        )
-        room_bid = assigned_bid[0] if assigned_bid else (
-            next(iter(linked_by_id.keys()), None) if len(linked_by_id) == 1 else None
-        )
-        room_dict["barangay_id"] = room_bid
-        room_dict["barangay"] = linked_by_id.get(room_bid) if room_bid else None
-        rooms_data.append(room_dict)
+    # Load rooms eagerly with building to avoid N+1 queries on large centers
+    rooms = (
+        EvacuationCenterRoom.query
+        .options(joinedload(EvacuationCenterRoom.building))
+        .filter_by(evacuation_center_id=center_id)
+        .order_by(EvacuationCenterRoom.room_number.asc())
+        .all()
+    )
 
     caller = get_optional_caller()
     is_staff = caller is not None and caller.get('role') in ('admin', 'lgu_personnel')
     if not is_staff:
         resident_id = caller.get('resident_id') if caller and caller.get('role') == 'resident' else None
         active_rooms = [room for room in rooms if room.is_active]
+        usage_by_room = EvacuationCenterRoom.bulk_capacity_usage(active_rooms)
         my_room_ids = set()
         if resident_id and active_rooms:
             my_room_ids = {
@@ -1578,11 +1546,74 @@ def get_evacuation_center_details(center_id):
         return jsonify({
             **feature,
             "rooms": [
-                public_room_payload(room, room.id in my_room_ids)
+                public_room_payload(
+                    room,
+                    room.id in my_room_ids,
+                    usage=usage_by_room.get(room.id),
+                    building=room.building,
+                )
                 for room in active_rooms
             ],
             "assigned_families": [],
         })
+
+    linked_by_id = {
+        item["id"]: item for item in _center_barangays(center)
+    }
+    single_linked_bid = next(iter(linked_by_id.keys()), None) if len(linked_by_id) == 1 else None
+
+    room_ids = [room.id for room in rooms]
+    usage_by_room = EvacuationCenterRoom.bulk_capacity_usage(rooms)
+    counts_by_room = {}
+    barangay_by_room = {}
+    if room_ids:
+        for r_id, assigned_cnt, occupied_cnt in (
+            db.session.query(
+                EvacuationAssignment.room_id,
+                func.count(EvacuationAssignment.id),
+                func.count(EvacuationAssignment.checked_in_at),
+            )
+            .filter(EvacuationAssignment.room_id.in_(room_ids))
+            .group_by(EvacuationAssignment.room_id)
+            .all()
+        ):
+            counts_by_room[r_id] = (int(assigned_cnt or 0), int(occupied_cnt or 0))
+
+        for r_id, b_id in (
+            db.session.query(
+                EvacuationAssignment.room_id,
+                func.min(Family.barangay_id),
+            )
+            .join(Resident, EvacuationAssignment.resident_id == Resident.id)
+            .join(Family, Resident.family_id == Family.id)
+            .filter(EvacuationAssignment.room_id.in_(room_ids))
+            .group_by(EvacuationAssignment.room_id)
+            .all()
+        ):
+            if b_id is not None:
+                barangay_by_room[r_id] = b_id
+
+    rooms_data = []
+    for room in rooms:
+        assigned, occupied = counts_by_room.get(room.id, (0, 0))
+        is_assigned = assigned > 0
+        room_usage = usage_by_room.get(room.id) or room.capacity_usage()
+        room_dict = room.to_dict(usage=room_usage)
+        room_dict["occupied"] = occupied
+        room_dict["assigned"] = assigned
+        room_dict.update(room_usage)
+        room_dict["family_slots"] = room.family_slots
+        room_dict["people_spaces"] = room.people_spaces
+        room_dict["capacity"] = room.people_spaces
+        room_dict["available"] = room_usage['available_spaces']
+        room_dict["unassigned"] = room_usage['available_spaces']
+        room_dict["is_assigned"] = is_assigned
+        room_dict["is_fully_assigned"] = room_usage['is_full']
+        room_dict["assignment_status"] = "Assigned" if is_assigned else "Unassigned"
+        room_bid = barangay_by_room.get(room.id, single_linked_bid)
+        room_dict["barangay_id"] = room_bid
+        room_dict["barangay"] = linked_by_id.get(room_bid) if room_bid else None
+        rooms_data.append(room_dict)
 
     # Load distinct assigned families across all rooms or direct assignments of this center
     center_assignment_filter = or_(

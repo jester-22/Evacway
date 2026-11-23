@@ -192,6 +192,26 @@ class PasswordResetEmailTests(unittest.TestCase):
                         [c[0] for c in server.method_calls].index('login'),
                     )
 
+    def test_brevo_https_transport_sends_without_smtp(self):
+        from unittest.mock import MagicMock
+
+        fake_resp = MagicMock(status_code=201, text='{"messageId":"abc"}')
+        with self.app.app_context(), patch('services.mailer.requests.post', return_value=fake_resp) as post:
+            self.app.config.update(
+                MAIL_HOST='',
+                MAIL_USERNAME='',
+                MAIL_PASSWORD='',
+                MAIL_FROM_ADDRESS='evacway599@gmail.com',
+                BREVO_API_KEY='xkeysib-test-key',
+            )
+            mailer.send_staff_mfa_email_code(self.user, '123456')
+            post.assert_called_once()
+            args, kwargs = post.call_args
+            self.assertEqual(args[0], 'https://api.brevo.com/v3/smtp/email')
+            self.assertEqual(kwargs['headers']['api-key'], 'xkeysib-test-key')
+            self.assertEqual(kwargs['json']['to'][0]['email'], self.user.email)
+            self.assertIn('123456', kwargs['json']['htmlContent'])
+
     def test_mail_names_take_priority_over_stale_smtp_aliases(self):
         with patch.dict(os.environ, {
             'MAIL_HOST': 'smtp.example.com', 'SMTP_HOST': 'stale.example.com',

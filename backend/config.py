@@ -44,6 +44,8 @@ class Config:
     MAIL_ENCRYPTION = os.environ.get("MAIL_ENCRYPTION", "tls").strip().lower()
     MAIL_FROM_ADDRESS = os.environ.get("MAIL_FROM_ADDRESS", "")
     MAIL_FROM_NAME = os.environ.get("MAIL_FROM_NAME", "EvacWay System")
+    BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "").strip()
+    RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
     FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
     FRONTEND_URL_PUBLIC = os.environ.get("FRONTEND_URL_PUBLIC", "")
     APP_URL_PUBLIC = os.environ.get("APP_URL_PUBLIC", "")

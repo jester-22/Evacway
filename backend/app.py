@@ -33,6 +33,8 @@ app.config.from_object(Config)
 
 
 def _warn_if_smtp_config_missing():
+    if app.config.get("BREVO_API_KEY") or app.config.get("RESEND_API_KEY"):
+        return
     smtp_settings = {
         "MAIL_HOST": app.config.get("MAIL_HOST"),
         "MAIL_PORT": os.environ.get("MAIL_PORT", "").strip(),

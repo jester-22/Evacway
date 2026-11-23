@@ -3,8 +3,9 @@ import logging
 import smtplib
 import ssl
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, parseaddr
 
+import requests
 from flask import current_app
 from models import ResidentAccount
 
@@ -24,16 +25,143 @@ def _resolve_delivery_email(user_or_account):
     return str(getattr(user_or_account, "email", None) or "").strip().lower()
 
 
+def _resolve_mail_transport():
+    mailer = str(current_app.config.get("MAIL_MAILER", "smtp") or "smtp").strip().lower()
+    brevo_key = str(current_app.config.get("BREVO_API_KEY") or "").strip()
+    resend_key = str(current_app.config.get("RESEND_API_KEY") or "").strip()
+
+    if mailer == "brevo" or (brevo_key and mailer in ("smtp", "auto", "")):
+        return "brevo"
+    if mailer == "resend" or (resend_key and mailer in ("smtp", "auto", "")):
+        return "resend"
+    return mailer
+
+
+def _extract_email_parts(message):
+    from_name, from_email = parseaddr(message.get("From", ""))
+    _, to_email = parseaddr(message.get("To", ""))
+    subject = str(message.get("Subject", ""))
+    plain_part = message.get_body(preferencelist=("plain",))
+    html_part = message.get_body(preferencelist=("html",))
+    plain_text = plain_part.get_content() if plain_part is not None else ""
+    html_text = html_part.get_content() if html_part is not None else ""
+    return {
+        "from_name": from_name or str(current_app.config.get("MAIL_FROM_NAME", "EvacWay System")),
+        "from_email": from_email,
+        "to_email": to_email,
+        "subject": subject,
+        "plain_text": plain_text,
+        "html_text": html_text,
+    }
+
+
+def _send_via_brevo(message):
+    api_key = str(current_app.config.get("BREVO_API_KEY") or "").strip()
+    if not api_key:
+        raise MailConfigurationError("BREVO_API_KEY is missing in the backend environment.")
+    parts = _extract_email_parts(message)
+    if not parts["from_email"] or not parts["to_email"]:
+        raise MailConfigurationError("MAIL_FROM_ADDRESS and recipient email are required for Brevo delivery.")
+    payload = {
+        "sender": {"name": parts["from_name"], "email": parts["from_email"]},
+        "to": [{"email": parts["to_email"]}],
+        "subject": parts["subject"],
+    }
+    if parts["html_text"]:
+        payload["htmlContent"] = parts["html_text"]
+    if parts["plain_text"]:
+        payload["textContent"] = parts["plain_text"]
+
+    resp = requests.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={
+            "api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+    if resp.status_code < 200 or resp.status_code >= 300:
+        raise RuntimeError(f"Brevo API error ({resp.status_code}): {resp.text[:250]}")
+
+
+def _send_via_resend(message):
+    api_key = str(current_app.config.get("RESEND_API_KEY") or "").strip()
+    if not api_key:
+        raise MailConfigurationError("RESEND_API_KEY is missing in the backend environment.")
+    parts = _extract_email_parts(message)
+    if not parts["from_email"] or not parts["to_email"]:
+        raise MailConfigurationError("MAIL_FROM_ADDRESS and recipient email are required for Resend delivery.")
+    payload = {
+        "from": formataddr((parts["from_name"], parts["from_email"])),
+        "to": [parts["to_email"]],
+        "subject": parts["subject"],
+    }
+    if parts["html_text"]:
+        payload["html"] = parts["html_text"]
+    if parts["plain_text"]:
+        payload["text"] = parts["plain_text"]
+
+    resp = requests.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+    if resp.status_code < 200 or resp.status_code >= 300:
+        raise RuntimeError(f"Resend API error ({resp.status_code}): {resp.text[:250]}")
+
+
+def _validate_mail_config():
+    transport = _resolve_mail_transport()
+    username = current_app.config.get("MAIL_USERNAME")
+    from_address = current_app.config.get("MAIL_FROM_ADDRESS") or username
+    from_name = current_app.config.get("MAIL_FROM_NAME", "EvacWay System")
+
+    if transport == "brevo":
+        if not current_app.config.get("BREVO_API_KEY") or not from_address:
+            raise MailConfigurationError("BREVO_API_KEY and MAIL_FROM_ADDRESS are required.")
+        return from_address, from_name
+
+    if transport == "resend":
+        if not current_app.config.get("RESEND_API_KEY") or not from_address:
+            raise MailConfigurationError("RESEND_API_KEY and MAIL_FROM_ADDRESS are required.")
+        return from_address, from_name
+
+    host = current_app.config.get("MAIL_HOST")
+    password = current_app.config.get("MAIL_PASSWORD")
+    encryption = current_app.config.get("MAIL_ENCRYPTION", "tls").lower()
+
+    if transport != "smtp":
+        raise MailConfigurationError("Only SMTP, Brevo, or Resend mail delivery is configured.")
+    if not host or not from_address or not username or not password:
+        raise MailConfigurationError("SMTP mail settings are incomplete in the backend environment.")
+    if encryption not in {"tls", "ssl"}:
+        raise MailConfigurationError("SMTP encryption must be configured as tls or ssl.")
+    return from_address, from_name
+
+
 def _send_smtp_message(message):
-    mailer = current_app.config.get("MAIL_MAILER", "smtp").lower()
+    transport = _resolve_mail_transport()
+    if transport == "brevo":
+        _send_via_brevo(message)
+        return
+    if transport == "resend":
+        _send_via_resend(message)
+        return
+
     host = current_app.config.get("MAIL_HOST")
     port = current_app.config.get("MAIL_PORT", 587)
     username = current_app.config.get("MAIL_USERNAME")
     password = current_app.config.get("MAIL_PASSWORD")
     encryption = current_app.config.get("MAIL_ENCRYPTION", "tls").lower()
 
-    if mailer != "smtp":
-        raise MailConfigurationError("Only SMTP mail delivery is configured.")
+    if transport != "smtp":
+        raise MailConfigurationError("Only SMTP, Brevo, or Resend mail delivery is configured.")
     if not host or not username or not password:
         raise MailConfigurationError("SMTP mail settings are incomplete in the backend environment.")
     if encryption not in {"tls", "ssl"}:
@@ -56,21 +184,7 @@ def _send_smtp_message(message):
 
 
 def send_password_setup_email(user_or_account, token, purpose="setup"):
-    mailer = current_app.config.get("MAIL_MAILER", "smtp").lower()
-    host = current_app.config.get("MAIL_HOST")
-    port = current_app.config.get("MAIL_PORT", 587)
-    username = current_app.config.get("MAIL_USERNAME")
-    password = current_app.config.get("MAIL_PASSWORD")
-    encryption = current_app.config.get("MAIL_ENCRYPTION", "tls").lower()
-    from_address = current_app.config.get("MAIL_FROM_ADDRESS") or username
-    from_name = current_app.config.get("MAIL_FROM_NAME", "EvacWay System")
-
-    if mailer != "smtp":
-        raise MailConfigurationError("Only SMTP mail delivery is configured.")
-    if not host or not from_address or not username or not password:
-        raise MailConfigurationError("SMTP mail settings are incomplete in the backend environment.")
-    if encryption not in {"tls", "ssl"}:
-        raise MailConfigurationError("SMTP encryption must be configured as tls or ssl.")
+    from_address, from_name = _validate_mail_config()
 
     public_url = (current_app.config.get("FRONTEND_URL_PUBLIC") or "").strip().rstrip("/")
     frontend_url = (current_app.config.get("FRONTEND_URL") or "").strip().rstrip("/")
@@ -133,20 +247,7 @@ def send_password_setup_email(user_or_account, token, purpose="setup"):
 
 
 def send_staff_mfa_email_code(user, code, expires_minutes=10):
-    mailer = current_app.config.get("MAIL_MAILER", "smtp").lower()
-    host = current_app.config.get("MAIL_HOST")
-    username = current_app.config.get("MAIL_USERNAME")
-    password = current_app.config.get("MAIL_PASSWORD")
-    encryption = current_app.config.get("MAIL_ENCRYPTION", "tls").lower()
-    from_address = current_app.config.get("MAIL_FROM_ADDRESS") or username
-    from_name = current_app.config.get("MAIL_FROM_NAME", "EvacWay System")
-
-    if mailer != "smtp":
-        raise MailConfigurationError("Only SMTP mail delivery is configured.")
-    if not host or not from_address or not username or not password:
-        raise MailConfigurationError("SMTP mail settings are incomplete in the backend environment.")
-    if encryption not in {"tls", "ssl"}:
-        raise MailConfigurationError("SMTP encryption must be configured as tls or ssl.")
+    from_address, from_name = _validate_mail_config()
 
     recipient_name = (getattr(user, "name", None) or "there").strip() or "there"
     safe_code = str(code).strip()

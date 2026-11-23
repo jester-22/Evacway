@@ -158,6 +158,10 @@ def _generic_login_failure():
     return jsonify({"error": "Incorrect email or password"}), 401
 
 
+def _generic_mfa_failure():
+    return jsonify({"error": "Invalid or expired verification code. Please try again."}), 401
+
+
 def _login_rate_limited(login_type, email, include_email=True):
     now = time.monotonic()
     window = int(current_app.config.get('LOGIN_RATE_LIMIT_WINDOW_SECONDS', 900))
@@ -367,7 +371,7 @@ def _begin_staff_second_factor(user):
 
 def _mfa_failure_or_limit(user=None):
     if user and user.login_locked_until and user.login_locked_until > utc_now():
-        return _generic_login_failure()
+        return _generic_mfa_failure()
     if _login_rate_limited('staff', user.email if user else '', include_email=user is not None):
         return jsonify({"error": "Too many attempts. Please wait a moment and try again."}), 429
     return None
@@ -576,23 +580,23 @@ def confirm_staff_totp_enrollment():
     data = _mfa_payload()
     user = _mfa_request_user(data, 'staff_totp_enrollment')
     if not user:
-        return _generic_login_failure()
+        return _generic_mfa_failure()
     user = User.query.filter_by(id=user.id).with_for_update().populate_existing().first()
     if not user or not user.is_active or user.role not in ('admin', 'lgu_personnel'):
-        return _generic_login_failure()
+        return _generic_mfa_failure()
     blocked = _mfa_rate_and_lock_response(user)
     if blocked:
         return blocked
     if not user.totp_pending_secret_encrypted or not user.totp_setup_expires_at or user.totp_setup_expires_at <= utc_now():
-        return _generic_login_failure()
+        return _generic_mfa_failure()
     try:
         secret = _decrypt_totp_secret(user.totp_pending_secret_encrypted)
     except (InvalidToken, ValueError):
-        return _generic_login_failure()
+        return _generic_mfa_failure()
     step = _verify_totp_code(secret, data.get('code'))
     if step is None:
         _record_login_failure(user, 'staff_mfa')
-        return _generic_login_failure()
+        return _generic_mfa_failure()
 
     codes, hashes = _new_backup_codes()
     user.totp_secret_encrypted = user.totp_pending_secret_encrypted
@@ -619,19 +623,19 @@ def verify_staff_totp():
     data = _mfa_payload()
     user = _mfa_request_user(data, 'staff_totp_challenge')
     if not user:
-        return _generic_login_failure()
+        return _generic_mfa_failure()
     user = User.query.filter_by(id=user.id).with_for_update().populate_existing().first()
     if not user or not user.is_active or user.role not in ('admin', 'lgu_personnel'):
-        return _generic_login_failure()
+        return _generic_mfa_failure()
     blocked = _mfa_rate_and_lock_response(user)
     if blocked:
         return blocked
     if not user.totp_enabled or not user.totp_secret_encrypted:
-        return _generic_login_failure()
+        return _generic_mfa_failure()
     try:
         secret = _decrypt_totp_secret(user.totp_secret_encrypted)
     except (InvalidToken, ValueError):
-        return _generic_login_failure()
+        return _generic_mfa_failure()
 
     code = data.get('code')
     step = _verify_totp_code(secret, code, user.totp_last_used_step)
@@ -643,7 +647,7 @@ def verify_staff_totp():
         index = _backup_code_index(code, hashes)
         if index is None:
             _record_login_failure(user, 'staff_mfa')
-            return _generic_login_failure()
+            return _generic_mfa_failure()
         hashes.pop(index)
         user.totp_backup_codes_hashes = hashes
         used_backup = True

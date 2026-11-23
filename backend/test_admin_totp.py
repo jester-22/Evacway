@@ -116,7 +116,7 @@ class AdminTotpTests(unittest.TestCase):
                 "challenge_token": challenge.json["challenge_token"], "code": "000000",
             })
         self.assertEqual(result.status_code, 401)
-        self.assertEqual(result.json, {"error": "Incorrect email or password"})
+        self.assertEqual(result.json, {"error": "Invalid or expired verification code. Please try again."})
 
     def test_backup_code_is_single_use(self):
         _, enrollment = self._enroll()
@@ -131,7 +131,7 @@ class AdminTotpTests(unittest.TestCase):
             "challenge_token": next_challenge.json["challenge_token"], "code": raw_code,
         })
         self.assertEqual(reused.status_code, 401)
-        self.assertEqual(reused.json, {"error": "Incorrect email or password"})
+        self.assertEqual(reused.json, {"error": "Invalid or expired verification code. Please try again."})
 
     def test_five_failed_codes_lock_account_and_log_event(self):
         self._enroll()
@@ -141,7 +141,7 @@ class AdminTotpTests(unittest.TestCase):
                 "challenge_token": challenge, "code": "bad-code",
             })
             self.assertEqual(response.status_code, 401)
-            self.assertEqual(response.json, {"error": "Incorrect email or password"})
+            self.assertEqual(response.json, {"error": "Invalid or expired verification code. Please try again."})
         locked = db.session.get(User, self.admin.id)
         self.assertIsNotNone(locked.login_locked_until)
         self.assertTrue(SystemLog.query.filter(SystemLog.action.like("Login locked after repeated failures%")).first())

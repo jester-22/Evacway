@@ -942,6 +942,40 @@
   }
 }
 
+@media (max-width: 480px) {
+  .sidebar-mobile-header {
+    padding: 0 8px;
+  }
+
+  .sidebar-mobile-brand {
+    margin: 0 6px;
+  }
+
+  .sidebar-mobile-logo {
+    width: 92px;
+    height: 28px;
+  }
+
+  .sidebar-mobile-right {
+    gap: 6px;
+  }
+
+  .logout-confirm-modal {
+    padding: 22px 18px 18px;
+  }
+
+  .logout-confirm-actions {
+    flex-direction: column-reverse;
+    width: 100%;
+  }
+
+  .logout-confirm-cancel,
+  .logout-confirm-submit {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 @keyframes drawer-fade-in {
   from {
     opacity: 0;

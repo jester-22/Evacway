@@ -221,3 +221,39 @@
   background: none;
   cursor: pointer;
 }
+
+@media (max-width: 480px) {
+  .login-wrapper {
+    padding: 14px;
+    align-items: flex-start;
+    padding-top: max(20px, env(safe-area-inset-top));
+  }
+
+  .login-card {
+    padding: 20px 16px;
+  }
+
+  .login-input,
+  .login-input--plain {
+    font-size: 16px;
+  }
+
+  .login-mfa-method-btn {
+    font-size: 12px;
+    padding: 8px 6px;
+    min-height: 40px;
+  }
+
+  .login-mfa-qr svg,
+  .login-mfa-qr img {
+    max-width: 100%;
+    height: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .login-mfa-methods,
+  .login-mfa-backup-codes {
+    grid-template-columns: 1fr;
+  }
+}

@@ -20,6 +20,7 @@ import {
   formatManilaTime,
   parseTimestamp,
 } from "../../utils/dateTime";
+import { MobileFilterButton } from "../ui";
 import "./SystemAndLogs.css";
 
 const ROLE_LABELS = {
@@ -455,6 +456,70 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
               aria-label="Search action or user"
             />
           </div>
+
+          <MobileFilterButton
+            activeCount={[userFilter, typeFilter, fromDate, toDate].filter(Boolean).length}
+            title="Filter activity logs"
+            onReset={() => {
+              setUserFilter("");
+              setTypeFilter("");
+              setFromDate("");
+              setToDate("");
+            }}
+          >
+            <label className="ui-mobile-filter-field">
+              <span className="ui-mobile-filter-field__label">User</span>
+              <select
+                value={userFilter}
+                onChange={(e) => setUserFilter(e.target.value)}
+                aria-label="Filter by user"
+              >
+                <option value="">All users</option>
+                {hasSystemLogs && <option value="system">System (Automated)</option>}
+                {userOptions.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.name} {opt.role ? `(${opt.role})` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="ui-mobile-filter-field">
+              <span className="ui-mobile-filter-field__label">Action type</span>
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                aria-label="Filter by type"
+              >
+                <option value="">All types</option>
+                <option value="create">Create</option>
+                <option value="update">Update</option>
+                <option value="delete">Delete</option>
+                <option value="assign">Assign</option>
+                <option value="import">Import</option>
+                <option value="review">Review</option>
+                <option value="login">Login</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label className="ui-mobile-filter-field">
+              <span className="ui-mobile-filter-field__label">From date</span>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                aria-label="From date"
+              />
+            </label>
+            <label className="ui-mobile-filter-field">
+              <span className="ui-mobile-filter-field__label">To date</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                aria-label="To date"
+              />
+            </label>
+          </MobileFilterButton>
 
           <div className="sal-toolbar-filters">
             <select

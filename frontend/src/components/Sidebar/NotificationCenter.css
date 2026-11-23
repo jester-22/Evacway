@@ -470,4 +470,22 @@
   .sidebar-navigation .notification-center {
     margin-left: 4px;
   }
+
+  .notification-panel-head {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .notification-item {
+    padding: 10px 12px;
+  }
+
+  .notification-push-banner-actions {
+    flex-wrap: wrap;
+  }
+
+  .notification-push-allow-btn {
+    min-height: 36px;
+  }
 }

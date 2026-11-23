@@ -513,6 +513,13 @@
 /* --------------------------------------------------
    Responsive
    -------------------------------------------------- */
+@media (max-width: 767px) {
+  .ec-bldg-stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+}
+
 @media (max-width: 720px) {
   .ec-building-detail-page {
     padding: 20px 16px 32px;
@@ -540,6 +547,40 @@
 
   .ec-bldg-filters-spacer {
     display: none;
+  }
+
+  .ec-bldg-stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .ec-bldg-search-input {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .ec-building-detail-page {
+    padding: 14px 12px 28px;
+    gap: 14px;
+  }
+
+  .ec-building-detail-page > .ui-breadcrumb {
+    margin: -14px -12px 0;
+    padding: 10px 12px;
+  }
+
+  .ec-bldg-title {
+    font-size: 21px;
+  }
+
+  .ec-bldg-actions {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+
+  .ec-bldg-actions > button {
+    flex: 1 1 auto;
   }
 }
 

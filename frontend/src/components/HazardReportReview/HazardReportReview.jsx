@@ -30,7 +30,7 @@ import { useAuth } from "../../context/AuthContext";
 import { api, BASE_URL } from "../../services/api";
 import { queryKeys, useHazardReports, useRoadSegments } from "../../hooks/useEvacuationQueries";
 import { formatManilaDateTime, parseTimestamp } from "../../utils/dateTime";
-import { Button, StatCard, StatusPill } from "../ui";
+import { Button, StatCard, StatusPill, MobileFilterButton } from "../ui";
 import "./HazardReportReview.css";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -1156,6 +1156,27 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
                 </button>
               )}
             </div>
+
+            <MobileFilterButton
+              activeCount={typeFilter && typeFilter !== "all" ? 1 : 0}
+              title="Filter hazard reports"
+              onReset={() => handleTypeFilterChange("all")}
+            >
+              <label className="ui-mobile-filter-field">
+                <span className="ui-mobile-filter-field__label">Hazard type</span>
+                <select
+                  value={typeFilter}
+                  onChange={(e) => handleTypeFilterChange(e.target.value)}
+                  aria-label="Filter by hazard type"
+                >
+                  {dynamicTypeFilters.map((t) => (
+                    <option key={t.key} value={t.key}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </MobileFilterButton>
 
             <select
               id="hr-type-select"

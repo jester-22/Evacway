@@ -6430,7 +6430,7 @@ label.bm-form-field > textarea:focus {
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 768px) {
   .barangay-page.bm-list-page {
     padding: 20px 16px 32px;
     gap: 16px;
@@ -6449,22 +6449,39 @@ label.bm-form-field > textarea:focus {
   }
 
   .bm-list-stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .bm-list-toolbar {
-    padding: 14px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+
+  .bm-list-toolbar::before {
+    display: block;
+    left: -1px;
+    right: -1px;
   }
 
   .bm-list-search-wrap {
+    min-width: 0;
     max-width: none;
-    flex: 1 1 100%;
+    flex: 1 1 auto;
   }
 
-  .bm-list-toolbar-right,
+  .bm-list-search-input,
   .bm-list-select {
-    width: 100%;
+    font-size: 16px;
+    min-height: 40px;
+  }
+
+  .bm-list-toolbar-right {
+    display: none;
   }
 
   .bm-list-grid-head {
@@ -6493,6 +6510,24 @@ label.bm-form-field > textarea:focus {
 
   .bm-list-footer {
     padding: 14px 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .barangay-page.bm-list-page {
+    padding: 14px 12px 28px;
+    gap: 14px;
+  }
+
+  .bm-list-title {
+    font-size: 21px;
+  }
+
+  .bm-list-stats-grid {
+    gap: 6px;
   }
 }
 
@@ -7066,17 +7101,27 @@ label.bm-form-field > textarea:focus {
 
 @media (max-width: 767px) {
   .bm-ov-stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .bm-ov-card {
-    padding: 16px;
+    padding: 14px;
   }
 
   .bm-ov-donut-layout {
     justify-content: center;
     gap: 20px;
+  }
+
+  .bm-ov-dl-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .bm-ov-dd {
+    text-align: left;
   }
 }
 

@@ -694,6 +694,28 @@ a.mapboxgl-ctrl-logo {
   }
 }
 
+@media (max-width: 480px) {
+  .ui-page-title {
+    font-size: 22px;
+  }
+
+  .stat-card {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .stat-card-value {
+    font-size: 20px;
+  }
+
+  .stat-card-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+    border-radius: 10px;
+  }
+}
+
 /* ==========================================================================
    Slick, Modern Scrollbars (EvacWay Modern UI)
    ========================================================================== */

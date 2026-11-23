@@ -168,6 +168,10 @@
 }
 
 @media (max-width: 1024px) {
+  .um-page {
+    padding: 20px 24px 36px;
+  }
+
   .um-stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1391,43 +1395,81 @@
 
 @media (max-width: 768px) {
   .um-page {
-    padding: 20px 16px 32px;
+    padding: 16px 16px 32px;
   }
 
   .um-root {
     gap: 16px;
   }
 
+  .um-title {
+    font-size: 22px;
+  }
+
+  .um-add-btn {
+    width: 100%;
+  }
+
   .um-stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .um-table-toolbar {
-    position: static;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-    padding: 14px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    box-shadow: var(--shadow-xs);
   }
 
   .um-search-field {
     max-width: none;
     min-width: 0;
-    flex: 0 0 auto;
-    width: 100%;
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .um-toolbar-input,
+  .um-toolbar-select,
+  .um-input {
+    font-size: 16px;
   }
 
   .um-toolbar-selects {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    width: 100%;
+    display: none;
   }
 
-  .um-toolbar-select {
+  .um-overlay {
+    padding: 0;
+    align-items: flex-end;
+    justify-content: stretch;
+  }
+
+  .um-modal,
+  .um-confirm-modal {
     width: 100%;
-    min-width: 0;
+    max-width: 100%;
+    max-height: 94dvh;
+    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+  }
+
+  .um-modal-header {
+    padding: 14px 16px;
+  }
+
+  .um-form-fields,
+  .um-confirm-body {
+    padding: 16px;
+    overflow-y: auto;
+  }
+
+  .um-modal-footer {
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
   }
 
   /* HIDE TABLE ON MOBILE, DISPLAY STACKED CARDS INSIDE TABLE CARD */
@@ -1601,5 +1643,29 @@
 
   .um-reset-error {
     align-self: stretch;
+  }
+}
+
+@media (max-width: 480px) {
+  .um-page {
+    padding: 14px 12px 28px;
+  }
+
+  .um-toolbar-selects {
+    grid-template-columns: 1fr;
+  }
+
+  .um-card-body {
+    padding-left: 0;
+  }
+
+  .um-modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .um-modal-footer > button {
+    width: 100%;
+    justify-content: center;
   }
 }

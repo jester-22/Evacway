@@ -34,7 +34,7 @@ import FamilyManagement from "../EvacuationCenter/FamilyManagement";
 import { resolveCenterStructureMode } from "../EvacuationCenter/utils";
 import LoadingState from "../LoadingState/LoadingState";
 import BarangaysServedPicker from "../BarangaysServedPicker/BarangaysServedPicker";
-import { Button, ProgressBar, SegmentedControl, StatCard, StatusPill } from "../ui";
+import { Button, ProgressBar, SegmentedControl, StatCard, StatusPill, MobileFilterButton } from "../ui";
 import { formatRoomLabel } from "../../utils/formatRoomLabel";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
@@ -2338,6 +2338,32 @@ function BarangayManager() {
                   </button>
                 )}
               </div>
+
+              <MobileFilterButton
+                activeCount={barangayStatusFilter !== "all" ? 1 : 0}
+                title="Filter barangays"
+                onReset={() => {
+                  setBarangayStatusFilter("all");
+                  setBrgyPage(1);
+                }}
+              >
+                <label className="ui-mobile-filter-field">
+                  <span className="ui-mobile-filter-field__label">Status</span>
+                  <select
+                    aria-label="Filter by status"
+                    value={barangayStatusFilter}
+                    onChange={(e) => {
+                      setBarangayStatusFilter(e.target.value);
+                      setBrgyPage(1);
+                    }}
+                  >
+                    <option value="all">All statuses</option>
+                    <option value="sheltered">Sheltered</option>
+                    <option value="unassigned">Unassigned</option>
+                    <option value="no-records">No records</option>
+                  </select>
+                </label>
+              </MobileFilterButton>
 
               <div className="bm-list-toolbar-right">
                 <select

@@ -1273,16 +1273,77 @@
 
   .dashboard-demographics-controls {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .dashboard-demographics-card .ui-section-header__actions {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dashboard-demographics-controls .ui-segmented {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dashboard-demographics-controls .ui-segmented__item {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0 8px;
   }
 
   .dashboard-demographics-search {
     width: 100%;
-    flex: 1 1 180px;
+    flex: 1 1 100%;
+  }
+
+  .dashboard-demographics-search__input {
+    font-size: 16px;
   }
 
   .dashboard-demographics-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .dashboard-shell {
+    padding: 14px 12px 28px;
+    gap: 14px;
+  }
+
+  .dashboard-header-title {
+    font-size: 22px;
+  }
+
+  .dashboard-header-actions {
+    gap: 8px;
+  }
+
+  .dashboard-action-btn {
+    flex: 1 1 calc(100% - 48px);
+    min-width: 0;
+  }
+
+  .dashboard-surface-card {
+    padding: 14px;
+    border-radius: var(--radius-lg);
+  }
+
+  .dashboard-kpi-grid {
+    gap: 10px;
+  }
+
+  .dashboard-month-switcher {
+    max-width: 100%;
+  }
+
+  .dashboard-staff-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
   }
 }
 

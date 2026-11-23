@@ -3091,6 +3091,7 @@
   .ec-room-detail-page { padding: 20px 16px 32px; gap: 18px; }
   .ec-room-detail-page > .ui-breadcrumb { margin: -20px -16px 0; padding: 12px 16px; }
   .ec-room-title { font-size: 24px; }
+  .ec-room-stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .ec-room-header-actions { width: 100%; justify-content: flex-end; }
   .ec-room-header-actions > button { flex: 1; }
   .ec-room-families-panel,
@@ -3329,17 +3330,27 @@
   .ec-room-tile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 700px) {
-  .ec-structure-summary-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-  .ec-structure-toolbar-sticky { top: 0; }
+  .ec-structure-summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ec-structure-toolbar-sticky { position: static; }
   .ec-structure-toolbar { align-items: stretch; flex-direction: column; }
   .ec-toolbar-left { align-items: stretch; flex-direction: column; }
   .ec-toolbar-left > * { width: 100%; }
-  .ec-status-filter-group { overflow-x: auto; }
+  .ec-status-filter-group { overflow-x: auto; max-width: 100%; }
   .ec-building-cards { grid-template-columns: 1fr; }
   .ec-building-detail-header { align-items: flex-start; flex-direction: column; }
-  .ec-building-detail-actions { width: 100%; justify-content: flex-end; }
+  .ec-building-detail-meta { flex-wrap: wrap; }
+  .ec-building-detail-meta .ec-building-card-progress { width: 100%; }
+  .ec-building-detail-actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
   .ec-building-card-main { padding: 13px; }
 }
 @media (max-width: 520px) {
   .ec-room-tile-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .ec-detail { padding: 14px 12px 28px; gap: 14px; }
+  .ec-detail > .ui-breadcrumb,
+  .ec-detail > .ec-breadcrumb { margin: -14px -12px 0; padding: 10px 12px; }
+  .ec-room-detail-page { padding: 14px 12px 28px; gap: 14px; }
+  .ec-room-detail-page > .ui-breadcrumb { margin: -14px -12px 0; padding: 10px 12px; }
+  .ec-structure-summary-strip { grid-template-columns: 1fr; }
 }

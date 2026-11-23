@@ -28,7 +28,7 @@ import {
 import { api } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { queryKeys, useUsers } from "../../hooks/useEvacuationQueries";
-import { Button, RoleChip, StatCard, StatusPill } from "../ui";
+import { Button, RoleChip, StatCard, StatusPill, MobileFilterButton } from "../ui";
 import AdminMfaRecoveryApprovals from "./AdminMfaRecoveryApprovals";
 import "./UserManagement.css";
 
@@ -656,6 +656,37 @@ function UserManagement() {
                 className="um-toolbar-input"
               />
             </div>
+
+            <MobileFilterButton
+              activeCount={(roleFilter ? 1 : 0) + (statusFilter ? 1 : 0)}
+              title="Filter users"
+              onReset={() => updateFilterParams({ role: "", status: "" })}
+            >
+              <label className="ui-mobile-filter-field">
+                <span className="ui-mobile-filter-field__label">Role</span>
+                <select
+                  value={roleFilter}
+                  onChange={(e) => updateFilterParams({ role: e.target.value })}
+                  aria-label="Filter by role"
+                >
+                  <option value="">All Roles</option>
+                  <option value="admin">Admin</option>
+                  <option value="lgu_personnel">LGU Personnel</option>
+                </select>
+              </label>
+              <label className="ui-mobile-filter-field">
+                <span className="ui-mobile-filter-field__label">Status</span>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => updateFilterParams({ status: e.target.value })}
+                  aria-label="Filter by status"
+                >
+                  <option value="">All Statuses</option>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </label>
+            </MobileFilterButton>
 
             <div className="um-toolbar-selects">
               <div className="um-select-field">

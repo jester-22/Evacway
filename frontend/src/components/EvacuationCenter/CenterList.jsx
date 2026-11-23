@@ -20,7 +20,7 @@ import { Building2, MapPin, MapPinOff } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { centerStatus, isCenterMapped, resolveCenterStructureMode } from './utils'
 import { statusVariant } from './evacuationStatus'
-import { StatCard, StatusPill, ProgressBar, Button } from '../ui'
+import { StatCard, StatusPill, ProgressBar, Button, MobileFilterButton } from '../ui'
 import './CenterList.css'
 
 export function AnimatedCount({ value, duration = 400 }) {
@@ -392,6 +392,45 @@ export default function CenterList({
               ariaLabel="Search centers"
             />
           </div>
+
+          <MobileFilterButton
+            activeCount={(barangayFilter ? 1 : 0) + (statusFilter !== 'all' ? 1 : 0)}
+            title="Filter centers"
+            onReset={() => {
+              setBarangayFilter('')
+              onBarangayChange?.('')
+              setStatusFilter('all')
+            }}
+          >
+            <label className="ui-mobile-filter-field">
+              <span className="ui-mobile-filter-field__label">Barangay</span>
+              <select
+                value={barangayFilter}
+                onChange={handleBarangaySelect}
+                aria-label="Filter by barangay"
+              >
+                <option value="">All Barangays</option>
+                {barangayOptions.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="ui-mobile-filter-field">
+              <span className="ui-mobile-filter-field__label">Status</span>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                aria-label="Filter by status"
+              >
+                <option value="all">All Statuses</option>
+                <option value="available">Available</option>
+                <option value="full">Full</option>
+                <option value="unmapped">Unmapped</option>
+              </select>
+            </label>
+          </MobileFilterButton>
 
           <select
             className="ec-toolbar-select-native"

@@ -1641,12 +1641,16 @@
    ========================================================================== */
 
 @media (max-width: 1120px) {
+  .hr-page {
+    padding: 0 24px 36px;
+  }
+
   .hr-stats-grid-v2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 768px) {
   .hr-page {
     padding: 0 16px 32px;
   }
@@ -1669,21 +1673,39 @@
   }
 
   .hr-stats-grid-v2 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .hr-toolbar-v2 {
-    padding: 14px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+
+  .hr-toolbar-v2::before {
+    display: block;
+    left: -1px;
+    right: -1px;
   }
 
   .hr-search-wrap-v2 {
+    min-width: 0;
     max-width: none;
-    flex: 1 1 100%;
+    flex: 1 1 auto;
+  }
+
+  .hr-search-input-v2,
+  .hr-type-select-v2 {
+    font-size: 16px;
+    min-height: 40px;
   }
 
   .hr-type-select-v2 {
-    width: 100%;
+    display: none;
   }
 
   .hr-table-head {
@@ -1707,6 +1729,22 @@
 
   .hr-table-footer {
     padding: 14px 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .hr-footer-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .hr-lightbox-arrow.is-prev {
+    left: 8px;
+  }
+
+  .hr-lightbox-arrow.is-next {
+    right: 8px;
   }
 
   .hr-modal-backdrop {
@@ -1742,12 +1780,13 @@
 
   .hr-modal-mobile-actions {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
     gap: 8px;
   }
 
   .hr-modal-mobile-actions .hr-modal-action-btn {
     width: 100%;
+    min-height: 40px;
     padding: 0 8px;
     font-size: 13px;
   }
@@ -1765,6 +1804,21 @@
 
   .hr-meta-value {
     text-align: left;
+  }
+}
+
+@media (max-width: 480px) {
+  .hr-page {
+    padding: 0 12px 28px;
+  }
+
+  .hr-stats-grid-v2 {
+    gap: 6px;
+  }
+
+  .hr-incident-street {
+    white-space: normal;
+    word-break: break-word;
   }
 }
 

@@ -52,7 +52,7 @@ import { displayEntityName } from "../../utils/displayEntityName";
 import { formatRoomLabel } from "../../utils/formatRoomLabel";
 import { familyTerm, resolveCenterStructureMode } from "./utils";
 import LoadingState from "../LoadingState/LoadingState";
-import { Button, StatusPill } from "../ui";
+import { Button, StatusPill, MobileFilterButton } from "../ui";
 import "./FamilyManagement.css";
 
 function saveBlob(blob, filename) {
@@ -5880,6 +5880,99 @@ export default function FamilyManagement({
                 </button>
               )}
             </div>
+
+            <MobileFilterButton
+              activeCount={
+                (yearFilter ? 1 : 0) +
+                (!lockedBarangayId && barangayFilter ? 1 : 0) +
+                (assignmentStatus ? 1 : 0) +
+                (sortBy !== "family_code" || direction !== "asc" ? 1 : 0)
+              }
+              title="Filter & sort families"
+              onReset={() => {
+                setPage(1);
+                setYearFilter("");
+                if (!lockedBarangayId) setBarangayFilter("");
+                setAssignmentStatus("");
+                setSortBy("family_code");
+                setDirection("asc");
+              }}
+            >
+              <label className="ui-mobile-filter-field">
+                <span className="ui-mobile-filter-field__label">Census year</span>
+                <select
+                  value={yearFilter}
+                  onChange={(e) => {
+                    setPage(1);
+                    setYearFilter(e.target.value);
+                  }}
+                  aria-label="Filter by census year"
+                >
+                  <option value="">All Years</option>
+                  {rosterYears.map((ry) => (
+                    <option key={ry.id || ry.year} value={ry.year}>
+                      Census Year {ry.year} {ry.is_active ? "(Active)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {!lockedBarangayId && (
+                <label className="ui-mobile-filter-field">
+                  <span className="ui-mobile-filter-field__label">Barangay</span>
+                  <select
+                    value={barangayFilter}
+                    onChange={(e) => {
+                      setPage(1);
+                      setBarangayFilter(e.target.value);
+                    }}
+                    aria-label="Filter by barangay"
+                  >
+                    <option value="">All Barangays</option>
+                    {barangays.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <label className="ui-mobile-filter-field">
+                <span className="ui-mobile-filter-field__label">Status</span>
+                <select
+                  value={assignmentStatus}
+                  onChange={(e) => {
+                    setPage(1);
+                    setAssignmentStatus(e.target.value);
+                  }}
+                  aria-label="Filter by status"
+                >
+                  <option value="">All Statuses</option>
+                  <option value="assigned">Assigned</option>
+                  <option value="unassigned">Unassigned</option>
+                </select>
+              </label>
+
+              <label className="ui-mobile-filter-field">
+                <span className="ui-mobile-filter-field__label">Sort by</span>
+                <select
+                  value={`${sortBy}:${direction}`}
+                  onChange={(e) => {
+                    const [nextSort, nextDir] = e.target.value.split(":");
+                    setPage(1);
+                    setSortBy(nextSort);
+                    setDirection(nextDir);
+                  }}
+                  aria-label="Sort families"
+                >
+                  <option value="family_code:asc">Family ID (A–Z)</option>
+                  <option value="head_name:asc">Family Head (A–Z)</option>
+                  <option value="member_count:desc">Most Members</option>
+                  <option value="created_at:desc">Recently Added</option>
+                </select>
+              </label>
+            </MobileFilterButton>
 
             <div className="fm-list-controls">
               <select

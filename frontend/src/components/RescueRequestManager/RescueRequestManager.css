@@ -1520,6 +1520,10 @@
    ========================================================================== */
 
 @media (max-width: 1120px) {
+  .rescue-queue-page {
+    padding: 0 24px 36px;
+  }
+
   .rq-stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1539,8 +1543,34 @@
   }
 
   .rq-stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .rq-table-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+
+  .rq-table-toolbar::before {
+    display: block;
+    left: -1px;
+    right: -1px;
+  }
+
+  .rq-search-field {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .rq-search-input {
+    font-size: 16px;
+    min-height: 42px;
   }
 
   .rq-table-head {
@@ -1562,9 +1592,16 @@
     display: none;
   }
 
-  .rq-table-toolbar,
   .rq-table-footer {
     padding: 14px 16px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .rq-footer-controls {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .rq-modal-backdrop {
@@ -1580,15 +1617,20 @@
 
   .rq-modal-header {
     padding: 14px 16px;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 
   .rq-modal-header-right {
     width: 100%;
     justify-content: space-between;
+    gap: 8px;
   }
 
   .rq-status-segmented {
     flex: 1 1 auto;
+    max-width: 100%;
+    overflow-x: auto;
   }
 
   .rq-status-segment {
@@ -1608,6 +1650,25 @@
 
   .rq-modal-card {
     padding: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .rescue-queue-page {
+    padding: 0 12px 28px;
+  }
+
+  .rq-stats-grid {
+    gap: 6px;
+  }
+
+  .rq-requester-name {
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .rq-landmark-chip > span {
+    max-width: 100%;
   }
 }
 

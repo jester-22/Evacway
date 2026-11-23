@@ -1467,11 +1467,36 @@
    ========================================================================== */
 @media (max-width: 1024px) {
   .dm-page {
-    padding: 12px 14px;
+    padding: 14px 16px 28px;
+  }
+
+  .dm-card {
+    padding: 16px;
+  }
+
+  .dm-import-barangay-field {
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .dm-import-barangay-select,
+  .dm-review-search-input,
+  .dm-select-filter {
+    font-size: 16px;
+    min-height: 42px;
+  }
+
+  .dm-file-info {
+    flex-wrap: wrap;
+  }
+
+  .dm-file-name {
+    word-break: break-word;
   }
 
   .dm-summary-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .dm-desktop-table {
@@ -1524,12 +1549,25 @@
   .dm-review-tabs {
     width: 100%;
     display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .dm-review-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .dm-review-tab {
-    flex: 1;
+    flex: 0 0 auto;
+    white-space: nowrap;
     justify-content: center;
-    padding: 8px 10px;
+    padding: 8px 12px;
+  }
+
+  .dm-template-btn {
+    width: 100%;
+    justify-content: center;
   }
 
   .dm-review-search-wrap {
@@ -2852,6 +2890,7 @@
   }
 
   .dm-roster-search-form {
+    min-width: 0;
     max-width: 100%;
     width: 100%;
   }
@@ -2884,22 +2923,44 @@
 }
 
 @media (max-width: 600px) {
+  .dm-page {
+    padding: 12px 10px 28px;
+  }
+
+  .dm-card {
+    padding: 14px 12px;
+  }
+
+  .dm-title {
+    font-size: 19px;
+  }
+
+  .dm-year-selector-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dm-year-selector-group select {
+    width: 100%;
+    font-size: 16px;
+  }
+
   .dm-year-stats-grid {
-    grid-template-columns: repeat(2, 1fr) !important;
-    gap: 6px !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
   }
 
   .dm-year-stat-card {
-    padding: 8px 10px !important;
-    gap: 6px !important;
+    padding: 10px !important;
+    gap: 8px !important;
   }
 
   .dm-year-stat-val {
-    font-size: 15px !important;
+    font-size: 16px !important;
   }
 
   .dm-year-stat-lbl {
-    font-size: 9.5px !important;
+    font-size: 11px !important;
   }
 
   .dm-roster-filter-selects {
@@ -2908,6 +2969,14 @@
 
   .dm-select-filter {
     min-width: 100%;
+  }
+
+  .dm-mobile-detail-row {
+    flex-wrap: wrap;
+  }
+
+  .dm-mobile-detail-val {
+    word-break: break-word;
   }
 }
 

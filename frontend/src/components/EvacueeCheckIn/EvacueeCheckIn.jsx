@@ -1242,35 +1242,36 @@ export default function EvacueeCheckIn() {
           )}
         </div>
 
+        <button
+          type="button"
+          className={`ea-mobile-filter-btn ${selectedCenterId !== "all" ? "has-active" : ""}`}
+          onClick={() => {
+            setOpMenuOpen(false);
+            setBannerMenuOpen(false);
+            setOpenMobileRowMenuId(null);
+            setDraftCenterId(selectedCenterId);
+            setFilterSheetOpen(true);
+          }}
+          aria-haspopup="dialog"
+          aria-expanded={filterSheetOpen}
+          aria-label={
+            selectedCenterId !== "all"
+              ? "Filter by shelter (shelter selected)"
+              : "Filter by shelter"
+          }
+        >
+          <SlidersHorizontal size={15} aria-hidden="true" />
+          <span>Filter</span>
+          {selectedCenterId !== "all" && (
+            <span className="ea-filter-dot" aria-hidden="true" />
+          )}
+        </button>
+
         <div className="ea-toolbar-actions">
           <AddNonRegisteredButton
             disabled={!canAddNonRegistered}
             onClick={() => setNonRegisteredModal({ kind: "choose" })}
           />
-          <button
-            type="button"
-            className={`ea-mobile-filter-btn ${selectedCenterId !== "all" ? "has-active" : ""}`}
-            onClick={() => {
-              setOpMenuOpen(false);
-              setBannerMenuOpen(false);
-              setOpenMobileRowMenuId(null);
-              setDraftCenterId(selectedCenterId);
-              setFilterSheetOpen(true);
-            }}
-            aria-haspopup="dialog"
-            aria-expanded={filterSheetOpen}
-            aria-label={
-              selectedCenterId !== "all"
-                ? "Filter by shelter (shelter selected)"
-                : "Filter by shelter"
-            }
-          >
-            <SlidersHorizontal size={15} aria-hidden="true" />
-            <span>Filters</span>
-            {selectedCenterId !== "all" && (
-              <span className="ea-filter-dot" aria-hidden="true" />
-            )}
-          </button>
         </div>
       </section>
 

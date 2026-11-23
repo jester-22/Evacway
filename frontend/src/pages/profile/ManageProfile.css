@@ -549,7 +549,25 @@
     align-items: stretch;
   }
 
+  .profile-reset-info {
+    min-width: 0;
+  }
+
   .profile-reset-card .profile-btn {
     width: 100%;
+  }
+
+  .profile-input {
+    font-size: 16px;
+  }
+
+  .profile-identity-name,
+  .profile-identity-email {
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .profile-rules-list {
+    grid-template-columns: 1fr;
   }
 }

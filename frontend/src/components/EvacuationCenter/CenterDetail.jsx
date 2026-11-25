@@ -160,6 +160,7 @@ export default function CenterDetail({
 }) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  const canManageCenter = isAdmin || user?.role === 'lgu_personnel'
   const centerId = center?.id
   const detailsQuery = useCenterDetails(centerId)
   const centerFamilies = Array.isArray(detailsQuery.data?.assigned_families)
@@ -203,9 +204,9 @@ export default function CenterDetail({
         onBack={onBack}
         onAssignHousehold={onAssignHousehold}
         onViewMap={onViewMap}
-        onEditCenter={isAdmin ? onEditCenter : undefined}
+        onEditCenter={canManageCenter ? onEditCenter : undefined}
         onAddRooms={structureMode === 'rooms_only' ? onAddRooms : undefined}
-        onAddBuilding={isAdmin ? onAddBuilding : undefined}
+        onAddBuilding={canManageCenter ? onAddBuilding : undefined}
         onDeactivate={isAdmin ? () => onDeactivate?.(center) : undefined}
         canDeactivate={canDeactivate}
         onPlaceOnMap={onPlaceOnMap}
@@ -242,10 +243,10 @@ export default function CenterDetail({
             householdAssigned={householdAssigned}
             householdArrived={householdArrived}
             householdSpaceLeft={householdSpaceLeft}
-            onEdit={isAdmin ? onEditCenter : undefined}
+            onEdit={canManageCenter ? onEditCenter : undefined}
             onPlaceOnMap={onPlaceOnMap}
             onAddRooms={structureMode === 'rooms_only' ? onAddRooms : undefined}
-            onAddBuilding={isAdmin ? onAddBuilding : undefined}
+            onAddBuilding={canManageCenter ? onAddBuilding : undefined}
           />
         </section>
 
@@ -263,13 +264,13 @@ export default function CenterDetail({
               rooms={rooms}
               buildings={buildings}
               centerFamilies={centerFamilies}
-              onAddBuilding={isAdmin ? onAddBuilding : undefined}
+              onAddBuilding={canManageCenter ? onAddBuilding : undefined}
               onOpenRoom={onOpenRoom}
               onAddRoom={structureMode === 'rooms_only' ? onAddRoom : undefined}
               onEditRoom={onEditRoom}
               onOpenBuilding={onOpenBuilding}
               onAssignHousehold={onAssignHousehold}
-              onEditCenter={isAdmin ? onEditCenter : undefined}
+              onEditCenter={canManageCenter ? onEditCenter : undefined}
             />
           </section>
         )}
@@ -340,6 +341,7 @@ export function CenterHeader({
 }) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  const canManageCenter = isAdmin || user?.role === 'lgu_personnel'
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [showAllBarangays, setShowAllBarangays] = useState(false)
 
@@ -396,7 +398,7 @@ export function CenterHeader({
   if (canAddRoom && onAddRooms) {
     kebabItems.push({ label: 'Add rooms', icon: faPlus, onClick: onAddRooms })
   }
-  if (isAdmin && onEditCenter) {
+  if (canManageCenter && onEditCenter) {
     kebabItems.push({ label: 'Edit center', icon: faPen, onClick: onEditCenter })
   }
   if (kebabItems.length > 0 && isAdmin && canDeactivate && onDeactivate) {
@@ -708,6 +710,7 @@ export function OverviewTab({
 }) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  const canManageCenter = isAdmin || user?.role === 'lgu_personnel'
 
   const barangays = Array.isArray(center?.barangays) ? center.barangays : []
   const addressParts = []
@@ -763,7 +766,7 @@ export function OverviewTab({
         householdArrived={householdArrived}
         householdSpaceLeft={householdSpaceLeft}
         isOpenArea={isOpenArea}
-        onEditCapacity={isAdmin && onEdit && isOpenArea ? () => onEdit(1) : undefined}
+        onEditCapacity={canManageCenter && onEdit && isOpenArea ? () => onEdit(1) : undefined}
       />
 
       {/* Center Information and Readiness Checklist side by side below */}
@@ -771,7 +774,7 @@ export function OverviewTab({
         <div className="ec-info-card">
           <div className="ec-info-card-header">
             <h3 className="ec-info-card-title">Center Information</h3>
-            {isAdmin && onEdit && (
+            {canManageCenter && onEdit && (
               <button type="button" className="ec-info-edit-btn" onClick={onEdit}>
                 <FontAwesomeIcon icon={faPen} size="xs" />
                 <span>Edit</span>

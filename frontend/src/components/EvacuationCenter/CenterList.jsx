@@ -134,7 +134,7 @@ export default function CenterList({
   className = '',
 }) {
   const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
+  const canManageCenters = user?.role === 'admin' || user?.role === 'lgu_personnel'
 
   const [searchQuery, setSearchQuery] = useState('')
   const [barangayFilter, setBarangayFilter] = useState('')
@@ -321,7 +321,7 @@ export default function CenterList({
             Check shelter capacity, building readiness, and live arrivals across the municipality.
           </p>
         </div>
-        {isAdmin && onAddCenter && (
+        {canManageCenters && onAddCenter && (
           <div className="ec-list-controls">
             <Button variant="primary" onClick={onAddCenter} aria-label="Add Center">
               <FontAwesomeIcon icon={faPlus} aria-hidden="true" />

@@ -698,8 +698,8 @@ function BarangayManager() {
       setError("Family slots must be a whole number of at least 1.");
       return;
     }
-    if (!Number.isInteger(Number(roomModal.people_spaces)) || Number(roomModal.people_spaces) < 25) {
-      setError("People spaces must be a whole number of at least 25.");
+    if (!Number.isInteger(Number(roomModal.people_spaces)) || Number(roomModal.people_spaces) < 1) {
+      setError("People spaces must be a whole number of at least 1.");
       return;
     }
 
@@ -3237,7 +3237,7 @@ function BarangayManager() {
                     <span>People spaces *</span>
                     <input
                       type="number"
-                      min="25"
+                      min="1"
                       step="1"
                       inputMode="numeric"
                       required

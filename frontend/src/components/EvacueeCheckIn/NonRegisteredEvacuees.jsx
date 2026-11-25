@@ -5,6 +5,7 @@ import { faPlus, faXmark, faSpinner } from '@fortawesome/free-solid-svg-icons';
 import { api } from '../../services/api';
 import { formatFloorLabel, formatRoomLabel } from '../../utils/formatRoomLabel';
 import { formatManilaDateTime } from '../../utils/dateTime';
+import { appConfirm } from '../../utils/appDialog';
 import {
   getLocalMinDobIso,
   getLocalYesterdayIso,
@@ -404,7 +405,14 @@ export function NonRegisteredGroups({ result, loading, error, retry, status, set
       onClose={() => setSelectedEntry(null)} onReveal={() => reveal(activeEntry.group)}
       onEdit={(targetPerson) => reveal(activeEntry.group, targetPerson)}
       onDepart={(targetPerson, departed) => act(`departure-${targetPerson.id}`, () => api.departNonRegistered(targetPerson.id, departed, false))}
-      onRemove={(targetPerson) => { if (window.confirm('Delete this non-registered arrival record?')) act(`delete-${targetPerson.id}`, () => api.deleteNonRegisteredPerson(targetPerson.id)); }} />}
+      onRemove={async (targetPerson) => {
+        const ok = await appConfirm('Delete this non-registered arrival record?', {
+          title: 'Delete Arrival Record?',
+          confirmText: 'Delete',
+          danger: true,
+        });
+        if (ok) act(`delete-${targetPerson.id}`, () => api.deleteNonRegisteredPerson(targetPerson.id));
+      }} />}
   </section>;
 }
 

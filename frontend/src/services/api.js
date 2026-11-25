@@ -578,10 +578,10 @@ export const api = {
   // ROUTING
   // -------------------------------------------------------
 
-  getEvacuationRoute: (lat, lng, centerId = null) =>
+  getEvacuationRoute: (lat, lng, centerId = null, heading = null) =>
     request(
       `/api/evacuation-route?lat=${lat}&lng=${lng}${centerId != null ? `&center_id=${centerId}` : ""
-      }`
+      }${heading != null && Number.isFinite(Number(heading)) ? `&heading=${encodeURIComponent(Number(heading))}` : ""}`
     ),
 
   getProblemEntrances: () => request("/api/routing/problem-entrances"),

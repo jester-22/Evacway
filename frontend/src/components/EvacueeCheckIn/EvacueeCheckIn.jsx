@@ -1825,7 +1825,21 @@ export default function EvacueeCheckIn() {
       </section>
 
       {/* Member Checklist Modal (For Partial / Individual Arrival) */}
-      {modalFamily && (
+      {modalFamily && (() => {
+        const modalMembers = Array.isArray(modalFamily.members) ? modalFamily.members : [];
+        const totalModalMembers = modalMembers.length || Number(modalFamily.member_count || 0);
+        const savedPresentIds = new Set(
+          modalMembers.filter((m) => Boolean(m.is_checked_in)).map((m) => m.id)
+        );
+        const isSameAsSaved =
+          selectedMemberIds.size === savedPresentIds.size &&
+          Array.from(selectedMemberIds).every((id) => savedPresentIds.has(id));
+        const isAllAlreadySavedPresent =
+          totalModalMembers > 0 &&
+          savedPresentIds.size === totalModalMembers &&
+          selectedMemberIds.size === totalModalMembers;
+
+        return (
         <div
           className="checkin-modal-backdrop"
           onClick={() => setModalFamily(null)}
@@ -1865,7 +1879,7 @@ export default function EvacueeCheckIn() {
             <div className="checkin-modal-controls">
               <div className="checkin-modal-summary-text">
                 <strong>{selectedMemberIds.size}</strong> of{" "}
-                <strong>{modalFamily.members?.length || modalFamily.member_count}</strong> members {isHistorical ? "arrived during event" : "present"}
+                <strong>{totalModalMembers}</strong> members {isHistorical ? "arrived during event" : "present"}
               </div>
               {!isHistorical && (
                 <div className="checkin-modal-quick-btns">
@@ -1873,6 +1887,7 @@ export default function EvacueeCheckIn() {
                     type="button"
                     className="checkin-modal-quick-btn"
                     onClick={handleSelectAllMembers}
+                    disabled={totalModalMembers > 0 && selectedMemberIds.size === totalModalMembers}
                   >
                     Select All
                   </button>
@@ -1880,6 +1895,7 @@ export default function EvacueeCheckIn() {
                     type="button"
                     className="checkin-modal-quick-btn"
                     onClick={handleClearAllMembers}
+                    disabled={selectedMemberIds.size === 0}
                   >
                     Clear All
                   </button>
@@ -1984,17 +2000,31 @@ export default function EvacueeCheckIn() {
                     type="button"
                     className="checkin-modal-btn is-primary"
                     onClick={handleSaveModalCheckIn}
-                    disabled={actionLoadingId === modalFamily.family_id || (!canCheckIn && selectedMemberIds.size > 0)}
-                    title={!canCheckIn && selectedMemberIds.size > 0 ? getCheckInDisabledReason(modalFamily) : undefined}
+                    disabled={
+                      actionLoadingId === modalFamily.family_id ||
+                      isSameAsSaved ||
+                      (!canCheckIn && selectedMemberIds.size > 0)
+                    }
+                    title={
+                      !canCheckIn && selectedMemberIds.size > 0
+                        ? getCheckInDisabledReason(modalFamily)
+                        : isAllAlreadySavedPresent
+                          ? "All family members are already marked present"
+                          : isSameAsSaved
+                            ? "No changes to save"
+                            : undefined
+                    }
                   >
                     {actionLoadingId === modalFamily.family_id ? (
                       <>
                         <FontAwesomeIcon icon={faSpinner} spin />
                         <span>Saving...</span>
                       </>
+                    ) : isAllAlreadySavedPresent ? (
+                      <span>All Present ({selectedMemberIds.size} Present)</span>
                     ) : selectedMemberIds.size === 0 ? (
                       <span>Mark All Absent (Undo)</span>
-                    ) : selectedMemberIds.size === (modalFamily.members?.length || modalFamily.member_count) ? (
+                    ) : selectedMemberIds.size === totalModalMembers ? (
                       <span>Confirm All ({selectedMemberIds.size} Present)</span>
                     ) : (
                       <span>Confirm Partial ({selectedMemberIds.size} Present)</span>
@@ -2005,7 +2035,8 @@ export default function EvacueeCheckIn() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Manage Evacuation Operation Modal */}
       {showManageOpModal && (

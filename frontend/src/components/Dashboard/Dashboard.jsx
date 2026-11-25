@@ -1011,7 +1011,7 @@ function Dashboard() {
   const [pushSuccess, setPushSuccess] = useState(false);
 
   useEffect(() => {
-    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    if (!("Notification" in window)) {
       setPushStatus("unsupported");
       return;
     }
@@ -1019,19 +1019,64 @@ function Dashboard() {
       setPushStatus("denied");
       return;
     }
+    let explicitlyDisabled = false;
+    try {
+      explicitlyDisabled = localStorage.getItem("evacway_push_enabled") === "false";
+    } catch {
+      // ignore storage errors
+    }
+    if (Notification.permission === "granted" && !explicitlyDisabled) {
+      setPushStatus("active");
+    }
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      if (Notification.permission !== "granted" || explicitlyDisabled) {
+        setPushStatus("inactive");
+      }
+      return;
+    }
     getOrRegisterServiceWorker().then((reg) => {
       if (!reg) {
-        setPushStatus("inactive");
+        if (Notification.permission !== "granted" || explicitlyDisabled) {
+          setPushStatus("inactive");
+        }
         return;
       }
       reg.pushManager.getSubscription().then((sub) => {
-        if (sub) {
+        if (sub && !explicitlyDisabled) {
+          setPushStatus("active");
+        } else if (Notification.permission === "granted" && !explicitlyDisabled) {
           setPushStatus("active");
         } else {
           setPushStatus("inactive");
         }
-      }).catch(() => setPushStatus("inactive"));
-    }).catch(() => setPushStatus("inactive"));
+      }).catch(() => {
+        if (Notification.permission === "granted" && !explicitlyDisabled) {
+          setPushStatus("active");
+        } else {
+          setPushStatus("inactive");
+        }
+      });
+    }).catch(() => {
+      if (Notification.permission === "granted" && !explicitlyDisabled) {
+        setPushStatus("active");
+      } else {
+        setPushStatus("inactive");
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    function handlePushStatusChanged(event) {
+      const nextStatus = event?.detail?.status;
+      if (nextStatus) {
+        setPushStatus(nextStatus);
+        if (nextStatus === "active") {
+          setPushSuccess(false);
+        }
+      }
+    }
+    window.addEventListener("evacway:push-status-changed", handlePushStatusChanged);
+    return () => window.removeEventListener("evacway:push-status-changed", handlePushStatusChanged);
   }, []);
 
   const handleActivatePushFromDashboard = useCallback(async () => {
@@ -1040,24 +1085,49 @@ function Dashboard() {
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
         setPushStatus("denied");
+        window.dispatchEvent(
+          new CustomEvent("evacway:push-status-changed", {
+            detail: { status: "denied", subscription: null },
+          })
+        );
         return;
       }
-      const reg = await getOrRegisterServiceWorker();
-      if (!reg) return;
 
-      const config = await api.getVapidPublicKey();
-      if (!config.enabled || !config.public_key) return;
-
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: decodeVapidKey(config.public_key),
-        });
+      try {
+        localStorage.setItem("evacway_push_enabled", "true");
+      } catch {
+        // ignore storage errors
       }
-      await api.savePushSubscription(sub.toJSON());
+
+      let sub = null;
+      try {
+        const reg = await getOrRegisterServiceWorker();
+        if (reg && "pushManager" in reg) {
+          sub = await reg.pushManager.getSubscription();
+          if (!sub) {
+            const config = await api.getVapidPublicKey();
+            if (config?.enabled && config?.public_key) {
+              sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: decodeVapidKey(config.public_key),
+              });
+            }
+          }
+          if (sub) {
+            await api.savePushSubscription(sub.toJSON());
+          }
+        }
+      } catch (swErr) {
+        console.warn("Web Push subscription fallback to browser Notification API:", swErr);
+      }
+
       setPushStatus("active");
       setPushSuccess(true);
+      window.dispatchEvent(
+        new CustomEvent("evacway:push-status-changed", {
+          detail: { status: "active", subscription: sub },
+        })
+      );
       setTimeout(() => {
         setPushSuccess(false);
       }, 2500);

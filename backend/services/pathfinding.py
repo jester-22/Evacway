@@ -9,6 +9,7 @@ from sqlalchemy import func
 from models import (
     db,
     RoadSegment,
+    HazardZone,
     EvacuationCenter,
     EvacuationCenterRoom,
     EvacuationAssignment,
@@ -18,6 +19,8 @@ from models import (
 logger = logging.getLogger(__name__)
 
 CLOSED_ROAD_PENALTY = 1000000
+HAZARD_ZONE_HIGH_RISK_PENALTY = 15.0
+HAZARD_ZONE_DEFAULT_PENALTY = 8.0
 MAX_ENTRANCE_SNAP_DISTANCE_METERS = 25.0
 
 _cached_network = None
@@ -34,6 +37,22 @@ def haversine(lat1, lon1, lat2, lon2):
         + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     )
     return 2 * R * math.asin(math.sqrt(max(0.0, min(1.0, a))))
+
+
+def calculate_bearing(lat1, lon1, lat2, lon2):
+    """Calculates initial bearing in degrees [0, 360) from (lat1, lon1) to (lat2, lon2)."""
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dlambda = math.radians(lon2 - lon1)
+    y = math.sin(dlambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+
+def smallest_angle_diff(deg1, deg2):
+    """Returns the smallest difference between two bearings in degrees [0, 180]."""
+    diff = abs((deg1 - deg2) % 360.0)
+    return 360.0 - diff if diff > 180.0 else diff
 
 
 def invalidate_road_network_cache():
@@ -92,6 +111,27 @@ def get_road_network():
         if not seg.is_closed:
             open_segments.append((seg, line))
 
+    # Load active flood / landslide hazard zone polygons to penalize overlapping road edges
+    # cleanly without severing road connectivity when no alternative road exists.
+    hazard_polygons = []
+    try:
+        zones = HazardZone.query.all()
+        for zone in zones:
+            if not getattr(zone, "geom", None):
+                continue
+            hz_type = str(getattr(zone, "hazard_type", "") or "").strip().lower()
+            if hz_type and not any(k in hz_type for k in ("flood", "landslide", "storm", "hazard")):
+                continue
+            risk = str(getattr(zone, "risk_level", "") or "").strip().lower()
+            multiplier = (
+                HAZARD_ZONE_HIGH_RISK_PENALTY
+                if "high" in risk or "critical" in risk
+                else HAZARD_ZONE_DEFAULT_PENALTY
+            )
+            hazard_polygons.append((to_shape(zone.geom), multiplier))
+    except Exception:
+        hazard_polygons = []
+
     # 2. Build graph and spatial index exclusively from open segments
     for seg, line in open_segments:
         coords = list(line.coords)
@@ -102,20 +142,31 @@ def get_road_network():
             u = (round(lat1, 6), round(lng1, 6))
             v = (round(lat2, 6), round(lng2, 6))
 
+            sub_line = LineString([(lng1, lat1), (lng2, lat2)])
             dist_km = haversine(lat1, lng1, lat2, lng2)
-            weight = dist_km * (seg.base_weight or 1.0)
+            effective_weight_factor = float(seg.base_weight or 1.0)
+            if hazard_polygons:
+                max_hz_mult = 1.0
+                for hz_poly, hz_mult in hazard_polygons:
+                    try:
+                        if hz_poly.intersects(sub_line):
+                            max_hz_mult = max(max_hz_mult, hz_mult)
+                    except Exception:
+                        continue
+                effective_weight_factor *= max_hz_mult
+
+            weight = dist_km * effective_weight_factor
 
             G.add_edge(
                 u,
                 v,
                 weight=weight,
-                base_weight=seg.base_weight or 1.0,
+                base_weight=effective_weight_factor,
                 is_closed=False,
                 seg_id=seg.id,
                 road_name=seg.road_name or "Road",
             )
 
-            sub_line = LineString([(lng1, lat1), (lng2, lat2)])
             sub_lines.append(sub_line)
             sub_segments.append(
                 {
@@ -124,7 +175,7 @@ def get_road_network():
                     "sub_line": sub_line,
                     "seg_id": seg.id,
                     "road_name": seg.road_name or "Road",
-                    "base_weight": seg.base_weight or 1.0,
+                    "base_weight": effective_weight_factor,
                     "is_closed": False,
                 }
             )
@@ -149,9 +200,16 @@ def get_road_network():
     return _cached_network
 
 
-def snap_point_to_road(lat, lng, snap_to_intersection=True):
+def snap_point_to_road(lat, lng, snap_to_intersection=False, heading=None):
     """
     Projects an arbitrary (lat, lng) point onto the nearest road segment.
+    When `heading` (degrees 0-360) is provided, candidate road segments within
+    ~45m are evaluated using both perpendicular distance and road-axis alignment
+    so the user snaps to the road aligned with their travel direction rather than
+    an adjacent perpendicular side alley.
+    By default (`snap_to_intersection=False`), returns the exact perpendicular
+    projection on the road polyline edge so start/destination endpoints never
+    overshoot past an entrance to a distant vertex.
     Returns:
       snapped_point: (lat, lng) on the road segment
       dist_meters: distance from point to snapped_point in meters
@@ -167,33 +225,66 @@ def snap_point_to_road(lat, lng, snap_to_intersection=True):
         return (lat, lng), 0.0, None, False
 
     p = Point(lng, lat)
-    nearest_idx = spatial_tree.nearest(p)
-    best_sub = sub_segments[nearest_idx]
+    valid_heading = (
+        float(heading) % 360.0
+        if heading is not None and isinstance(heading, (int, float)) and math.isfinite(heading)
+        else None
+    )
 
-    # Project point onto the nearest line segment
-    proj = best_sub["sub_line"].project(p)
-    snap_geom = best_sub["sub_line"].interpolate(proj)
-    snap_lat = round(snap_geom.y, 6)
-    snap_lng = round(snap_geom.x, 6)
+    # Gather nearby candidate sub-segments (~45m radius) plus the single nearest segment
+    candidate_indices = set()
+    try:
+        nearby_idxs = spatial_tree.query(p.buffer(0.00042))
+        for idx in nearby_idxs:
+            candidate_indices.add(int(idx))
+    except Exception:
+        pass
 
-    dist_meters = haversine(lat, lng, snap_lat, snap_lng) * 1000.0
+    nearest_idx = int(spatial_tree.nearest(p))
+    candidate_indices.add(nearest_idx)
 
-    # Connectivity check
+    best_candidate = None
+    for idx in candidate_indices:
+        sub = sub_segments[idx]
+        proj = sub["sub_line"].project(p)
+        snap_geom = sub["sub_line"].interpolate(proj)
+        c_lat = round(snap_geom.y, 6)
+        c_lng = round(snap_geom.x, 6)
+        dist_m = haversine(lat, lng, c_lat, c_lng) * 1000.0
+
+        u, v = sub["u"], sub["v"]
+        is_conn = (u in largest_cc) or (v in largest_cc)
+
+        # Strongly prefer segments connected to the main road network
+        score = dist_m + (0.0 if is_conn else 5000.0)
+
+        if valid_heading is not None and dist_m <= 35.0 and u != v:
+            seg_bearing_fwd = calculate_bearing(u[0], u[1], v[0], v[1])
+            seg_bearing_rev = (seg_bearing_fwd + 180.0) % 360.0
+            axis_misalignment = min(
+                smallest_angle_diff(valid_heading, seg_bearing_fwd),
+                smallest_angle_diff(valid_heading, seg_bearing_rev),
+            )
+            # Penalize perpendicular side streets (up to ~12m penalty at 90 degrees)
+            if axis_misalignment > 20.0:
+                score += ((axis_misalignment - 20.0) / 70.0) * 12.0
+
+        if best_candidate is None or score < best_candidate[0]:
+            best_candidate = (score, (c_lat, c_lng), dist_m, sub, is_conn)
+
+    _, (snap_lat, snap_lng), dist_meters, best_sub, is_connected = best_candidate
     u, v = best_sub["u"], best_sub["v"]
-    is_connected = (u in largest_cc) or (v in largest_cc)
 
-    # Intersection snapping: if within 15 meters of an intersection node where multiple
-    # segments meet, lock directly to the exact intersection node vertex so reports/pins
-    # sit dead-center in the intersection instead of drifting down a single road branch.
+    # Optional true-intersection snapping (only when explicitly requested and degree >= 3)
     G = net.get("graph")
     if snap_to_intersection and G is not None:
         d_u = haversine(snap_lat, snap_lng, u[0], u[1]) * 1000.0
         d_v = haversine(snap_lat, snap_lng, v[0], v[1]) * 1000.0
-        if d_u <= 15.0 and d_u <= d_v and G.has_node(u) and G.degree(u) > 1:
+        if d_u <= 8.0 and d_u <= d_v and G.has_node(u) and G.degree(u) >= 3:
             snap_lat = round(u[0], 6)
             snap_lng = round(u[1], 6)
             dist_meters = haversine(lat, lng, snap_lat, snap_lng) * 1000.0
-        elif d_v <= 15.0 and d_v <= d_u and G.has_node(v) and G.degree(v) > 1:
+        elif d_v <= 8.0 and d_v <= d_u and G.has_node(v) and G.degree(v) >= 3:
             snap_lat = round(v[0], 6)
             snap_lng = round(v[1], 6)
             dist_meters = haversine(lat, lng, snap_lat, snap_lng) * 1000.0
@@ -201,10 +292,14 @@ def snap_point_to_road(lat, lng, snap_to_intersection=True):
     return (snap_lat, snap_lng), dist_meters, best_sub, is_connected
 
 
-def calculate_route_with_edge_snapping(start_lat, start_lng, target_lat, target_lng):
+def calculate_route_with_edge_snapping(
+    start_lat, start_lng, target_lat, target_lng, heading=None
+):
     """
     Computes a walking route from start to target by snapping BOTH endpoints
     to their exact positions along road segments (not vertices) and running Dijkstra.
+    When `heading` is provided, applies bearing-aware snapping and a small directional
+    penalty against immediately reversing direction on the starting road segment.
     Returns:
       dict with road path, legs, and distance metrics, or None if no path exists.
     """
@@ -213,8 +308,18 @@ def calculate_route_with_edge_snapping(start_lat, start_lng, target_lat, target_
     if G_base.number_of_nodes() == 0:
         return None
 
-    u_snap, u_dist, u_sub, u_connected = snap_point_to_road(start_lat, start_lng)
-    t_snap, t_dist, t_sub, t_connected = snap_point_to_road(target_lat, target_lng)
+    valid_heading = (
+        float(heading) % 360.0
+        if heading is not None and isinstance(heading, (int, float)) and math.isfinite(heading)
+        else None
+    )
+
+    u_snap, u_dist, u_sub, u_connected = snap_point_to_road(
+        start_lat, start_lng, snap_to_intersection=False, heading=valid_heading
+    )
+    t_snap, t_dist, t_sub, t_connected = snap_point_to_road(
+        target_lat, target_lng, snap_to_intersection=False
+    )
 
     if not u_connected or not t_connected:
         logger.warning(
@@ -255,7 +360,7 @@ def calculate_route_with_edge_snapping(start_lat, start_lng, target_lat, target_
 
     else:
         # Case 2: Start and target are on different sub-segments
-        for snap_pt, sub in [(u_snap, u_sub), (t_snap, t_sub)]:
+        for is_start, snap_pt, sub in [(True, u_snap, u_sub), (False, t_snap, t_sub)]:
             if sub is not None and snap_pt != sub["u"] and snap_pt != sub["v"]:
                 u_node, v_node = sub["u"], sub["v"]
                 if G.has_edge(u_node, v_node):
@@ -266,6 +371,15 @@ def calculate_route_with_edge_snapping(start_lat, start_lng, target_lat, target_
 
                 d2 = haversine(snap_pt[0], snap_pt[1], v_node[0], v_node[1])
                 w2 = d2 * (sub["base_weight"] or 1.0)
+
+                # If user heading is known on the start segment, penalize immediate U-turns behind user
+                if is_start and valid_heading is not None:
+                    bearing_to_u = calculate_bearing(snap_pt[0], snap_pt[1], u_node[0], u_node[1])
+                    bearing_to_v = calculate_bearing(snap_pt[0], snap_pt[1], v_node[0], v_node[1])
+                    if smallest_angle_diff(valid_heading, bearing_to_u) > 110.0:
+                        w1 += 0.06
+                    if smallest_angle_diff(valid_heading, bearing_to_v) > 110.0:
+                        w2 += 0.06
 
                 # Only connect to u_node/v_node if they exist in G_base (not impassable)
                 if G_base.has_node(u_node):
@@ -482,7 +596,7 @@ def _alternative_route_summary(candidate, selection_reason):
     }
 
 
-def find_best_evacuation_route(user_lat, user_lng, center_id=None):
+def find_best_evacuation_route(user_lat, user_lng, center_id=None, heading=None):
     """
     Finds the optimal evacuation center entrance based on REAL walking distance
     to its snapped road point, skipping unreachable or out-of-bounds entrances.
@@ -518,8 +632,10 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
             entrance_lat, entrance_lng = entrance_pt.y, entrance_pt.x
             entrance_name = f"Entrance {idx + 1}"
 
-            # Snap check & diagnostics
-            _, edge_dist_m, sub_info, is_conn = snap_point_to_road(entrance_lat, entrance_lng)
+            # Snap check & diagnostics (strictly project onto road edge without vertex overshoot)
+            _, edge_dist_m, sub_info, is_conn = snap_point_to_road(
+                entrance_lat, entrance_lng, snap_to_intersection=False
+            )
             is_problem = (edge_dist_m > MAX_ENTRANCE_SNAP_DISTANCE_METERS) or (not is_conn)
 
             entrance_meta = {
@@ -543,7 +659,7 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None):
 
             # Calculate edge-snapped walking path
             route_res = calculate_route_with_edge_snapping(
-                user_lat, user_lng, entrance_lat, entrance_lng
+                user_lat, user_lng, entrance_lat, entrance_lng, heading=heading
             )
             if not route_res:
                 logger.warning(

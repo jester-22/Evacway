@@ -119,10 +119,16 @@ export default function ManageProfile() {
   }, [resetCooldown]);
 
   // Navigation from Sidebar
-  function handleTabChange(nextTab) {
+  async function handleTabChange(nextTab) {
     if (isEditing && isDirty) {
-      const confirmLeave = window.confirm(
-        "You have unsaved profile changes. Are you sure you want to leave without saving?"
+      const { appConfirm } = await import("../../utils/appDialog");
+      const confirmLeave = await appConfirm(
+        "You have unsaved profile changes. Are you sure you want to leave without saving?",
+        {
+          title: "Discard Unsaved Changes?",
+          confirmText: "Leave Without Saving",
+          danger: true,
+        }
       );
       if (!confirmLeave) return;
     }
@@ -140,10 +146,16 @@ export default function ManageProfile() {
     navigate(`${path}?tab=${encodeURIComponent(nextTab)}`);
   }
 
-  function handleNotificationSelect(notification) {
+  async function handleNotificationSelect(notification) {
     if (isEditing && isDirty) {
-      const confirmLeave = window.confirm(
-        "You have unsaved profile changes. Are you sure you want to leave without saving?"
+      const { appConfirm } = await import("../../utils/appDialog");
+      const confirmLeave = await appConfirm(
+        "You have unsaved profile changes. Are you sure you want to leave without saving?",
+        {
+          title: "Discard Unsaved Changes?",
+          confirmText: "Leave Without Saving",
+          danger: true,
+        }
       );
       if (!confirmLeave) return;
     }

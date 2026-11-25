@@ -1,3 +1,4 @@
+import math
 from flask import Blueprint, request, jsonify
 from services.pathfinding import (
     find_best_evacuation_route,
@@ -25,8 +26,18 @@ def get_evacuation_route():
         except ValueError:
             pass
 
+    raw_heading = request.args.get("heading")
+    heading = None
+    if raw_heading is not None and raw_heading != "":
+        try:
+            parsed_heading = float(raw_heading)
+            if math.isfinite(parsed_heading) and 0.0 <= parsed_heading <= 360.0:
+                heading = parsed_heading % 360.0
+        except ValueError:
+            pass
+
     route_data, error_msg = find_best_evacuation_route(
-        user_lat, user_lng, center_id=center_id
+        user_lat, user_lng, center_id=center_id, heading=heading
     )
     if error_msg:
         status_code = (
@@ -64,9 +75,19 @@ def snap_coordinate():
     except (TypeError, ValueError):
         return jsonify({"error": "lat and lng query params are required"}), 400
 
-    snap_to_intersection = request.args.get("snap_intersection", "true").lower() not in {"0", "false", "no"}
+    snap_to_intersection = request.args.get("snap_intersection", "false").lower() in {"1", "true", "yes"}
+    raw_heading = request.args.get("heading")
+    heading = None
+    if raw_heading is not None and raw_heading != "":
+        try:
+            parsed_heading = float(raw_heading)
+            if math.isfinite(parsed_heading) and 0.0 <= parsed_heading <= 360.0:
+                heading = parsed_heading % 360.0
+        except ValueError:
+            pass
+
     snap_pt, dist_m, sub_info, is_conn = snap_point_to_road(
-        lat, lng, snap_to_intersection=snap_to_intersection
+        lat, lng, snap_to_intersection=snap_to_intersection, heading=heading
     )
     return jsonify(
         {

@@ -251,7 +251,11 @@ export default function CenterPlacementFlow({
   // Handle Undo
   const handleUndo = useCallback(() => {
     if (step === "footprint" && footprintPoints.length > 0 && onFootprintPointsChange) {
-      onFootprintPointsChange(footprintPoints.slice(0, -1));
+      const nextFootprint = footprintPoints.slice(0, -1);
+      onFootprintPointsChange(nextFootprint);
+      if (nextFootprint.length < 3 && entrancePoints.length > 0 && onEntrancePointsChange) {
+        onEntrancePointsChange([]);
+      }
     } else if (step === "entrance" && entrancePoints.length > 0 && onEntrancePointsChange) {
       onEntrancePointsChange(entrancePoints.slice(0, -1));
     } else if (step === "edit") {
@@ -265,8 +269,13 @@ export default function CenterPlacementFlow({
 
   // Handle Clear
   const handleClear = useCallback(() => {
-    if (step === "footprint" && footprintPoints.length > 0 && onFootprintPointsChange) {
-      onFootprintPointsChange([]);
+    if (step === "footprint") {
+      if (footprintPoints.length > 0 && onFootprintPointsChange) {
+        onFootprintPointsChange([]);
+      }
+      if (entrancePoints.length > 0 && onEntrancePointsChange) {
+        onEntrancePointsChange([]);
+      }
     } else if (step === "entrance" && entrancePoints.length > 0 && onEntrancePointsChange) {
       onEntrancePointsChange([]);
     } else if (step === "edit") {
@@ -274,6 +283,9 @@ export default function CenterPlacementFlow({
         onEditPolygonPointsChange([]);
       } else if (footprintPoints.length > 0 && onFootprintPointsChange) {
         onFootprintPointsChange([]);
+      }
+      if (entrancePoints.length > 0 && onEntrancePointsChange) {
+        onEntrancePointsChange([]);
       }
       if (onStepChange) {
         onStepChange("footprint");
@@ -397,9 +409,9 @@ export default function CenterPlacementFlow({
     (step === "entrance" && entrancePoints.length > 0) ||
     (step === "edit" && activeEditPoints && activeEditPoints.length > 3);
   const canClear =
-    (step === "footprint" && footprintPoints.length > 0) ||
+    (step === "footprint" && (footprintPoints.length > 0 || entrancePoints.length > 0)) ||
     (step === "entrance" && entrancePoints.length > 0) ||
-    (step === "edit" && activeEditPoints && activeEditPoints.length > 0);
+    (step === "edit" && ((activeEditPoints && activeEditPoints.length > 0) || entrancePoints.length > 0));
 
   // Stepper state numbers
   const stepIndex = step === "footprint" ? 1 : step === "entrance" ? 2 : step === "edit" ? 3 : 4;

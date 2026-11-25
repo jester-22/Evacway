@@ -2721,43 +2721,47 @@ def auto_geofence_check_in():
     if not is_valid:
         return jsonify({"success": False, "message": err_msg, "error": err_msg}), 400
 
-    # Validate coordinate overlap / proximity
+    # Validate coordinate overlap / proximity to the center entrance (<= 15m)
     is_inside = False
     if lat is not None and lng is not None:
-        if center.geom is not None:
+        import math
+        u_lat, u_lng = float(lat), float(lng)
+
+        def _haversine_m(lat1, lng1, lat2, lng2):
+            R = 6371000.0
+            dlat = math.radians(lat2 - lat1)
+            dlng = math.radians(lng2 - lng1)
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(math.radians(lat1))
+                * math.cos(math.radians(lat2))
+                * math.sin(dlng / 2) ** 2
+            )
+            return R * 2 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+
+        if center.entrance_geom is not None:
             try:
-                pt = Point(float(lng), float(lat))
+                ent_shape = to_shape(center.entrance_geom)
+                ent_pts = list(ent_shape.geoms) if hasattr(ent_shape, "geoms") else [ent_shape]
+                for e_pt in ent_pts:
+                    if _haversine_m(u_lat, u_lng, float(e_pt.y), float(e_pt.x)) <= 15.0:
+                        is_inside = True
+                        break
+            except Exception:
+                pass
+        elif center.geom is not None:
+            try:
+                pt = Point(u_lng, u_lat)
                 center_shape = to_shape(center.geom)
-                if center_shape.contains(pt) or center_shape.distance(pt) < 0.00065:
+                if center_shape.contains(pt) or center_shape.distance(pt) <= 0.00014:
                     is_inside = True
             except Exception:
                 pass
 
-        if not is_inside:
-            ref_lat, ref_lng = None, None
-            ref_geom = center.entrance_geom if center.entrance_geom is not None else center.geom
-            if ref_geom is not None:
-                try:
-                    ref_pt = to_shape(ref_geom).centroid
-                    ref_lat, ref_lng = float(ref_pt.y), float(ref_pt.x)
-                except Exception:
-                    pass
-            if ref_lat is not None and ref_lng is not None:
-                import math
-                R = 6371000
-                dlat = math.radians(ref_lat - float(lat))
-                dlng = math.radians(ref_lng - float(lng))
-                a = (math.sin(dlat/2)**2 +
-                     math.cos(math.radians(float(lat))) * math.cos(math.radians(ref_lat)) *
-                     math.sin(dlng/2)**2)
-                c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-                if R * c <= 75:  # within 75 meters
-                    is_inside = True
-
     if lat is not None and lng is not None and not is_inside:
         return jsonify({
             "success": False,
-            "message": "Current location is not inside the evacuation center boundary.",
+            "message": "Current location has not reached the evacuation center entrance yet.",
             "is_inside": False
         }), 400
 

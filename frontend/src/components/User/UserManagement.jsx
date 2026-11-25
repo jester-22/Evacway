@@ -28,6 +28,7 @@ import {
 import { api } from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
 import { queryKeys, useUsers } from "../../hooks/useEvacuationQueries";
+import { appAlert, appConfirm } from "../../utils/appDialog";
 import {
   sanitizeNameInput,
   sanitizePhoneInput,
@@ -453,7 +454,16 @@ function UserManagement() {
 
   async function handleResetPassword(targetUser, skipConfirmation = false) {
     if (!targetUser || resetRequestRef.current.sending || Date.now() < resetRequestRef.current.nextAllowedAt) return;
-    if (!skipConfirmation && !confirm(`Send password reset email to ${targetUser.name}?`)) return;
+    if (
+      !skipConfirmation &&
+      !(await appConfirm(`Send password reset email to ${targetUser.name}?`, {
+        title: "Send Password Reset Email?",
+        confirmText: "Send Email",
+        tone: "info",
+      }))
+    ) {
+      return;
+    }
 
     resetRequestRef.current = { sending: true, nextAllowedAt: Date.now() + 5000 };
     setResetError("");
@@ -516,7 +526,10 @@ function UserManagement() {
       });
       setShowForm(false);
       await invalidateUsersAndLogs();
-      alert(result.message || `Account setup email sent to ${email}.`);
+      await appAlert(result.message || `Account setup email sent to ${email}.`, {
+        title: "Account Setup Email Sent",
+        tone: "success",
+      });
     } catch (err) {
       setFormError(err?.message || String(err));
     } finally {

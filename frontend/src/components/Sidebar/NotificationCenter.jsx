@@ -161,7 +161,8 @@ export default function NotificationCenter({ onSelect }) {
     if (
       newlyArrived.length > 0 &&
       "Notification" in window &&
-      Notification.permission === "granted"
+      Notification.permission === "granted" &&
+      pushState === "active"
     ) {
       newlyArrived.forEach((item) => {
         try {
@@ -190,9 +191,9 @@ export default function NotificationCenter({ onSelect }) {
     return () => document.removeEventListener("visibilitychange", refreshWhenVisible);
   }, [refetchNotifications]);
 
-  // Check push subscription status on mount
-  useEffect(() => {
-    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+  // Check push subscription status on mount and sync across components
+  const syncPushSubscriptionState = useCallback(async () => {
+    if (!("Notification" in window)) {
       setPushState("unsupported");
       return;
     }
@@ -202,60 +203,105 @@ export default function NotificationCenter({ onSelect }) {
       return;
     }
 
-    let cancelled = false;
+    let explicitlyDisabled = false;
+    try {
+      explicitlyDisabled = localStorage.getItem("evacway_push_enabled") === "false";
+    } catch {
+      // ignore storage errors
+    }
 
-    async function checkSubscription() {
-      try {
-        const registration = await getOrRegisterServiceWorker();
-        if (!registration) {
-          if (!cancelled) setPushState("inactive");
-          return;
-        }
-        const existing = await registration.pushManager.getSubscription();
+    if (explicitlyDisabled) {
+      setPushState("inactive");
+      return;
+    }
 
-        if (existing) {
-          if (!cancelled) {
-            setSubscription(existing);
-            setPushState("active");
-          }
-          api.savePushSubscription(existing.toJSON()).catch(() => { });
-          return;
-        }
+    if (Notification.permission === "granted") {
+      setPushState("active");
+    }
 
-        // If permission was already granted previously, auto-subscribe silently
-        if (Notification.permission === "granted") {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      if (Notification.permission !== "granted") {
+        setPushState("inactive");
+      }
+      return;
+    }
+
+    try {
+      const registration = await getOrRegisterServiceWorker();
+      if (!registration) {
+        if (Notification.permission !== "granted") setPushState("inactive");
+        return;
+      }
+      const existing = await registration.pushManager.getSubscription();
+
+      if (existing) {
+        setSubscription(existing);
+        setPushState("active");
+        api.savePushSubscription(existing.toJSON()).catch(() => { });
+        return;
+      }
+
+      // If permission was already granted previously, try to auto-subscribe silently
+      if (Notification.permission === "granted") {
+        setPushState("active");
+        try {
           const config = await api.getVapidPublicKey();
-          if (config.enabled && config.public_key) {
+          if (config?.enabled && config?.public_key) {
             const created = await registration.pushManager.subscribe({
               userVisibleOnly: true,
               applicationServerKey: decodeVapidKey(config.public_key),
             });
             await api.savePushSubscription(created.toJSON());
-            if (!cancelled) {
-              setSubscription(created);
-              setPushState("active");
-            }
-            return;
+            setSubscription(created);
           }
+        } catch {
+          // Browser Notification API remains active even if Web Push endpoint is unavailable
         }
+        return;
+      }
 
-        if (!cancelled) {
-          setPushState("inactive");
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setPushState("inactive");
-        }
+      setPushState("inactive");
+    } catch {
+      if (Notification.permission === "granted") {
+        setPushState("active");
+      } else {
+        setPushState("inactive");
       }
     }
-
-    checkSubscription();
-    return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    syncPushSubscriptionState();
+  }, [syncPushSubscriptionState]);
+
+  useEffect(() => {
+    if (open) {
+      syncPushSubscriptionState();
+    }
+  }, [open, syncPushSubscriptionState]);
+
+  useEffect(() => {
+    function handlePushStatusChanged(event) {
+      const nextStatus = event?.detail?.status;
+      if (nextStatus) {
+        setPushState(nextStatus);
+        if (event.detail && "subscription" in event.detail) {
+          setSubscription(event.detail.subscription || null);
+        }
+        if (nextStatus === "active") {
+          setPushMessage("");
+        }
+      } else {
+        syncPushSubscriptionState();
+      }
+    }
+    window.addEventListener("evacway:push-status-changed", handlePushStatusChanged);
+    return () => window.removeEventListener("evacway:push-status-changed", handlePushStatusChanged);
+  }, [syncPushSubscriptionState]);
 
   // Allow & Activate Push Notifications (User Gesture)
   const handlePushEnable = useCallback(async () => {
-    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    if (!("Notification" in window)) {
       setPushMessage("Push notifications are not supported by this browser.");
       setPushState("unsupported");
       return;
@@ -270,39 +316,56 @@ export default function NotificationCenter({ onSelect }) {
       if (permission !== "granted") {
         setPushState("denied");
         setPushMessage("Notification permission was not granted. You can allow it in browser site settings.");
+        window.dispatchEvent(
+          new CustomEvent("evacway:push-status-changed", {
+            detail: { status: "denied", subscription: null },
+          })
+        );
         return;
       }
 
-      // 2. Ready Service Worker
-      const registration = await getOrRegisterServiceWorker();
-      if (!registration) {
-        throw new Error("Service worker could not be initialized.");
+      try {
+        localStorage.setItem("evacway_push_enabled", "true");
+      } catch {
+        // ignore storage errors
       }
 
-      // 3. Get VAPID public key
-      const config = await api.getVapidPublicKey();
-      if (!config.enabled || !config.public_key) {
-        setPushMessage("Web Push is not configured on the server.");
-        return;
+      // 2. Try Service Worker + Web Push subscription (falls back cleanly to browser Notification API)
+      let sub = null;
+      try {
+        if ("serviceWorker" in navigator && "PushManager" in window) {
+          const registration = await getOrRegisterServiceWorker();
+          if (registration) {
+            sub = await registration.pushManager.getSubscription();
+            if (!sub) {
+              const config = await api.getVapidPublicKey();
+              if (config?.enabled && config?.public_key) {
+                sub = await registration.pushManager.subscribe({
+                  userVisibleOnly: true,
+                  applicationServerKey: decodeVapidKey(config.public_key),
+                });
+              }
+            }
+            if (sub) {
+              await api.savePushSubscription(sub.toJSON());
+            }
+          }
+        }
+      } catch (swErr) {
+        console.warn("Web Push subscription fallback to browser Notification API:", swErr);
       }
 
-      // 4. Subscribe
-      let sub = await registration.pushManager.getSubscription();
-      if (!sub) {
-        sub = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: decodeVapidKey(config.public_key),
-        });
-      }
-
-      // 5. Save to backend
-      await api.savePushSubscription(sub.toJSON());
       setSubscription(sub);
       setPushState("active");
       setJustActivated(true);
       setPushMessage("✓ Push notifications successfully activated!");
+      window.dispatchEvent(
+        new CustomEvent("evacway:push-status-changed", {
+          detail: { status: "active", subscription: sub },
+        })
+      );
 
-      // 6. Automatically hide after 2.5 seconds
+      // Automatically hide success banner after 2.5 seconds
       setTimeout(() => {
         setJustActivated(false);
         setPushMessage("");
@@ -320,15 +383,31 @@ export default function NotificationCenter({ onSelect }) {
     setPushBusy(true);
     setPushMessage("");
     try {
-      if (!subscription) {
-        setPushMessage("No push subscription to disable.");
-        return;
+      try {
+        localStorage.setItem("evacway_push_enabled", "false");
+      } catch {
+        // ignore storage errors
       }
-      await api.removePushSubscription(subscription.endpoint);
-      await subscription.unsubscribe();
+      if (subscription) {
+        try {
+          await api.removePushSubscription(subscription.endpoint);
+        } catch {
+          // ignore backend removal error if already removed
+        }
+        try {
+          await subscription.unsubscribe();
+        } catch {
+          // ignore unsubscribe error
+        }
+      }
       setSubscription(null);
       setPushState("inactive");
       setPushMessage("Push notifications disabled on this device.");
+      window.dispatchEvent(
+        new CustomEvent("evacway:push-status-changed", {
+          detail: { status: "inactive", subscription: null },
+        })
+      );
     } catch (error) {
       setPushMessage(error.message || "Could not disable push notifications.");
     } finally {
@@ -491,7 +570,7 @@ export default function NotificationCenter({ onSelect }) {
     return <FontAwesomeIcon icon={faCheck} />;
   }
 
-  const isPushActive = pushState === "active" && Boolean(subscription);
+  const isPushActive = pushState === "active";
   const showPushPrompt = (!isPushActive && !pushDismissed && pushState !== "unsupported") || justActivated;
 
   return (

@@ -394,14 +394,10 @@ def update_rescue_status(rescue_id):
                 'error': 'status must be pending, acknowledged, responding, or resolved'
             }), 400
 
-        # One-way status flow: pending → acknowledged → responding → resolved
         status_order = ['pending', 'acknowledged', 'responding', 'resolved']
-        current_index = status_order.index(rescue.status)
+        old_status = rescue.status if rescue.status in status_order else 'pending'
+        current_index = status_order.index(old_status)
         new_index = status_order.index(new_status)
-        if new_index < current_index:
-            return jsonify({
-                'error': f'Cannot change status from {rescue.status} back to {new_status}. Status only moves forward.'
-            }), 400
         if new_index == current_index and not has_agency and not has_notes:
             return jsonify({'error': f'Status is already {new_status}.'}), 400
 
@@ -409,7 +405,12 @@ def update_rescue_status(rescue_id):
             rescue.status = new_status
             rescue.status_updated_by = staff_id
             rescue.status_updated_at = utc_now()
-            log_parts.append(f'status to {new_status}')
+            if old_status == 'resolved' and new_status != 'resolved':
+                log_parts.append(f'reopened status from {old_status} to {new_status}')
+            elif new_index < current_index:
+                log_parts.append(f'reverted status from {old_status} to {new_status}')
+            else:
+                log_parts.append(f'status from {old_status} to {new_status}')
 
     if has_agency:
         raw_agency = data.get('handed_to_agency')

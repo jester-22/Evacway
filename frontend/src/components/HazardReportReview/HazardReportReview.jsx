@@ -256,6 +256,8 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
   const [submittingAction, setSubmittingAction] = useState(false);
   const [lightbox, setLightbox] = useState(false);
   const [reopening, setReopening] = useState(false);
+  const [confirmActionModal, setConfirmActionModal] = useState(null); // "validate" | "resolve" | null
+  const [noticeModal, setNoticeModal] = useState(null); // { tone, title, message, roads, secondaryMessage, secondaryRoads } | null
   const [resolvedBarangaysById, setResolvedBarangaysById] = useState({});
   const [resolvingBarangayIds, setResolvingBarangayIds] = useState({});
   const attemptedBarangayLookupIdsRef = useRef(new Set());
@@ -536,6 +538,18 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
 
     function handleKeyDown(e) {
       if (e.key === "Escape") {
+        if (noticeModal) {
+          e.stopPropagation();
+          setNoticeModal(null);
+          return;
+        }
+        if (confirmActionModal) {
+          e.stopPropagation();
+          if (!submittingAction && !reopening) {
+            setConfirmActionModal(null);
+          }
+          return;
+        }
         if (lightbox) {
           e.stopPropagation();
           setLightbox(false);
@@ -648,6 +662,8 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
 
   function closeDrawer() {
     setLightbox(false);
+    setConfirmActionModal(null);
+    setNoticeModal(null);
     setShowRejectForm(false);
     setRejectionReason("");
     setRejectDuplicateOf("");
@@ -699,7 +715,11 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     const trimmedReason =
       status === "rejected" ? String(reasonArg ?? rejectionReason).trim() : undefined;
     if (status === "rejected" && !trimmedReason) {
-      alert("Please enter a reason before rejecting this incident.");
+      setNoticeModal({
+        tone: "danger",
+        title: "Rejection Reason Required",
+        message: "Please enter a reason before rejecting this incident.",
+      });
       return;
     }
 
@@ -723,16 +743,28 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       setShowRejectForm(false);
       setRejectionReason("");
       setRejectDuplicateOf("");
+      setConfirmActionModal(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["hazard-reports"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.roadSegments }),
       ]);
 
       if (result.closed_roads && result.closed_roads.length > 0) {
-        alert(`Road(s) automatically closed due to this confirmed hazard:\n\n${result.closed_roads.join("\n")}`);
+        setNoticeModal({
+          tone: "warning",
+          title: "Road(s) Automatically Closed",
+          message:
+            "The following road(s) were automatically closed for evacuation routing due to this confirmed hazard:",
+          roads: result.closed_roads,
+        });
       }
     } catch (err) {
-      alert(`Failed to update report: ${err.message}`);
+      setConfirmActionModal(null);
+      setNoticeModal({
+        tone: "danger",
+        title: "Failed to Update Report",
+        message: err.message || "Could not update the hazard report.",
+      });
     } finally {
       setSubmittingAction(false);
     }
@@ -748,7 +780,11 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       setDuplicateOfInput(result.duplicate_of ? String(result.duplicate_of) : "");
       await queryClient.invalidateQueries({ queryKey: ["hazard-reports"] });
     } catch (err) {
-      alert(`Failed to update duplicate link: ${err.message}`);
+      setNoticeModal({
+        tone: "danger",
+        title: "Failed to Update Duplicate Link",
+        message: err.message || "Could not update the duplicate incident link.",
+      });
     } finally {
       setSavingDuplicate(false);
     }
@@ -759,7 +795,11 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     if (target) {
       openReport(target);
     } else {
-      alert(`Incident #${targetId} is no longer in the list.`);
+      setNoticeModal({
+        tone: "warning",
+        title: "Incident Not Found",
+        message: `Incident #${targetId} is no longer in the current list.`,
+      });
     }
   }
 
@@ -768,23 +808,20 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     setShowRejectForm((prev) => !prev);
   }
 
-  async function handleResolve() {
+  function handleResolve() {
     if (!selected) return;
     if (String(selected.status || "pending").toLowerCase() !== "validated") return;
-    await handleReopenRoad();
+    setConfirmActionModal("resolve");
   }
 
-  async function handleReopenRoad() {
+  async function executeReopenRoad() {
     if (!selected) return;
-    const confirmed = window.confirm(
-      "Mark the road(s) tied to this report as fixed and reopen them for routing?"
-    );
-    if (!confirmed) return;
 
     setReopening(true);
     try {
       const result = await api.reopenRoad(selected.id);
       setSelected(result);
+      setConfirmActionModal(null);
       queryClient.setQueryData(queryKeys.hazardReports(result.status), (previous = []) =>
         previous.map((report) => (report.id === result.id ? result : report))
       );
@@ -793,19 +830,38 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
         queryClient.invalidateQueries({ queryKey: queryKeys.roadSegments }),
       ]);
 
-      if (result.reopened_roads?.length) {
-        alert(`Reopened:\n\n${result.reopened_roads.join("\n")}`);
-      }
-      if (result.still_closed?.length) {
-        alert(
-          `Still closed — another active report is still nearby:\n\n${result.still_closed.join("\n")}`
-        );
-      }
-      if (!result.reopened_roads?.length && !result.still_closed?.length) {
-        alert("Report marked resolved.");
+      const reopenedList = Array.isArray(result.reopened_roads) ? result.reopened_roads : [];
+      const stillClosedList = Array.isArray(result.still_closed) ? result.still_closed : [];
+
+      if (reopenedList.length > 0 || stillClosedList.length > 0) {
+        setNoticeModal({
+          tone: "success",
+          title: reopenedList.length > 0 ? "Incident Resolved · Road(s) Reopened" : "Incident Resolved",
+          message:
+            reopenedList.length > 0
+              ? "The following road(s) tied to this incident have been reopened for evacuation routing:"
+              : "This incident has been marked as resolved.",
+          roads: reopenedList,
+          secondaryMessage:
+            stillClosedList.length > 0
+              ? "Still closed because another active hazard report is nearby:"
+              : null,
+          secondaryRoads: stillClosedList,
+        });
+      } else {
+        setNoticeModal({
+          tone: "success",
+          title: "Incident Marked Resolved",
+          message: `Incident #${result.id} has been marked as resolved.`,
+        });
       }
     } catch (err) {
-      alert(`Failed to reopen road: ${err.message}`);
+      setConfirmActionModal(null);
+      setNoticeModal({
+        tone: "danger",
+        title: "Failed to Resolve Incident",
+        message: err.message || "Could not reopen the road(s) for this incident.",
+      });
     } finally {
       setReopening(false);
     }
@@ -993,7 +1049,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       <Button
         variant="primary"
         className="hr-modal-action-btn"
-        onClick={() => handleValidate("validated")}
+        onClick={() => setConfirmActionModal("validate")}
         disabled={!canValidate || submittingAction || reopening}
         title={
           canValidate
@@ -1964,6 +2020,184 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
               <div className="hr-modal-mobile-actions">
                 {drawerActionButtons}
               </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* CONFIRMATION MODAL FOR VALIDATE OR RESOLVE */}
+      {selected && confirmActionModal && (
+        <div
+          className="hr-dialog-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !submittingAction && !reopening) {
+              setConfirmActionModal(null);
+            }
+          }}
+          role="presentation"
+        >
+          <section
+            className="hr-dialog-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="hr-confirm-dialog-title"
+            aria-describedby="hr-confirm-dialog-desc"
+          >
+            <div className="hr-dialog-header">
+              <span
+                className={`hr-dialog-icon ${
+                  confirmActionModal === "resolve" ? "is-success" : "is-primary"
+                }`}
+                aria-hidden="true"
+              >
+                {confirmActionModal === "resolve" ? (
+                  <CheckCircle2 size={20} strokeWidth={2.2} />
+                ) : (
+                  <Check size={20} strokeWidth={2.2} />
+                )}
+              </span>
+              <h3 id="hr-confirm-dialog-title" className="hr-dialog-title">
+                {confirmActionModal === "resolve"
+                  ? `Resolve Incident #${selected.id} & Reopen Road(s)?`
+                  : `Validate Incident #${selected.id}?`}
+              </h3>
+            </div>
+
+            <p id="hr-confirm-dialog-desc" className="hr-dialog-desc">
+              {confirmActionModal === "resolve"
+                ? "Mark the road(s) tied to this hazard report as fixed and reopen them for evacuation routing?"
+                : "Confirming this hazard report will mark it as Validated and automatically close affected road segments within 100m for evacuation routing."}
+            </p>
+
+            {nearbyRoads.length > 0 && (
+              <div className="hr-dialog-roads-box">
+                <span className="hr-dialog-roads-label">
+                  {confirmActionModal === "resolve"
+                    ? "Road(s) in 100m impact zone:"
+                    : "Affected road(s) within 100m:"}
+                </span>
+                <ul className="hr-dialog-roads-list">
+                  {nearbyRoads.map((road) => (
+                    <li key={road} className="hr-dialog-road-item">
+                      <MapPin size={13} aria-hidden="true" />
+                      <span>{road}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="hr-dialog-actions">
+              <Button
+                variant="secondary"
+                disabled={submittingAction || reopening}
+                onClick={() => setConfirmActionModal(null)}
+              >
+                <span>Cancel</span>
+              </Button>
+              <Button
+                variant="primary"
+                disabled={submittingAction || reopening}
+                onClick={() =>
+                  confirmActionModal === "resolve"
+                    ? executeReopenRoad()
+                    : handleValidate("validated")
+                }
+              >
+                <span>
+                  {confirmActionModal === "resolve"
+                    ? reopening
+                      ? "Reopening…"
+                      : "Confirm Resolve"
+                    : submittingAction
+                      ? "Validating…"
+                      : "Confirm Validate"}
+                </span>
+              </Button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* RESULT / NOTICE MODAL (REPLACES NATIVE BROWSER ALERT) */}
+      {noticeModal && (
+        <div
+          className="hr-dialog-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setNoticeModal(null);
+          }}
+          role="presentation"
+        >
+          <section
+            className="hr-dialog-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="hr-notice-dialog-title"
+            aria-describedby="hr-notice-dialog-desc"
+          >
+            <div className="hr-dialog-header">
+              <span
+                className={`hr-dialog-icon ${
+                  noticeModal.tone === "success"
+                    ? "is-success"
+                    : noticeModal.tone === "danger"
+                      ? "is-danger"
+                      : "is-warning"
+                }`}
+                aria-hidden="true"
+              >
+                {noticeModal.tone === "success" ? (
+                  <CheckCircle2 size={20} strokeWidth={2.2} />
+                ) : (
+                  <AlertTriangle size={20} strokeWidth={2.2} />
+                )}
+              </span>
+              <h3 id="hr-notice-dialog-title" className="hr-dialog-title">
+                {noticeModal.title}
+              </h3>
+            </div>
+
+            {noticeModal.message && (
+              <p id="hr-notice-dialog-desc" className="hr-dialog-desc">
+                {noticeModal.message}
+              </p>
+            )}
+
+            {Array.isArray(noticeModal.roads) && noticeModal.roads.length > 0 && (
+              <div className="hr-dialog-roads-box">
+                <ul className="hr-dialog-roads-list">
+                  {noticeModal.roads.map((road) => (
+                    <li key={road} className="hr-dialog-road-item">
+                      <MapPin size={13} aria-hidden="true" />
+                      <span>{road}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {noticeModal.secondaryMessage && (
+              <p className="hr-dialog-desc">{noticeModal.secondaryMessage}</p>
+            )}
+
+            {Array.isArray(noticeModal.secondaryRoads) &&
+              noticeModal.secondaryRoads.length > 0 && (
+                <div className="hr-dialog-roads-box is-warning">
+                  <ul className="hr-dialog-roads-list">
+                    {noticeModal.secondaryRoads.map((road) => (
+                      <li key={road} className="hr-dialog-road-item">
+                        <AlertTriangle size={13} aria-hidden="true" />
+                        <span>{road}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+            <div className="hr-dialog-actions">
+              <Button variant="primary" onClick={() => setNoticeModal(null)}>
+                <span>OK</span>
+              </Button>
             </div>
           </section>
         </div>

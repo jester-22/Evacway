@@ -1637,6 +1637,140 @@
 }
 
 /* ==========================================================================
+   CONFIRMATION & NOTICE DIALOG MODALS (Replaces native alert/confirm)
+   ========================================================================== */
+
+.hr-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background-color: rgba(15, 23, 42, 0.45);
+  box-sizing: border-box;
+  animation: hr-fade-in 140ms ease forwards;
+}
+
+.hr-dialog-modal {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px 24px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-family: var(--font-body);
+  box-sizing: border-box;
+}
+
+.hr-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hr-dialog-icon {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background-color: var(--primary-50);
+  color: var(--primary);
+}
+
+.hr-dialog-icon.is-success {
+  background-color: var(--success-bg);
+  color: var(--success-fg);
+}
+
+.hr-dialog-icon.is-warning {
+  background-color: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.hr-dialog-icon.is-danger {
+  background-color: var(--danger-bg);
+  color: var(--danger-fg);
+}
+
+.hr-dialog-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.hr-dialog-desc {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.hr-dialog-roads-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background-color: var(--bg);
+}
+
+.hr-dialog-roads-box.is-warning {
+  border-color: var(--ew-warning-border, #fde68a);
+  background-color: var(--warn-bg, #fffbeb);
+}
+
+.hr-dialog-roads-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.hr-dialog-roads-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hr-dialog-road-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.hr-dialog-road-item svg {
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.hr-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* ==========================================================================
    5. RESPONSIVE & REDUCED MOTION
    ========================================================================== */
 

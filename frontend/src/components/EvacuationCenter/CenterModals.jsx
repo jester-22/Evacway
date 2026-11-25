@@ -1055,12 +1055,13 @@ export function CenterFormModal({
 }
 
 const PEOPLE_PER_FAMILY_SLOT = 5;
-const MIN_ROOM_PEOPLE_SPACES = 25;
+const MIN_ROOM_PEOPLE_SPACES = 1;
 
 function computeFamilySlots(peopleSpaces) {
+  if (peopleSpaces === '' || peopleSpaces == null) return null;
   const spaces = Number(peopleSpaces);
   if (!Number.isInteger(spaces) || spaces < MIN_ROOM_PEOPLE_SPACES) return null;
-  return Math.ceil(spaces / PEOPLE_PER_FAMILY_SLOT);
+  return Math.max(1, Math.ceil(spaces / PEOPLE_PER_FAMILY_SLOT));
 }
 
 export function CenterRoomModal({
@@ -1248,7 +1249,7 @@ export function CenterRoomModal({
             inputMode="numeric"
             onKeyDown={(e) => ["e", "E", "+", "-", ".", ","].includes(e.key) && e.preventDefault()}
             className={fieldErrors.people_spaces ? 'form-input is-invalid' : 'form-input'}
-            value={roomForm.people_spaces ?? MIN_ROOM_PEOPLE_SPACES}
+            value={roomForm.people_spaces ?? ''}
             onChange={(e) => {
               clearFieldError('people_spaces');
               const nextSpaces = e.target.value;
@@ -1264,13 +1265,13 @@ export function CenterRoomModal({
             <p className="field-error">{fieldErrors.people_spaces}</p>
           ) : calculatedFamilySlots != null ? (
             <p className="cfm-helper-text">
-              Minimum {MIN_ROOM_PEOPLE_SPACES} people. Automatically sets <strong>{calculatedFamilySlots}</strong>{' '}
+              Automatically sets <strong>{calculatedFamilySlots}</strong>{' '}
               {calculatedFamilySlots === 1 ? 'family slot' : 'family slots'} (1 slot per{' '}
               {PEOPLE_PER_FAMILY_SLOT} people, rounded up).
             </p>
           ) : (
             <p className="cfm-helper-text">
-              Minimum room capacity is {MIN_ROOM_PEOPLE_SPACES} people.
+              Enter the room capacity in people spaces (at least 1 person).
             </p>
           )}
         </div>
@@ -1761,8 +1762,14 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
               value={householdPickerOpen ? householdSearch : selectedFamilyName}
               placeholder={loadingAvailableFamilies ? 'Loading families…' : availableFamilies.length ? 'Search by name, code, or barangay' : 'No unassigned families available'}
               disabled={loadingAvailableFamilies || availableFamilies.length === 0 || isTargetFull}
-              onFocus={() => setHouseholdPickerOpen(true)}
-              onClick={() => setHouseholdPickerOpen(true)}
+              onFocus={() => {
+                setRoomPickerOpen(false);
+                setHouseholdPickerOpen(true);
+              }}
+              onClick={() => {
+                setRoomPickerOpen(false);
+                setHouseholdPickerOpen(true);
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') setHouseholdPickerOpen(false);
                 if (event.key === 'ArrowDown') setHouseholdPickerOpen(true);
@@ -1849,10 +1856,14 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
                 placeholder={roomOptions.length ? 'Search rooms by name, building, or floor' : selectedFamily ? 'No room has enough remaining capacity' : 'No available rooms'}
                 disabled={roomOptions.length === 0}
                 onFocus={() => {
+                  setHouseholdPickerOpen(false);
                   setRoomSearch('');
                   setRoomPickerOpen(true);
                 }}
-                onClick={() => setRoomPickerOpen(true)}
+                onClick={() => {
+                  setHouseholdPickerOpen(false);
+                  setRoomPickerOpen(true);
+                }}
                 onKeyDown={(event) => {
                   if (event.key === 'Escape') setRoomPickerOpen(false);
                   if (event.key === 'ArrowDown') setRoomPickerOpen(true);

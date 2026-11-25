@@ -649,11 +649,11 @@ class CenterStructureFlowTests(unittest.TestCase):
             400,
         )
 
-        # Room capacity below 25 is rejected
+        # Room capacity below 1 is rejected
         too_small = self.client.post(
             f'/api/evacuation-centers/{cid}/rooms',
             headers=self.headers,
-            json={'room_number': '100', 'capacity': 24},
+            json={'room_number': '100', 'capacity': 0},
         )
         self.assertEqual(too_small.status_code, 400)
 
@@ -665,11 +665,11 @@ class CenterStructureFlowTests(unittest.TestCase):
         self.assertEqual(r1.status_code, 201)
         r1_id = r1.get_json()['room']['id']
 
-        # Lowering room capacity below 25 on update is rejected
+        # Lowering room capacity below 1 on update is rejected
         too_small_upd = self.client.put(
             f'/api/rooms/{r1_id}',
             headers=self.headers,
-            json={'people_spaces': 20},
+            json={'people_spaces': 0},
         )
         self.assertEqual(too_small_upd.status_code, 400)
 

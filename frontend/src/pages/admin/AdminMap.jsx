@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { appAlert, appConfirm } from "../../utils/appDialog";
 import {
   Maximize2,
   Minimize2,
@@ -702,28 +703,75 @@ export default function AdminMap() {
 
   // Staff Hazard Actions
   const handleVerifyReport = useCallback(async (report) => {
+    const ok = await appConfirm(
+      `Validate Incident #${report.id}? This will mark the hazard report as Validated and automatically close affected road segments within 100m.`,
+      {
+        title: `Validate Incident #${report.id}?`,
+        confirmText: "Confirm Validate",
+        tone: "info",
+      }
+    );
+    if (!ok) return;
     try {
-      await api.validateHazardReport(report.id, "validated");
+      const result = await api.validateHazardReport(report.id, "validated");
       queryClient.invalidateQueries({ queryKey: ["hazard-reports"] });
       queryClient.invalidateQueries({ queryKey: ["hazard-zones"] });
       queryClient.invalidateQueries({ queryKey: ["road-segments"] });
+      if (result?.closed_roads?.length > 0) {
+        await appAlert(
+          "The following road(s) were automatically closed due to this confirmed hazard:",
+          {
+            title: "Road(s) Automatically Closed",
+            tone: "warning",
+            items: result.closed_roads,
+          }
+        );
+      }
     } catch (err) {
       console.error("Failed to verify hazard report:", err);
+      await appAlert(err.message || "Failed to validate hazard report.", {
+        title: "Validation Failed",
+        tone: "danger",
+      });
     }
   }, [queryClient]);
 
   const handleResolveReport = useCallback(async (report) => {
+    const ok = await appConfirm(
+      `Mark Incident #${report.id} as resolved and reopen any affected road(s) for evacuation routing?`,
+      {
+        title: `Resolve Incident #${report.id}?`,
+        confirmText: "Confirm Resolve",
+        tone: "success",
+      }
+    );
+    if (!ok) return;
     try {
+      let result = null;
       if (isBlockedRoadReport(report)) {
-        await api.reopenRoad(report.id);
+        result = await api.reopenRoad(report.id);
       } else {
-        await api.validateHazardReport(report.id, "resolved");
+        result = await api.validateHazardReport(report.id, "resolved");
       }
       queryClient.invalidateQueries({ queryKey: ["hazard-reports"] });
       queryClient.invalidateQueries({ queryKey: ["hazard-zones"] });
       queryClient.invalidateQueries({ queryKey: ["road-segments"] });
+      if (result?.reopened_roads?.length > 0) {
+        await appAlert(
+          "The following road(s) have been reopened for evacuation routing:",
+          {
+            title: "Incident Resolved · Road(s) Reopened",
+            tone: "success",
+            items: result.reopened_roads,
+          }
+        );
+      }
     } catch (err) {
       console.error("Failed to resolve hazard report:", err);
+      await appAlert(err.message || "Failed to resolve hazard report.", {
+        title: "Resolution Failed",
+        tone: "danger",
+      });
     }
   }, [queryClient]);
 
@@ -732,7 +780,12 @@ export default function AdminMap() {
   }, [navigate, basePath]);
 
   const handleDeleteReport = useCallback(async (report) => {
-    if (!window.confirm("Are you sure you want to delete this report?")) return;
+    const ok = await appConfirm("Are you sure you want to delete this hazard report?", {
+      title: `Delete Incident #${report.id}?`,
+      confirmText: "Delete Report",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteHazardReport(report.id);
       queryClient.invalidateQueries({ queryKey: ["hazard-reports"] });
@@ -1060,7 +1113,12 @@ export default function AdminMap() {
   };
 
   const handleDeleteRoomFromMap = async (rm) => {
-    if (!window.confirm(`Are you sure you want to delete Room ${rm.room_number}?`)) return;
+    const ok = await appConfirm(`Are you sure you want to delete Room ${rm.room_number}?`, {
+      title: `Delete Room ${rm.room_number}?`,
+      confirmText: "Delete Room",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteRoom(rm.id);
       await invalidateEvacuationQueries(queryClient);
@@ -1171,8 +1229,8 @@ export default function AdminMap() {
       showPlacementToast("Family slots must be a whole number of at least 1.");
       return;
     }
-    if (!Number.isInteger(Number(adminRoomForm.people_spaces)) || Number(adminRoomForm.people_spaces) < 25) {
-      showPlacementToast("People spaces must be a whole number of at least 25.");
+    if (!Number.isInteger(Number(adminRoomForm.people_spaces)) || Number(adminRoomForm.people_spaces) < 1) {
+      showPlacementToast("People spaces must be a whole number of at least 1.");
       return;
     }
 
@@ -1456,7 +1514,10 @@ export default function AdminMap() {
       }
     } catch (err) {
       console.error("Failed to save building:", err);
-      alert(err.message || "Failed to save building.");
+      await appAlert(err.message || "Failed to save building.", {
+        title: "Save Building Failed",
+        tone: "danger",
+      });
     } finally {
       setIsSavingBuilding(false);
     }
@@ -1534,7 +1595,10 @@ export default function AdminMap() {
       }
     } catch (err) {
       console.error("Failed to save building outline:", err);
-      alert(err.message || "Failed to save building outline.");
+      await appAlert(err.message || "Failed to save building outline.", {
+        title: "Save Outline Failed",
+        tone: "danger",
+      });
     } finally {
       setIsSavingBuilding(false);
     }
@@ -2089,8 +2153,13 @@ export default function AdminMap() {
 
   async function handleRemoveLocation(room) {
     if (!room) return;
-    const confirmed = window.confirm(
-      `Remove map location for "${room.room_number}"? The room will become unmapped.`
+    const confirmed = await appConfirm(
+      `Remove map location for "${room.room_number}"? The room will become unmapped.`,
+      {
+        title: `Unmap Room ${room.room_number}?`,
+        confirmText: "Remove Location",
+        danger: true,
+      }
     );
     if (!confirmed) return;
 
@@ -2103,7 +2172,10 @@ export default function AdminMap() {
       showPlacementToast(`Location removed for "${room.room_number}".`);
     } catch (err) {
       console.error("Failed to remove room location:", err);
-      alert(err.message || "Failed to remove room location.");
+      await appAlert(err.message || "Failed to remove room location.", {
+        title: "Could Not Remove Location",
+        tone: "danger",
+      });
     }
   }
 
@@ -2178,7 +2250,10 @@ export default function AdminMap() {
     if (!centerId) return;
 
     if (footprintPoints.length < 3) {
-      alert("Failed to save map placement. Please ensure footprint has at least 3 points.");
+      await appAlert("Failed to save map placement. Please ensure footprint has at least 3 points.", {
+        title: "Incomplete Outline",
+        tone: "warning",
+      });
       return;
     }
 
@@ -2206,13 +2281,17 @@ export default function AdminMap() {
         err?.message;
 
       if (serverMessage) {
-        alert(serverMessage);
+        await appAlert(serverMessage, { title: "Save Failed", tone: "danger" });
       } else if (footprintPoints.length < 3) {
-        alert(
-          "Failed to save map placement. Please ensure footprint has at least 3 points."
+        await appAlert(
+          "Failed to save map placement. Please ensure footprint has at least 3 points.",
+          { title: "Incomplete Outline", tone: "warning" }
         );
       } else {
-        alert("Failed to save map placement. Please try again.");
+        await appAlert("Failed to save map placement. Please try again.", {
+          title: "Save Failed",
+          tone: "danger",
+        });
       }
       setSavingMap(false);
       return;
@@ -4866,7 +4945,7 @@ export default function AdminMap() {
                           : "confirm"
                   }
                   pendingFootprint={footprintPoints}
-                  pendingEntrances={entrancePoints}
+                  pendingEntrances={footprintPoints.length >= 3 ? entrancePoints : []}
                   editablePolygon={mappingStep === "edit" ? footprintPoints : null}
                   onEditablePolygonChange={
                     mappingStep === "edit"

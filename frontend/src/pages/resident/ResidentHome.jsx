@@ -17,9 +17,17 @@ import { resolveRoomBuilding } from "../../utils/resolveRoomBuilding";
 import { needsLocationConfirmation } from "../../utils/locationConfirmation";
 import {
   buildConnectedRouteLngLat,
+  buildRoadLockedRouteLngLat,
+  snapAndTrimRoutePolyline,
+  evaluateOffRouteDebounce,
+  isAcceptableGpsAccuracy,
+  getValidMovementHeading,
+  hasArrivedAtEntrance,
+  ON_ROUTE_SNAP_THRESHOLD_METERS,
   findNearbyBlockedRoad,
   BLOCKED_ROAD_CLEAR_THRESHOLD_METERS,
 } from "../../utils/navigationProximity";
+import { playAlertSound, unlockAlertAudio } from "../../utils/alertSound";
 import { createReportPopup } from "../../components/mapReports/mapReports";
 import { formatManilaDateTime } from "../../utils/dateTime";
 import {
@@ -1553,6 +1561,10 @@ const ResidentHome = () => {
   const {
     filteredHazardZones
   } = useHazardData(PUBLIC_MAP_QUERY_OPTIONS);
+  const hazardZonesRef = useRef(null);
+  useEffect(() => {
+    hazardZonesRef.current = filteredHazardZones;
+  }, [filteredHazardZones]);
 
   const {
     evacCenters,
@@ -1777,6 +1789,7 @@ const ResidentHome = () => {
   const [isPannedAway, setIsPannedAway] = useState(false);
   const autoFollowRef = useRef(true);
   const consecutiveOffRouteRef = useRef(0);
+  const offRouteSinceRef = useRef(null);
   const previousLocationRef = useRef(null);
   const lastHeadingRef = useRef(0);
   const liveUserLocationRef = useRef(null);
@@ -4071,11 +4084,11 @@ const ResidentHome = () => {
         ? [liveUserLocationRef.current.lat, liveUserLocationRef.current.lng]
         : null;
     const { startLatLng, entranceLatLng } = getRouteEndpoints(route, liveOrigin);
-    const routeCoordinates = buildConnectedRouteLngLat(
-      route.route,
-      startLatLng,
-      entranceLatLng
-    );
+    const roadLockedCoordinates = buildRoadLockedRouteLngLat(route.route, entranceLatLng);
+    const routeCoordinates =
+      roadLockedCoordinates.length >= 2
+        ? roadLockedCoordinates
+        : buildConnectedRouteLngLat(route.route, startLatLng, entranceLatLng);
 
     if (routeCoordinates.length === 0) {
       setRouteError("The evacuation route contains invalid coordinates.");
@@ -4675,6 +4688,8 @@ const ResidentHome = () => {
     setLostSignal(false);
     blockedRoadWarningRef.current = null;
     setBlockedRoadWarning(null);
+    offRouteSinceRef.current = null;
+    consecutiveOffRouteRef.current = 0;
 
     if (navigationWatchIdRef.current != null && navigator.geolocation) {
       navigator.geolocation.clearWatch(navigationWatchIdRef.current);
@@ -4688,11 +4703,15 @@ const ResidentHome = () => {
       const latestRoute = routeDataRef.current || route;
       if (latestRoute && Array.isArray(latestRoute.route) && map.isStyleLoaded()) {
         const { startLatLng, entranceLatLng } = getRouteEndpoints(latestRoute);
-        const restoredCoordinates = buildConnectedRouteLngLat(
-          latestRoute.route,
-          startLatLng,
-          entranceLatLng
-        );
+        const roadLockedRestored = buildRoadLockedRouteLngLat(latestRoute.route, entranceLatLng);
+        const restoredCoordinates =
+          roadLockedRestored.length >= 2
+            ? roadLockedRestored
+            : buildConnectedRouteLngLat(
+              latestRoute.route,
+              startLatLng,
+              entranceLatLng
+            );
         const remSource = map.getSource("evacuation-route");
         if (remSource) {
           remSource.setData({
@@ -4759,6 +4778,7 @@ const ResidentHome = () => {
 
     setRouteError("");
     setArrivalToast("");
+    unlockAlertAudio();
     blockedRoadWarningRef.current = null;
     setBlockedRoadWarning(null);
     navigationActiveRef.current = true;
@@ -4766,6 +4786,7 @@ const ResidentHome = () => {
     setNavigationStatus("Starting navigation...");
     lastRerouteAtRef.current = 0;
     consecutiveOffRouteRef.current = 0;
+    offRouteSinceRef.current = null;
     lastBatteryThrottleRef.current = null;
     autoFollowRef.current = true;
     setIsPannedAway(false);
@@ -4797,19 +4818,18 @@ const ResidentHome = () => {
 
         const rawLat = position.coords.latitude;
         const rawLng = position.coords.longitude;
-        const accuracy = Math.round(position.coords.accuracy || 0);
+        const rawAccuracy = Number(position.coords.accuracy);
+        const accuracy = Number.isFinite(rawAccuracy) ? Math.round(rawAccuracy) : 0;
         setNavigationAccuracy(accuracy);
         setLocationPermission("granted");
 
         const now = Date.now();
 
-        // Ignore reading if accuracy > 100 m and better reading arrived within last 10s
-        if (accuracy > 100 && now - lastGoodReadingTimeRef.current < 10000) {
+        // GPS Noise Filtering: ignore incoming GPS updates with poor accuracy (> 25 meters)
+        if (!isAcceptableGpsAccuracy(rawAccuracy)) {
           return;
         }
-        if (accuracy <= 100) {
-          lastGoodReadingTimeRef.current = now;
-        }
+        lastGoodReadingTimeRef.current = now;
 
         // Battery: lower update rate to once every 2s if user hasn't moved > 2 m
         if (lastBatteryThrottleRef.current) {
@@ -4842,62 +4862,22 @@ const ResidentHome = () => {
             target.longitude ?? target.lng,
             target.latitude ?? target.lat,
           ]);
-
-        // Check arrival (within 30m of chosen entrance)
-        if (arrivalCoordinates) {
-          const arrivalLatLng = [arrivalCoordinates[1], arrivalCoordinates[0]];
-          const distToDest = getDistanceMeters(rawLocation, arrivalLatLng);
-          if (distToDest <= 30) {
-            setNavigationRemainingMeters(0);
-            navigationRemainingMetersRef.current = 0;
-            setNavigationRemainingSeconds(0);
-            const arrivalMsg = "You have arrived";
-            setArrivalToast(arrivalMsg);
-
-            // Auto check-in if user has assigned center
-            const targetCenterId = target?.id || target?.center_id;
-            if (myCenter && !myCenter.is_checked_in && targetCenterId) {
-              api.autoGeofenceCheckIn({
-                center_id: targetCenterId,
-                resident_id: myCenter.resident_id,
-                family_id: myCenter.family_id,
-                latitude: rawLat,
-                longitude: rawLng,
-              }).then((res) => {
-                if (res.success) {
-                  setMyCenter((prev) => (prev ? { ...prev, is_checked_in: true, checkin_status: "Checked in" } : prev));
-                }
-              }).catch(() => { });
-            }
-
-            stopWalkingNavigation(arrivalMsg);
-            return;
-          }
-        }
-
-        // Snap user to nearest point on route for progress and off-route distance
-        const routePoints = latestRoute?.route || [];
-        const snap = snapLocationToRoute(rawLocation, routePoints);
         const { entranceLatLng } = getRouteEndpoints(latestRoute);
-        const connectedRemainingCoords = buildConnectedRouteLngLat(
-          snap.remainingPoints,
-          rawLocation,
-          entranceLatLng
-        );
+        const effectiveEntranceLatLng =
+          entranceLatLng || (arrivalCoordinates ? [arrivalCoordinates[1], arrivalCoordinates[0]] : null);
 
-        // Compute heading: GPS heading -> delta displacement -> route direction
-        let heading =
-          Number.isFinite(position.coords.heading) && position.coords.heading >= 0
-            ? position.coords.heading
-            : null;
-
-        if (heading == null && previousLocationRef.current) {
+        // Extract movement heading when speed > 1 m/s (for bearing-aware snapping & camera)
+        let movementHeading = getValidMovementHeading(position.coords, null);
+        if (movementHeading == null && previousLocationRef.current) {
           const movedDist = getDistanceMeters(
             [previousLocationRef.current.lat, previousLocationRef.current.lng],
             rawLocation
           );
-          if (movedDist >= 1.5) {
-            heading = calculateBearing(
+          const elapsedSec = previousLocationRef.current.time
+            ? Math.max(0.5, (now - previousLocationRef.current.time) / 1000)
+            : 1.0;
+          if (movedDist >= 1.5 && movedDist / elapsedSec > 1.0) {
+            movementHeading = calculateBearing(
               previousLocationRef.current.lat,
               previousLocationRef.current.lng,
               rawLat,
@@ -4905,6 +4885,20 @@ const ResidentHome = () => {
             );
           }
         }
+
+        // Snap user to nearest point on active route polyline and trim behind user
+        const routePoints = latestRoute?.route || [];
+        const snap = snapAndTrimRoutePolyline(rawLocation, routePoints, {
+          userHeading: movementHeading ?? lastHeadingRef.current,
+          entranceLatLng: effectiveEntranceLatLng,
+        });
+        const connectedRemainingCoords =
+          snap.remainingLngLat.length >= 2
+            ? snap.remainingLngLat
+            : buildRoadLockedRouteLngLat(routePoints, effectiveEntranceLatLng);
+
+        // Compute display heading: movement heading -> route segment direction -> last heading
+        let heading = movementHeading;
 
         if (heading == null && snap.remainingPoints.length >= 2) {
           heading = calculateBearing(
@@ -4921,12 +4915,12 @@ const ResidentHome = () => {
           heading = lastHeadingRef.current;
         }
 
-        previousLocationRef.current = { lat: rawLat, lng: rawLng };
+        previousLocationRef.current = { lat: rawLat, lng: rawLng, time: now };
 
-        // Always show the user's real live GPS position so the marker follows even when walking off-route
+        // Always show the user's real live GPS position so the marker follows smoothly
         setMyLocation({ lat: rawLat, lng: rawLng, heading, accuracy });
 
-        // Update route line on map: connect directly from live user position to remaining route and exact entrance
+        // Update route line on map: keep blue polyline strictly locked to road geometry from snapped point to entrance
         const currentMap = mapRef.current;
         if (currentMap && currentMap.isStyleLoaded()) {
           const remSource = currentMap.getSource("evacuation-route");
@@ -4948,8 +4942,8 @@ const ResidentHome = () => {
               geometry: {
                 type: "LineString",
                 coordinates:
-                  snap.distanceToRoute <= 20
-                    ? snap.walkedPoints.map(([lat, lng]) => [lng, lat])
+                  snap.distanceToRoute <= ON_ROUTE_SNAP_THRESHOLD_METERS
+                    ? snap.walkedLngLat
                     : [],
               },
               properties: {},
@@ -4978,7 +4972,7 @@ const ResidentHome = () => {
           }
         }
 
-        // Calculate remaining distance and time including live-user and entrance connectors
+        // Calculate remaining distance along the trimmed route to the entrance
         let remainingDistance = 0;
         for (let i = 0; i < connectedRemainingCoords.length - 1; i++) {
           remainingDistance += getDistanceMeters(
@@ -4986,16 +4980,55 @@ const ResidentHome = () => {
             [connectedRemainingCoords[i + 1][1], connectedRemainingCoords[i + 1][0]]
           );
         }
+
+        // Strict Entrance Arrival Check:
+        // Only mark arrived when user is within 10m of the entrance AND <= 12m of walking route remains
+        if (
+          effectiveEntranceLatLng &&
+          hasArrivedAtEntrance({
+            userLocation: rawLocation,
+            entranceLatLng: effectiveEntranceLatLng,
+            remainingRouteMeters: remainingDistance,
+          })
+        ) {
+          setNavigationRemainingMeters(0);
+          navigationRemainingMetersRef.current = 0;
+          setNavigationRemainingSeconds(0);
+          const arrivalMsg = "You have arrived";
+          setArrivalToast(arrivalMsg);
+
+          // Auto check-in if user has assigned center
+          const targetCenterId = target?.id || target?.center_id;
+          if (myCenter && !myCenter.is_checked_in && targetCenterId) {
+            api.autoGeofenceCheckIn({
+              center_id: targetCenterId,
+              resident_id: myCenter.resident_id,
+              family_id: myCenter.family_id,
+              latitude: rawLat,
+              longitude: rawLng,
+            }).then((res) => {
+              if (res.success) {
+                setMyCenter((prev) => (prev ? { ...prev, is_checked_in: true, checkin_status: "Checked in" } : prev));
+              }
+            }).catch(() => { });
+          }
+
+          stopWalkingNavigation(arrivalMsg);
+          return;
+        }
+
         const roundedRemainingMeters = Math.round(remainingDistance);
         setNavigationRemainingMeters(roundedRemainingMeters);
         navigationRemainingMetersRef.current = roundedRemainingMeters;
         setNavigationRemainingSeconds(Math.ceil(remainingDistance / 1.38));
 
-        // Check proximity to blocked roads or validated road-blocking hazards
+        // Check proximity to blocked roads, validated road-blocking hazards, or hazard zone polygons
         const nearbyBlocked = findNearbyBlockedRoad(
           rawLocation,
           roadsRef.current,
-          hazardReportsRef.current
+          hazardReportsRef.current,
+          undefined,
+          hazardZonesRef.current
         );
         if (nearbyBlocked) {
           const prevWarning = blockedRoadWarningRef.current;
@@ -5005,6 +5038,7 @@ const ResidentHome = () => {
             !prevWarning ||
             (prevWarning.severity !== "on_road" && nearbyBlocked.severity === "on_road")
           ) {
+            playAlertSound("hazard");
             if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
               try {
                 navigator.vibrate([250, 120, 250]);
@@ -5018,7 +5052,8 @@ const ResidentHome = () => {
             rawLocation,
             roadsRef.current,
             hazardReportsRef.current,
-            BLOCKED_ROAD_CLEAR_THRESHOLD_METERS
+            BLOCKED_ROAD_CLEAR_THRESHOLD_METERS,
+            hazardZonesRef.current
           );
           if (!stillNearBlocked) {
             blockedRoadWarningRef.current = null;
@@ -5049,21 +5084,37 @@ const ResidentHome = () => {
           setNavigationStatus("Follow the highlighted route to the center.");
         }
 
-        // Off-route or blocked-road check: reroute quickly (cooldown 4s)
-        if (snap.distanceToRoute > 20 || nearbyBlocked) {
-          consecutiveOffRouteRef.current += 1;
+        // Snap-to-Route & Off-Route Debounce:
+        // If within 20m of the active route (and not entering a blocked road), do NOT call the routing API.
+        // Only trigger a full route recalculation if > 25m off-route for at least 3 consecutive seconds.
+        if (snap.distanceToRoute <= ON_ROUTE_SNAP_THRESHOLD_METERS && !nearbyBlocked) {
+          consecutiveOffRouteRef.current = 0;
+          offRouteSinceRef.current = null;
+        } else {
           const nowReroute = Date.now();
+          const offRouteEval = evaluateOffRouteDebounce({
+            distanceToRoute: snap.distanceToRoute,
+            nowMs: nowReroute,
+            offRouteSinceMs: offRouteSinceRef.current,
+          });
+          offRouteSinceRef.current = offRouteEval.offRouteSinceMs;
+          if (offRouteEval.isOffRoute) {
+            consecutiveOffRouteRef.current += 1;
+          } else {
+            consecutiveOffRouteRef.current = 0;
+          }
+
           const shouldRerouteNow =
-            snap.distanceToRoute > 30 ||
-            Boolean(nearbyBlocked) ||
-            consecutiveOffRouteRef.current >= 2;
+            offRouteEval.shouldTriggerReroute || Boolean(nearbyBlocked);
+
           if (
             shouldRerouteNow &&
             !reroutingRef.current &&
-            nowReroute - lastRerouteAtRef.current >= 4000
+            nowReroute - lastRerouteAtRef.current >= 3000
           ) {
             reroutingRef.current = true;
             lastRerouteAtRef.current = nowReroute;
+            offRouteSinceRef.current = null;
             setNavigationStatus(
               nearbyBlocked
                 ? "Blocked road ahead, recalculating safe route..."
@@ -5071,7 +5122,7 @@ const ResidentHome = () => {
             );
 
             const targetCenterId = target?.id || target?.center_id;
-            api.getEvacuationRoute(rawLocation[0], rawLocation[1], targetCenterId)
+            api.getEvacuationRoute(rawLocation[0], rawLocation[1], targetCenterId, movementHeading)
               .then(async (backendResult) => {
                 let candidateEntrance = backendResult?.chosen_entrance;
                 const currentEntrance = activeEntranceRef.current || latestRoute?.chosen_entrance;
@@ -5125,11 +5176,11 @@ const ResidentHome = () => {
                 activeWalkingStepRef.current = 0;
                 setActiveWalkingStep(0);
                 consecutiveOffRouteRef.current = 0;
+                offRouteSinceRef.current = null;
 
                 const { entranceLatLng: updatedEntranceLatLng } = getRouteEndpoints(updatedRoute);
-                const reconnectedCoords = buildConnectedRouteLngLat(
+                const reconnectedCoords = buildRoadLockedRouteLngLat(
                   safeRoutePoints,
-                  rawLocation,
                   updatedEntranceLatLng
                 );
                 const liveMap = mapRef.current;
@@ -5173,8 +5224,6 @@ const ResidentHome = () => {
                 reroutingRef.current = false;
               });
           }
-        } else {
-          consecutiveOffRouteRef.current = 0;
         }
       },
       (error) => {
@@ -7610,13 +7659,17 @@ const ResidentHome = () => {
               </div>
               <div className="nav-blocked-road-copy">
                 <strong className="nav-blocked-road-title">
-                  {blockedRoadWarning.severity === "on_road"
-                    ? "Blocked road! Turn back immediately"
-                    : `Blocked road ahead (~${blockedRoadWarning.distanceMeters} m)`}
+                  {blockedRoadWarning.isHazardZone
+                    ? blockedRoadWarning.severity === "on_road"
+                      ? "Hazard area! Proceed with extreme caution"
+                      : `Hazard area ahead (~${blockedRoadWarning.distanceMeters} m)`
+                    : blockedRoadWarning.severity === "on_road"
+                      ? "Blocked road! Turn back immediately"
+                      : `Blocked road ahead (~${blockedRoadWarning.distanceMeters} m)`}
                 </strong>
                 <span className="nav-blocked-road-detail">
                   {blockedRoadWarning.severity === "on_road"
-                    ? `You are near ${blockedRoadWarning.roadName}. Follow the blue detour route.`
+                    ? `You are in or near ${blockedRoadWarning.roadName}. Follow the blue detour route.`
                     : `Avoid ${blockedRoadWarning.roadName}. Follow the blue detour route.`}
                 </span>
               </div>

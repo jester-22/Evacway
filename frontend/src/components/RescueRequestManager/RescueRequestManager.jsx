@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowRight,
   Building2,
   Camera,
   Check,
@@ -17,6 +18,7 @@ import {
   MapPin,
   Maximize2,
   Phone,
+  RotateCcw,
   Search,
   Truck,
   User,
@@ -238,6 +240,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
   const [error, setError] = useState("");
   const [updatingId, setUpdatingId] = useState(null);
   const [selectedId, setSelectedId] = useState(initialRequestId || null);
+  const [pendingStatusChange, setPendingStatusChange] = useState(null);
   const [agencyDraft, setAgencyDraft] = useState("");
   const [notesDraft, setNotesDraft] = useState("");
   const [savingDetails, setSavingDetails] = useState(false);
@@ -295,6 +298,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
   useEffect(() => {
     setMapImgFailed(false);
     setLightboxImage(null);
+    setPendingStatusChange(null);
     if (selectedId != null) {
       api.clearNotificationsByResource("rescue_request", selectedId)
         .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
@@ -422,6 +426,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
       queryClient.setQueryData(queryKeys.rescueRequests, (current = []) =>
         current.map((item) => (item.id === updated.id ? updated : item))
       );
+      setPendingStatusChange(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.rescueRequests }),
         queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary }),
@@ -431,6 +436,20 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
     } finally {
       setUpdatingId(null);
     }
+  }
+
+  function handleSelectStatusStep(requestId, targetStatus, currentStatus) {
+    if (!requestId || !targetStatus || targetStatus === currentStatus) return;
+    const fromIdx = STATUS_OPTIONS.indexOf(currentStatus);
+    const toIdx = STATUS_OPTIONS.indexOf(targetStatus);
+    setPendingStatusChange({
+      requestId,
+      fromStatus: currentStatus,
+      toStatus: targetStatus,
+      isRevert: toIdx < fromIdx,
+      isReopen: currentStatus === "resolved" && targetStatus !== "resolved",
+      isResolve: targetStatus === "resolved",
+    });
   }
 
   async function saveRescueDetails(event) {
@@ -1170,7 +1189,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
               </div>
 
               <div className="rq-modal-header-right">
-                {/* ONE-WAY STATUS SEGMENTED CONTROL */}
+                {/* REVERSIBLE STATUS SEGMENTED CONTROL */}
                 <div
                   className="rq-status-segmented"
                   role="group"
@@ -1181,8 +1200,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                     const isCompleted = currentStatusIndex > idx;
                     const isNextStep =
                       currentStatusIndex !== -1 && idx === currentStatusIndex + 1;
-                    const isDisabled =
-                      updatingId === selected.id || isCurrent || isCompleted;
+                    const isDisabled = updatingId === selected.id || isCurrent;
 
                     return (
                       <button
@@ -1199,13 +1217,15 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                         ]
                           .filter(Boolean)
                           .join(" ")}
-                        onClick={() => updateStatus(selected.id, status)}
+                        onClick={() =>
+                          handleSelectStatusStep(selected.id, status, selected.status)
+                        }
                         title={
-                          isCompleted
-                            ? "Status cannot move backward"
-                            : isCurrent
-                              ? `Currently ${STATUS_LABELS[status]}`
-                              : `Advance status to ${STATUS_LABELS[status]}`
+                          isCurrent
+                            ? `Currently ${STATUS_LABELS[status]}`
+                            : isCompleted
+                              ? `Revert status back to ${STATUS_LABELS[status]}`
+                              : `Change status to ${STATUS_LABELS[status]}`
                         }
                       >
                         {isCompleted && (
@@ -1546,16 +1566,16 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                   )}
                 </section>
 
-                {/* 5. FULL-WIDTH: DISPATCH HANDOFF & NOTES */}
-                <section className="rq-modal-card rq-handoff-card" aria-label="Dispatch handoff and notes">
+                {/* 5. FULL-WIDTH: RESPONDER RELAY & NOTES */}
+                <section className="rq-modal-card rq-handoff-card" aria-label="Responder relay and notes">
                   <div className="rq-card-head">
-                    <h3 className="rq-card-title">Dispatch handoff &amp; notes</h3>
+                    <h3 className="rq-card-title">Responder relay &amp; notes</h3>
                   </div>
                   <form className="rq-handoff-form" onSubmit={saveRescueDetails}>
                     <div className="rq-handoff-field">
                       <label className="rq-handoff-label" htmlFor="rq-handed-to-agency">
                         <Building2 size={14} aria-hidden="true" />
-                        <span>Handed to (agency)</span>
+                        <span>Relayed to (responder agency)</span>
                       </label>
                       <input
                         id="rq-handed-to-agency"
@@ -1571,6 +1591,25 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
                         placeholder="e.g. MDRRMO Sogod, BFP Sogod, PNP, Coast Guard"
                         disabled={savingDetails}
                       />
+                      <div className="rq-agency-quick-picks" aria-label="Quick select responder agency">
+                        {AGENCY_SUGGESTIONS.map((agency) => {
+                          const isSelectedAgency = agencyDraft.trim().toLowerCase() === agency.toLowerCase();
+                          return (
+                            <button
+                              key={agency}
+                              type="button"
+                              className={`rq-agency-pick-chip ${isSelectedAgency ? "is-active" : ""}`}
+                              disabled={savingDetails}
+                              onClick={() => {
+                                setAgencyDraft(isSelectedAgency ? "" : agency);
+                                setDetailsSaved(false);
+                              }}
+                            >
+                              {agency}
+                            </button>
+                          );
+                        })}
+                      </div>
                       <datalist id="rq-agency-suggestions">
                         {AGENCY_SUGGESTIONS.map((agency) => (
                           <option key={agency} value={agency} />
@@ -1627,7 +1666,118 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
         </div>
       )}
 
-      {/* 5. FULLSCREEN PHOTO LIGHTBOX */}
+      {/* 5. STATUS CHANGE CONFIRMATION MODAL */}
+      {selected && pendingStatusChange && pendingStatusChange.requestId === selected.id && (
+        <div
+          className="rq-confirm-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && updatingId !== selected.id) {
+              setPendingStatusChange(null);
+            }
+          }}
+          role="presentation"
+        >
+          <section
+            className="rq-confirm-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="rq-confirm-modal-title"
+            aria-describedby="rq-confirm-modal-desc"
+          >
+            <div className="rq-confirm-header">
+              <span
+                className={`rq-confirm-icon ${
+                  pendingStatusChange.isResolve
+                    ? "is-resolve"
+                    : pendingStatusChange.isRevert
+                      ? "is-revert"
+                      : "is-advance"
+                }`}
+                aria-hidden="true"
+              >
+                {pendingStatusChange.isResolve ? (
+                  <CheckCircle2 size={20} strokeWidth={2.2} />
+                ) : pendingStatusChange.isRevert ? (
+                  <RotateCcw size={20} strokeWidth={2.2} />
+                ) : (
+                  <Truck size={20} strokeWidth={2.2} />
+                )}
+              </span>
+              <h3 id="rq-confirm-modal-title" className="rq-confirm-title">
+                {pendingStatusChange.isReopen
+                  ? `Reopen Rescue Alert #${selected.id}?`
+                  : pendingStatusChange.isResolve
+                    ? `Mark Rescue Alert #${selected.id} as Resolved?`
+                    : pendingStatusChange.isRevert
+                      ? `Revert status to ${STATUS_LABELS[pendingStatusChange.toStatus]}?`
+                      : `Update status to ${STATUS_LABELS[pendingStatusChange.toStatus]}?`}
+              </h3>
+            </div>
+
+            <p id="rq-confirm-modal-desc" className="rq-confirm-desc">
+              {pendingStatusChange.isReopen ? (
+                <>
+                  Reopen this rescue alert for{" "}
+                  <strong>{selectedRequesterName || `Request #${selected.id}`}</strong> and set its
+                  status from{" "}
+                  <strong>{STATUS_LABELS[pendingStatusChange.fromStatus]}</strong> back to{" "}
+                  <strong>{STATUS_LABELS[pendingStatusChange.toStatus]}</strong>?
+                </>
+              ) : pendingStatusChange.isResolve ? (
+                <>
+                  Confirm marking the rescue request from{" "}
+                  <strong>{selectedRequesterName || `Request #${selected.id}`}</strong> as{" "}
+                  <strong>Resolved</strong>? This removes it from the open emergency queue. You can
+                  click an earlier status anytime to reopen it if needed.
+                </>
+              ) : pendingStatusChange.isRevert ? (
+                <>
+                  Revert the status of{" "}
+                  <strong>{selectedRequesterName || `Rescue Alert #${selected.id}`}</strong> from{" "}
+                  <strong>{STATUS_LABELS[pendingStatusChange.fromStatus]}</strong> back to{" "}
+                  <strong>{STATUS_LABELS[pendingStatusChange.toStatus]}</strong>?
+                </>
+              ) : (
+                <>
+                  Change the status of{" "}
+                  <strong>{selectedRequesterName || `Rescue Alert #${selected.id}`}</strong> from{" "}
+                  <strong>{STATUS_LABELS[pendingStatusChange.fromStatus]}</strong> to{" "}
+                  <strong>{STATUS_LABELS[pendingStatusChange.toStatus]}</strong>?
+                </>
+              )}
+            </p>
+
+            <div className="rq-confirm-actions">
+              <Button
+                variant="secondary"
+                disabled={updatingId === selected.id}
+                onClick={() => setPendingStatusChange(null)}
+              >
+                <span>Cancel</span>
+              </Button>
+              <Button
+                variant="primary"
+                disabled={updatingId === selected.id}
+                onClick={() => updateStatus(selected.id, pendingStatusChange.toStatus)}
+              >
+                <span>
+                  {updatingId === selected.id
+                    ? "Updating..."
+                    : pendingStatusChange.isReopen
+                      ? "Reopen Alert"
+                      : pendingStatusChange.isResolve
+                        ? "Confirm Resolved"
+                        : pendingStatusChange.isRevert
+                          ? `Revert to ${STATUS_LABELS[pendingStatusChange.toStatus]}`
+                          : `Set to ${STATUS_LABELS[pendingStatusChange.toStatus]}`}
+                </span>
+              </Button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* 6. FULLSCREEN PHOTO LIGHTBOX */}
       {lightboxImage && (
         <div
           ref={lightboxRef}

@@ -25,7 +25,8 @@ from utils import get_optional_caller, public_room_payload, role_required
 
 
 rooms_bp = Blueprint('rooms', __name__)
-MIN_ROOM_PEOPLE_SPACES = 25
+MIN_ROOM_PEOPLE_SPACES = 1
+DEFAULT_ROOM_PEOPLE_SPACES = 25
 
 
 def _positive_room_limit(data, key, default, label, legacy_key=None, minimum=1):
@@ -195,7 +196,7 @@ def create_room(center_id):
     try:
         family_slots = _positive_room_limit(data, 'family_slots', 5, 'Family slots')
         people_spaces = _positive_room_limit(
-            data, 'people_spaces', MIN_ROOM_PEOPLE_SPACES, 'People spaces', 'capacity', minimum=MIN_ROOM_PEOPLE_SPACES
+            data, 'people_spaces', DEFAULT_ROOM_PEOPLE_SPACES, 'People spaces', 'capacity', minimum=MIN_ROOM_PEOPLE_SPACES
         )
     except ValueError as err:
         return jsonify({'error': str(err)}), 400
@@ -384,7 +385,7 @@ def update_room(room_id):
     current_usage = room.capacity_usage()
     for key, label, used_key, current_limit, minimum in (
         ('family_slots', 'Family slots', 'used_slots', int(room.family_slots or 5), 1),
-        ('people_spaces', 'People spaces', 'used_spaces', int(room.people_spaces or MIN_ROOM_PEOPLE_SPACES), MIN_ROOM_PEOPLE_SPACES),
+        ('people_spaces', 'People spaces', 'used_spaces', int(room.people_spaces or DEFAULT_ROOM_PEOPLE_SPACES), MIN_ROOM_PEOPLE_SPACES),
     ):
         legacy_value = data.get('capacity') if key == 'people_spaces' and key not in data else None
         if key not in data and legacy_value is None:

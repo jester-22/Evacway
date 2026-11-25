@@ -302,6 +302,26 @@ class RescueFormContextRouteTests(unittest.TestCase):
         self.assertEqual(advanced['handed_to_agency'], 'MDRRMO Sogod')
         self.assertEqual(advanced['notes'], 'Boat team dispatched via Barangay San Jose')
 
+        # Reverting or reopening a misclicked status is allowed and logged
+        patch_resolved = self.client.patch(
+            f'/api/rescue-requests/{overdue_req.id}',
+            headers=headers,
+            json={'status': 'resolved'},
+        )
+        self.assertEqual(patch_resolved.status_code, 200, patch_resolved.get_json())
+        self.assertEqual(patch_resolved.get_json()['status'], 'resolved')
+        self.assertFalse(patch_resolved.get_json()['is_open'])
+
+        patch_reopen = self.client.patch(
+            f'/api/rescue-requests/{overdue_req.id}',
+            headers=headers,
+            json={'status': 'responding'},
+        )
+        self.assertEqual(patch_reopen.status_code, 200, patch_reopen.get_json())
+        reopened = patch_reopen.get_json()
+        self.assertEqual(reopened['status'], 'responding')
+        self.assertTrue(reopened['is_open'])
+
 
 if __name__ == '__main__':
     unittest.main()

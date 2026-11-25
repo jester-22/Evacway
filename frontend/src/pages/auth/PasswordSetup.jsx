@@ -19,6 +19,7 @@ function PasswordSetup() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState("");
   const [complete, setComplete] = useState(false);
   const [signInPath, setSignInPath] = useState("/login");
@@ -96,22 +97,22 @@ function PasswordSetup() {
               <div className="password-setup-password-field">
                 <label htmlFor="new-password">New password</label>
                 <div className="password-setup-input-wrap">
-                <input
-                  id="new-password"
-                  type={showPassword ? "text" : "password"}
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  minLength={8}
-                  required
-                  autoFocus
-                  className="ds-input"
-                />
+                  <input
+                    id="new-password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    minLength={8}
+                    required
+                    autoFocus
+                    className="ds-input"
+                  />
                   <button
-                    className="password-setup-visibility ds-btn ds-btn--icon ds-btn--sm"
+                    className="password-setup-visibility"
                     type="button"
                     onClick={() => setShowPassword((visible) => !visible)}
-                    aria-label={showPassword ? "Hide passwords" : "Show passwords"}
+                    aria-label={showPassword ? "Hide new password" : "Show new password"}
                     aria-pressed={showPassword}
                   >
                     <FontAwesomeIcon icon={showPassword ? faEyeSlash : faEye} />
@@ -122,16 +123,25 @@ function PasswordSetup() {
               <div className="password-setup-password-field">
                 <label htmlFor="confirm-password">Confirm password</label>
                 <div className="password-setup-input-wrap">
-                <input
-                  id="confirm-password"
-                  type={showPassword ? "text" : "password"}
-                  autoComplete="new-password"
-                  value={confirmation}
-                  onChange={(event) => setConfirmation(event.target.value)}
-                  minLength={8}
-                  required
-                  className="ds-input"
-                />
+                  <input
+                    id="confirm-password"
+                    type={showConfirmPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    value={confirmation}
+                    onChange={(event) => setConfirmation(event.target.value)}
+                    minLength={8}
+                    required
+                    className="ds-input"
+                  />
+                  <button
+                    className="password-setup-visibility"
+                    type="button"
+                    onClick={() => setShowConfirmPassword((visible) => !visible)}
+                    aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                    aria-pressed={showConfirmPassword}
+                  >
+                    <FontAwesomeIcon icon={showConfirmPassword ? faEyeSlash : faEye} />
+                  </button>
                 </div>
               </div>
 

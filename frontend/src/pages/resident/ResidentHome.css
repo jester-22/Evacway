@@ -4785,7 +4785,8 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 18px;
+  max-width: calc(100% - 28px);
+  padding: 10px 14px 10px 18px;
   background: #16a34a;
   color: #ffffff;
   border-radius: 12px;
@@ -4793,6 +4794,34 @@
   font-size: 13.5px;
   font-weight: 700;
   animation: navToastSlide 0.25s ease-out;
+  box-sizing: border-box;
+}
+
+.nav-arrival-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.nav-arrival-dismiss:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+@media (max-width: 768px) {
+  .nav-arrival-toast {
+    top: auto;
+    bottom: calc(var(--dock-h, calc(60px + env(safe-area-inset-bottom, 0px))) + 20px);
+    white-space: nowrap;
+  }
 }
 
 .nav-arrival-icon {

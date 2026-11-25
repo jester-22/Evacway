@@ -42,6 +42,7 @@ import {
   centerStatus,
   CENTER_TABS,
   isCenterMapped,
+  resolveBuildingOperationalStatus,
   resolveCenterStructureMode,
 } from './utils'
 import { EmptyState } from './CenterList'
@@ -371,17 +372,19 @@ export function CenterHeader({
     structureMode === 'buildings_and_rooms'
       ? buildingRecords.length > 0
         ? buildingRecords.filter(
-            (b) => !Boolean(b?.is_mapped || b?.properties?.is_mapped)
+            (b) => !(b?.is_mapped || b?.properties?.is_mapped)
           ).length
         : Number(center?.unmapped_building_count || 0)
       : 0
   const hasMappedBuilding =
     structureMode !== 'buildings_and_rooms' ||
-    buildingRecords.some(
-      (b) =>
-        Boolean(b?.is_mapped || b?.properties?.is_mapped) &&
-        (b?.status || b?.properties?.status || 'open') === 'open'
-    )
+    (buildingRecords.length > 0
+      ? buildingRecords.some(
+          (b) =>
+            Boolean(b?.is_mapped || b?.properties?.is_mapped) &&
+            resolveBuildingOperationalStatus(b) === 'open'
+        )
+      : Number(center?.building_count || 0) > Number(center?.unmapped_building_count || 0))
   const canAssignHousehold = isMapped && hasMappedBuilding
   const assignDisabledReason = !isMapped
     ? 'Place this evacuation center on the map before assigning families.'
@@ -491,9 +494,9 @@ export function CenterHeader({
           <div className="ec-title-actions">
             <button
               type="button"
-              className="ec-btn-primary-action"
+              className={`ec-btn-primary-action ${!canAssignHousehold ? 'is-unavailable' : ''}`}
               onClick={onAssignHousehold}
-              disabled={!canAssignHousehold}
+              aria-disabled={!canAssignHousehold}
               title={assignDisabledReason}
             >
               <FontAwesomeIcon icon={faPlus} />
@@ -1013,7 +1016,7 @@ export function RoomDetailPage({
   const isBuildingOpenFlag =
     centerStructureMode !== 'buildings_and_rooms'
       ? true
-      : (building?.status || room?.building_status || 'open') === 'open'
+      : resolveBuildingOperationalStatus(building, room) === 'open'
   const isRoomAssignable = !isInactive && isCenterMappedFlag && isBuildingMappedFlag && isBuildingOpenFlag
   const unmappedAssignReason = !isCenterMappedFlag
     ? 'This evacuation center is not mapped yet. Place the center on the map before assigning families.'

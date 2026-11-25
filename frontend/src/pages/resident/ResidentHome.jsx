@@ -1657,7 +1657,12 @@ const ResidentHome = () => {
       : false
   );
   const accuracyCircleStateRef = useRef(null);
+  const [pickingPurpose, setPickingPurpose] = useState("hazard");
   const pickingPurposeRef = useRef("hazard");
+  function updatePickingPurpose(purpose) {
+    pickingPurposeRef.current = purpose;
+    setPickingPurpose(purpose);
+  }
 
   const [pendingSuggestedRoad, setPendingSuggestedRoad] = useState(null);
   const [quickLocating, setQuickLocating] = useState(false);
@@ -1795,6 +1800,11 @@ const ResidentHome = () => {
   const liveUserLocationRef = useRef(null);
   const userMarkerElementRef = useRef(null);
   const [arrivalToast, setArrivalToast] = useState("");
+  useEffect(() => {
+    if (!arrivalToast) return undefined;
+    const timer = setTimeout(() => setArrivalToast(""), 6000);
+    return () => clearTimeout(timer);
+  }, [arrivalToast]);
   const [, setNavPillExpanded] = useState(false);
   const arrowAnimRef = useRef(null);
   const activeEntranceRef = useRef(null);
@@ -4414,7 +4424,7 @@ const ResidentHome = () => {
   }
 
   function handlePickRouteStart() {
-    pickingPurposeRef.current = "route";
+    updatePickingPurpose("route");
     setRouteError("");
     setPickingLocation(true);
   }
@@ -5377,7 +5387,7 @@ const ResidentHome = () => {
       openLoginDialog("Please log in or sign up to report a hazard. Verified accounts help response teams validate danger zones quickly.");
       return;
     }
-    pickingPurposeRef.current = "hazard";
+    updatePickingPurpose("hazard");
     setPickingLocation(true);
     setPendingReportLocation(null);
     setPendingSuggestedRoad(null);
@@ -5385,7 +5395,7 @@ const ResidentHome = () => {
 
   function handleQuickUseMyLocation() {
     if (!navigator.geolocation) {
-      alert("Geolocation is not supported by your browser.");
+      setRouteError("Geolocation is not supported by your browser.");
       return;
     }
     setQuickLocating(true);
@@ -5597,13 +5607,13 @@ const ResidentHome = () => {
   }
 
   function handlePinRescueOnMap() {
-    pickingPurposeRef.current = "rescue";
+    updatePickingPurpose("rescue");
     setRescueAlertOpen(false);
     setPickingLocation(true);
   }
 
   function handleAdjustHazardOnMap() {
-    pickingPurposeRef.current = "hazard";
+    updatePickingPurpose("hazard");
     setPendingReportLocation(null);
     setPendingSuggestedRoad(null);
     setPickingLocation(true);
@@ -6311,12 +6321,12 @@ const ResidentHome = () => {
   return (
     <div
       className={`resident-home ${isRoomCardVisible ? "has-room-card" : ""} ${isRoomCardExpanded ? "has-room-card-expanded" : ""
-        } ${isHazardPopupOpen ? "has-hazard-popup" : ""} ${pickingLocation && pickingPurposeRef.current === "hazard" ? "picking-hazard-mode" : ""} ${pickingLocation && pickingPurposeRef.current === "route" ? "picking-route-mode" : ""}`}
+        } ${isHazardPopupOpen ? "has-hazard-popup" : ""} ${pickingLocation && pickingPurpose === "hazard" ? "picking-hazard-mode" : ""} ${pickingLocation && pickingPurpose === "route" ? "picking-route-mode" : ""}`}
     >
       {/* Public map */}
       <div
         ref={mapContainerRef}
-        className={`map-container ${pickingLocation && pickingPurposeRef.current === "hazard" ? "is-picking-hazard" : ""} ${pickingLocation && pickingPurposeRef.current === "route" ? "is-picking-route" : ""
+        className={`map-container ${pickingLocation && pickingPurpose === "hazard" ? "is-picking-hazard" : ""} ${pickingLocation && pickingPurpose === "route" ? "is-picking-route" : ""
           }`}
       />
 
@@ -6514,7 +6524,7 @@ const ResidentHome = () => {
       </header>
 
       {/* Hazard road location picking instruction banner */}
-      {pickingLocation && pickingPurposeRef.current === "hazard" && (
+      {pickingLocation && pickingPurpose === "hazard" && (
         <div className="hazard-pick-banner" role="status">
           <div className="hazard-pick-banner-content">
             <div className="hazard-pick-banner-text">
@@ -6548,7 +6558,7 @@ const ResidentHome = () => {
         </div>
       )}
 
-      {pickingLocation && pickingPurposeRef.current === "route" && (
+      {pickingLocation && pickingPurpose === "route" && (
         <div className="route-start-pick-banner" role="status">
           <span><FontAwesomeIcon icon={faMapPin} /> Tap the map inside Sogod to set your starting point.</span>
           <button type="button" onClick={() => setPickingLocation(false)}>Cancel</button>
@@ -7943,6 +7953,14 @@ const ResidentHome = () => {
         <div className="nav-arrival-toast" role="alert">
           <FontAwesomeIcon icon={faCircleCheck} className="nav-arrival-icon" />
           <span>{arrivalToast}</span>
+          <button
+            type="button"
+            className="nav-arrival-dismiss"
+            onClick={() => setArrivalToast("")}
+            aria-label="Dismiss arrival message"
+          >
+            <FontAwesomeIcon icon={faXmark} />
+          </button>
         </div>
       )}
 

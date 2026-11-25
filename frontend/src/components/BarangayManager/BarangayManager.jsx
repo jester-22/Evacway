@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../services/api";
+import { appConfirm } from "../../utils/appDialog";
 import {
   invalidateEvacuationQueries,
   queryKeys,
@@ -3067,7 +3068,7 @@ function BarangayManager() {
                       onChange={(selectedIds) =>
                         setCenterModal((p) => ({ ...p, barangay_ids: selectedIds }))
                       }
-                      onBeforeDeselect={(bId, bName) => {
+                      onBeforeDeselect={async (bId, bName) => {
                         const linkedFams = (centerModal.rooms || []).flatMap(
                           (r) => r.assigned_families || r.families || []
                         );
@@ -3075,8 +3076,14 @@ function BarangayManager() {
                           (f) => String(f.barangay_id) === String(bId) || f.barangay === bName
                         ).length;
                         if (affectedCount > 0) {
-                          return window.confirm(
-                            `Removing "${bName}" will affect ${affectedCount} family(s) currently assigned to this center. Do you want to remove it?`
+                          return await appConfirm(
+                            `Removing "${bName}" will affect ${affectedCount} family(s) currently assigned to this center. Do you want to remove it?`,
+                            {
+                              title: "Remove Barangay?",
+                              confirmText: "Remove",
+                              cancelText: "Keep",
+                              tone: "warning",
+                            }
                           );
                         }
                         return true;

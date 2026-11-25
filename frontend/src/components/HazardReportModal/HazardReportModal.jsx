@@ -18,6 +18,7 @@ import {
   faCircleCheck,
 } from "@fortawesome/free-solid-svg-icons";
 import { createSelectedLocationElement } from "../../utils/mapLocationIndicators";
+import { appConfirm } from "../../utils/appDialog";
 import "./HazardReportModal.css";
 
 const MAX_PHOTOS = 5;
@@ -63,13 +64,25 @@ function HazardReportModal({
   const previewMapRef = useRef(null);
   const previewMarkerRef = useRef(null);
 
+  const discardConfirmOpenRef = useRef(false);
+
   // Keyboard Escape listener
   useEffect(() => {
     function handleKeyDown(e) {
       if (e.key === "Escape") {
+        if (discardConfirmOpenRef.current) return;
         if (description || photos.length) {
-          const confirmCancel = window.confirm("Discard hazard report draft?");
-          if (!confirmCancel) return;
+          discardConfirmOpenRef.current = true;
+          appConfirm("Discard hazard report draft?", {
+            title: "Discard Draft?",
+            confirmText: "Discard",
+            cancelText: "Keep Editing",
+            tone: "warning",
+          }).then((confirmed) => {
+            discardConfirmOpenRef.current = false;
+            if (confirmed) onClose();
+          });
+          return;
         }
         onClose();
       }

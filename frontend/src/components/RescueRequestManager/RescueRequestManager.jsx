@@ -253,7 +253,7 @@ export default function RescueRequestManager({ initialRequestId, onOpenMap }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   const listScrollRef = useRef(null);
   const proofTouchStartXRef = useRef(null);
   const lastActiveRowRef = useRef(null);

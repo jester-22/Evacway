@@ -30,6 +30,7 @@ import {
   faBan,
 } from "@fortawesome/free-solid-svg-icons";
 import IconLegendModal from "./IconLegendModal";
+import { appAlert } from "../../utils/appDialog";
 import {
   EVAC_SHELTER_ICON_HTML,
   EvacShelterIcon,
@@ -4139,7 +4140,10 @@ function DashboardMap({
    */
   const handleMyLocation = () => {
     if (!navigator.geolocation) {
-      alert("Geolocation is not supported by your browser.");
+      appAlert("Geolocation is not supported by your browser.", {
+        title: "Location Unavailable",
+        tone: "warning",
+      });
       return;
     }
     setLocatingUser(true);

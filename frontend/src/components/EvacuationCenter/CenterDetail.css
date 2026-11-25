@@ -287,6 +287,15 @@
   background: #1d4ed8;
 }
 
+.ec-btn-primary-action.is-unavailable {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.ec-btn-primary-action.is-unavailable:hover {
+  background: #2563eb;
+}
+
 .ec-btn-secondary-action {
   display: inline-flex;
   align-items: center;

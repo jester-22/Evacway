@@ -10,9 +10,9 @@ export {
   computeCenterCheckedIn,
   computeCenterAssigned,
   computeOccupancySegments,
-} from './evacuationStatus'
+} from './evacuationStatus.js'
 
-import { VULNERABILITY_KEYWORDS } from './evacuationStatus'
+import { VULNERABILITY_KEYWORDS } from './evacuationStatus.js'
 
 export function sumRooms(rooms, field) {
   return rooms.reduce((sum, r) => sum + (Number(r[field]) || 0), 0)
@@ -129,6 +129,26 @@ export function resolveCenterStructureMode(center) {
   if (typeCode === 'single_venue') return 'open_area'
   if (typeCode === 'private_property') return 'rooms_only'
   return 'buildings_and_rooms'
+}
+
+const OPERATIONAL_BUILDING_STATUSES = new Set(['open', 'closed', 'under_repair'])
+
+export function resolveBuildingOperationalStatus(building, room = null) {
+  const candidates = [
+    room?.building_status,
+    building?.operational_status,
+    building?.properties?.operational_status,
+    building?.properties?.building_status,
+    building?.status,
+    building?.properties?.status,
+  ]
+  for (const raw of candidates) {
+    const normalized = String(raw || '').trim().toLowerCase()
+    if (OPERATIONAL_BUILDING_STATUSES.has(normalized)) {
+      return normalized
+    }
+  }
+  return 'open'
 }
 
 export const MAPPING_BANNER_STORAGE_KEY = 'evacway:dismissed-mapping-banner'

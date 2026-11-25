@@ -2598,8 +2598,8 @@
   }
 
   .fm-modal-dialog.fm-wizard-modal {
-    width: 100vw;
-    max-width: 100vw;
+    width: 100%;
+    max-width: 100%;
     height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;
@@ -3454,8 +3454,8 @@
   }
 
   .fm-modal-dialog.fm-modal-fullscreen-mobile {
-    width: 100vw;
-    max-width: 100vw;
+    width: 100%;
+    max-width: 100%;
     height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;

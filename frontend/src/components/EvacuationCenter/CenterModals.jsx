@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../../services/api';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleNotch, faXmark, faTriangleExclamation, faTrash, faCheck, faCircleInfo, faSearch, faDoorOpen, faBuilding, faBuildingColumns } from '@fortawesome/free-solid-svg-icons';
-import { stripDigits, centerNeedsMapping, resolveCenterStructureMode } from './utils';
+import { stripDigits, centerNeedsMapping, isCenterMapped, resolveBuildingOperationalStatus, resolveCenterStructureMode } from './utils';
 import { formatRoomLabel, formatFloorLabel } from '../../utils/formatRoomLabel';
 import { displayEntityName } from '../../utils/displayEntityName';
 import { sanitizePhoneInput, validateContactNumber } from '../../utils/formValidation';
@@ -1586,14 +1587,42 @@ export function EditBuildingModal(props) {
   return <BuildingFormModal {...props} mode="edit" />;
 }
 
-export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, rooms = [], buildings = [], allowRoomSelection = false, availableFamilies = [], loadingAvailableFamilies = false, selectedFamilyIdToAssign = '', assigningFamily = false, onClose, onFamilyChange, onRoomChange, onConfirm }) {
+export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, rooms = [], buildings = [], allowRoomSelection = false, availableFamilies = [], loadingAvailableFamilies = false, selectedFamilyIdToAssign = '', assigningFamily = false, errorMessage = '', onClose, onFamilyChange, onRoomChange, onConfirm }) {
   const isSingleVenue = resolveCenterStructureMode(selectedCenter) === 'open_area';
   const [householdSearch, setHouseholdSearch] = useState('');
   const [roomSearch, setRoomSearch] = useState('');
   const [householdPickerOpen, setHouseholdPickerOpen] = useState(false);
   const [roomPickerOpen, setRoomPickerOpen] = useState(false);
+  const [householdPopoverStyle, setHouseholdPopoverStyle] = useState(null);
+  const [roomPopoverStyle, setRoomPopoverStyle] = useState(null);
   const householdPickerRef = useRef(null);
+  const householdControlRef = useRef(null);
+  const householdPopoverRef = useRef(null);
   const roomPickerRef = useRef(null);
+  const roomControlRef = useRef(null);
+  const roomPopoverRef = useRef(null);
+
+  const computePopoverStyle = useCallback((controlEl) => {
+    if (!controlEl || typeof window === 'undefined') return null;
+    const rect = controlEl.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom - 16;
+    const spaceAbove = rect.top - 16;
+    const placeAbove = spaceBelow < 180 && spaceAbove > spaceBelow;
+    if (placeAbove) {
+      return {
+        bottom: Math.max(12, window.innerHeight - rect.top + 6),
+        left: rect.left,
+        width: rect.width,
+        maxHeight: Math.min(220, Math.max(120, spaceAbove)),
+      };
+    }
+    return {
+      top: rect.bottom + 6,
+      left: rect.left,
+      width: rect.width,
+      maxHeight: Math.min(220, Math.max(120, spaceBelow)),
+    };
+  }, []);
 
   useEffect(() => {
     if (open) return;
@@ -1601,15 +1630,42 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
     setRoomSearch('');
     setHouseholdPickerOpen(false);
     setRoomPickerOpen(false);
+    setHouseholdPopoverStyle(null);
+    setRoomPopoverStyle(null);
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || (!householdPickerOpen && !roomPickerOpen)) return undefined;
+    const updatePositions = () => {
+      if (householdPickerOpen) {
+        setHouseholdPopoverStyle(computePopoverStyle(householdControlRef.current));
+      }
+      if (roomPickerOpen) {
+        setRoomPopoverStyle(computePopoverStyle(roomControlRef.current));
+      }
+    };
+    updatePositions();
+    window.addEventListener('resize', updatePositions);
+    window.addEventListener('scroll', updatePositions, true);
+    return () => {
+      window.removeEventListener('resize', updatePositions);
+      window.removeEventListener('scroll', updatePositions, true);
+    };
+  }, [open, householdPickerOpen, roomPickerOpen, computePopoverStyle]);
 
   useEffect(() => {
     if (!open) return undefined;
     const handleOutsideClick = (event) => {
-      if (!householdPickerRef.current?.contains(event.target)) {
+      if (
+        !householdPickerRef.current?.contains(event.target) &&
+        !householdPopoverRef.current?.contains(event.target)
+      ) {
         setHouseholdPickerOpen(false);
       }
-      if (!roomPickerRef.current?.contains(event.target)) {
+      if (
+        !roomPickerRef.current?.contains(event.target) &&
+        !roomPopoverRef.current?.contains(event.target)
+      ) {
         setRoomPickerOpen(false);
       }
     };
@@ -1658,7 +1714,7 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
       room.building_id != null
         ? buildings.find((item) => String(item.id ?? item.properties?.id) === String(room.building_id))
         : null;
-    const bldgStatus = room.building_status || bldg?.status || bldg?.properties?.status || 'open';
+    const bldgStatus = resolveBuildingOperationalStatus(bldg, room);
     if (bldgStatus !== 'open') return false;
     if (room.building_is_mapped != null) return Boolean(room.building_is_mapped);
     if (bldg && (bldg.is_mapped != null || bldg.properties?.is_mapped != null)) {
@@ -1708,7 +1764,9 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
   const isTargetFull = isSingleVenue
     ? targetCapacity <= 0 || remaining <= 0
     : Boolean(selectedRoom && (roomUsage.availableSlots <= 0 || remaining <= 0));
-  const isOverCapacity = Boolean(selectedFamily && selectedRoom && (roomUsage.availableSlots < 1 || memCount > remaining));
+  const isOverCapacity = isSingleVenue
+    ? Boolean(selectedFamily && memCount > remaining)
+    : Boolean(selectedFamily && selectedRoom && (roomUsage.availableSlots < 1 || memCount > remaining));
 
   const title = isSingleVenue
     ? 'Assign Family to ' + (selectedCenter?.name || 'the center')
@@ -1746,10 +1804,26 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
     >
       <div className="afm-content">
         <p className="afm-intro">Choose an unassigned family. Capacity is checked against its number of members.</p>
+        {errorMessage && (
+          <p className="afm-capacity-warning" role="alert">
+            <FontAwesomeIcon icon={faTriangleExclamation} />
+            <span>{errorMessage}</span>
+          </p>
+        )}
+        {isTargetUnmapped && (
+          <p className="afm-capacity-warning" role="status">
+            <FontAwesomeIcon icon={faTriangleExclamation} />
+            <span>
+              {!isCenterMappedReady
+                ? 'This evacuation center is not mapped yet. Place it on the map before assigning families.'
+                : 'This room belongs to a building that is not mapped or not open for assignments.'}
+            </span>
+          </p>
+        )}
 
         <div className="afm-picker" ref={householdPickerRef}>
           <label className="afm-label" htmlFor="assign-household-search">Unassigned family</label>
-          <div className={`afm-picker-control ${householdPickerOpen ? 'is-open' : ''}`}>
+          <div ref={householdControlRef} className={`afm-picker-control ${householdPickerOpen ? 'is-open' : ''}`}>
             <FontAwesomeIcon icon={faSearch} aria-hidden="true" />
             <input
               id="assign-household-search"
@@ -1796,8 +1870,15 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
             )}
           </div>
 
-          {householdPickerOpen && (
-            <div className="afm-picker-list" id="assign-household-options" role="listbox" aria-label="Unassigned families">
+          {householdPickerOpen && householdPopoverStyle && typeof document !== 'undefined' && createPortal(
+            <div
+              ref={householdPopoverRef}
+              className="afm-picker-list afm-picker-popover"
+              style={householdPopoverStyle}
+              id="assign-household-options"
+              role="listbox"
+              aria-label="Unassigned families"
+            >
               {loadingAvailableFamilies ? (
                 <div className="afm-picker-empty">Loading unassigned families…</div>
               ) : householdOptions.length === 0 ? (
@@ -1835,14 +1916,15 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
                   </button>
                 );
               })}
-            </div>
+            </div>,
+            document.body
           )}
         </div>
 
         {allowRoomSelection && (
           <div className="afm-room-picker afm-picker" ref={roomPickerRef}>
             <label className="afm-label" htmlFor="assign-household-room">Available room</label>
-            <div className={`afm-picker-control ${roomPickerOpen ? 'is-open' : ''}`}>
+            <div ref={roomControlRef} className={`afm-picker-control ${roomPickerOpen ? 'is-open' : ''}`}>
               <FontAwesomeIcon icon={faSearch} aria-hidden="true" />
               <input
               id="assign-household-room"
@@ -1889,8 +1971,15 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
                 </button>
               )}
             </div>
-            {roomPickerOpen && (
-              <div className="afm-picker-list" id="assign-room-options" role="listbox" aria-label="Available rooms">
+            {roomPickerOpen && roomPopoverStyle && typeof document !== 'undefined' && createPortal(
+              <div
+                ref={roomPopoverRef}
+                className="afm-picker-list afm-picker-popover"
+                style={roomPopoverStyle}
+                id="assign-room-options"
+                role="listbox"
+                aria-label="Available rooms"
+              >
                 {filteredRoomOptions.length === 0 ? (
                   <div className="afm-picker-empty">{roomOptions.length ? 'No matching available rooms.' : 'No available rooms.'}</div>
                 ) : filteredRoomOptions.map((room) => {
@@ -1919,7 +2008,8 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
                     </button>
                   );
                 })}
-              </div>
+              </div>,
+              document.body
             )}
             {selectedFamily && roomOptions.length === 0 && (
               <p className="afm-room-hint">No active room has enough space for this family.</p>
@@ -1976,7 +2066,9 @@ export function AssignFamilyModal({ open = false, selectedCenter, selectedRoom, 
             {!isTargetFull && isOverCapacity && selectedFamily && (
               <p className="afm-capacity-warning">
                 <FontAwesomeIcon icon={faTriangleExclamation} />
-                {roomUsage.availableSlots < 1 ? 'This room has no family slots remaining.' : `This family has ${memCount} members, but only ${remaining} people spaces remain.`}
+                {!isSingleVenue && roomUsage.availableSlots < 1
+                  ? 'This room has no family slots remaining.'
+                  : `This family has ${memCount} members, but only ${remaining} people spaces remain.`}
               </p>
             )}
           </div>
@@ -2001,7 +2093,7 @@ export function MoveFamilyModal({ open = false, movingFamily, selectedRoom, cent
 
   const buildingList = isTargetBuildings
     ? (Array.isArray(targetCenterBuildings) ? targetCenterBuildings : []).filter((b) => {
-        const status = b.status || b.properties?.status || 'open';
+        const status = resolveBuildingOperationalStatus(b);
         if (status !== 'open') return false;
         const mapped = b.is_mapped ?? b.properties?.is_mapped;
         return mapped !== false;
@@ -2072,7 +2164,7 @@ export function MoveFamilyModal({ open = false, movingFamily, selectedRoom, cent
               if (feature.geometry === null && !c.has_map && !c.is_mapped) return false;
               const mode = resolveCenterStructureMode(c);
               if (mode === 'buildings_and_rooms' && Array.isArray(c.buildings)) {
-                return c.buildings.some((b) => b.is_mapped !== false && (b.status || 'open') === 'open');
+                return c.buildings.some((b) => b.is_mapped !== false && resolveBuildingOperationalStatus(b) === 'open');
               }
               return true;
             })

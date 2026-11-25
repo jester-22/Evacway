@@ -137,7 +137,7 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
 
   // Periodically refresh relative time
   useEffect(() => {
@@ -351,9 +351,6 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
     link.click();
     URL.revokeObjectURL(url);
   }
-
-  // Pre-calculate day separators for paginated rows
-  let prevDayLabel = null;
 
   return (
     <div className="sal-page">
@@ -658,12 +655,12 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
                   </thead>
 
                   <tbody>
-                    {paginatedLogs.map((log) => {
+                    {paginatedLogs.map((log, idx) => {
                       const userInfo = resolveUser(log);
                       const typeInfo = getLogType(log.action);
                       const dayLabel = getDayLabel(log.timestamp);
-                      const showSeparator = dayLabel !== prevDayLabel;
-                      prevDayLabel = dayLabel;
+                      const prevLabel = idx > 0 ? getDayLabel(paginatedLogs[idx - 1].timestamp) : null;
+                      const showSeparator = dayLabel !== prevLabel;
 
                       return (
                         <Fragment key={log.id ?? `${log.timestamp}-${log.action}`}>
@@ -713,16 +710,14 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
 
               {/* MOBILE CARDS VIEW (at 768px and below) */}
               <div className="sal-cards-wrap">
-                {(() => {
-                  let mobilePrevDay = null;
-                  return paginatedLogs.map((log) => {
-                    const userInfo = resolveUser(log);
-                    const typeInfo = getLogType(log.action);
-                    const dayLabel = getDayLabel(log.timestamp);
-                    const showDay = dayLabel !== mobilePrevDay;
-                    mobilePrevDay = dayLabel;
+                {paginatedLogs.map((log, idx) => {
+                  const userInfo = resolveUser(log);
+                  const typeInfo = getLogType(log.action);
+                  const dayLabel = getDayLabel(log.timestamp);
+                  const prevLabel = idx > 0 ? getDayLabel(paginatedLogs[idx - 1].timestamp) : null;
+                  const showDay = dayLabel !== prevLabel;
 
-                    return (
+                  return (
                       <div
                         key={`m-${log.id ?? `${log.timestamp}-${log.action}`}`}
                         className="sal-card-container"
@@ -772,8 +767,7 @@ function SystemAndLogs({ logs = [], user = null, loading = false, error = "" }) 
                         </article>
                       </div>
                     );
-                  });
-                })()}
+                  })}
               </div>
 
               {/* 6. PAGINATION */}

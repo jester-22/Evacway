@@ -12,7 +12,7 @@ import {
 import { displayEntityName } from "../../utils/displayEntityName";
 import { formatRoomLabel } from "../../utils/formatRoomLabel";
 import { formatManilaDateTime } from "../../utils/dateTime";
-import { resolveCenterStructureMode, useEscapeKey } from "./utils";
+import { resolveBuildingOperationalStatus, resolveCenterStructureMode, useEscapeKey } from "./utils";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { getOccupancyStatus } from "./evacuationStatus";
 import {
@@ -76,7 +76,20 @@ export default function EvacuationCenterManager({
   const barangays = Array.isArray(barangaysQuery.data) ? barangaysQuery.data : [];
 
   // Active selections
-  const [selectedCenter, setSelectedCenter] = useState(null);
+  const [selectedCenterState, setSelectedCenter] = useState(null);
+  const selectedCenter = useMemo(() => {
+    if (!selectedCenterState) return null;
+    const features = Array.isArray(centers?.features) ? centers.features : [];
+    const freshFeature = features.find((feature) => {
+      const props = feature?.properties || feature;
+      return String(props?.id) === String(selectedCenterState.id);
+    });
+    if (!freshFeature) return selectedCenterState;
+    return {
+      ...selectedCenterState,
+      ...normalizeCenter(freshFeature),
+    };
+  }, [selectedCenterState, centers]);
   const centerRoomsQuery = useRooms(selectedCenter?.id);
   const centerRooms = centerRoomsQuery.data || [];
 
@@ -226,9 +239,16 @@ export default function EvacuationCenterManager({
     const features = Array.isArray(data?.features) ? data.features : (Array.isArray(data) ? data : []);
     return features.map((feature) => {
       const props = feature?.properties || feature;
+      const is_mapped = Boolean(
+        props?.is_mapped ||
+        (feature?.geometry && feature.geometry.coordinates && feature.geometry.coordinates.length > 0)
+      );
       return {
         id: props?.id ?? feature?.id,
         name: props?.name || props?.display_label || `Building #${props?.id ?? feature?.id}`,
+        status: resolveBuildingOperationalStatus(feature),
+        is_mapped,
+        geometry: feature?.geometry || null,
         properties: props,
       };
     });
@@ -775,11 +795,27 @@ export default function EvacuationCenterManager({
       const assigned = Number(selectedCenter?.assigned ?? selectedCenter?.total_assigned ?? selectedCenter?.occupied ?? 0);
       remaining = Math.max(capacity - assigned, 0);
     } else if (assignmentRoom) {
-      capacity = Number(assignmentRoom.capacity || 0);
-      const assigned = Number(assignmentRoom.assigned ?? (assignmentRoom.unassigned != null
-        ? capacity - Number(assignmentRoom.unassigned)
-        : assignmentRoom.occupied ?? 0));
-      remaining = Math.max(capacity - assigned, 0);
+      capacity = Number(assignmentRoom.people_spaces ?? assignmentRoom.capacity ?? 0);
+      const familySlots = Math.max(1, Number(assignmentRoom.family_slots ?? 5));
+      const usedSlots = Number(
+        assignmentRoom.used_slots ?? assignmentRoom.assigned_households ?? assignmentRoom.household_assigned ?? 0
+      );
+      const availableSlots = Math.max(0, Number(assignmentRoom.available_slots ?? familySlots - usedSlots));
+      const usedSpaces = Number(
+        assignmentRoom.used_spaces ??
+        assignmentRoom.assigned ??
+        (assignmentRoom.unassigned != null
+          ? capacity - Number(assignmentRoom.unassigned)
+          : assignmentRoom.occupied ?? 0)
+      );
+      remaining = Math.max(
+        0,
+        Number(assignmentRoom.available_spaces ?? assignmentRoom.unassigned ?? capacity - usedSpaces)
+      );
+      if (availableSlots < 1) {
+        setError("Cannot assign: This room has no family slots remaining.");
+        return;
+      }
     } else if (assignRoomSelectionEnabled) {
       setError("Please select an available room before assigning this family.");
       return;
@@ -1072,13 +1108,16 @@ export default function EvacuationCenterManager({
         buildings.some(
           (b) =>
             Boolean(b?.is_mapped || b?.properties?.is_mapped) &&
-            (b?.status || b?.properties?.status || 'open') === 'open'
+            resolveBuildingOperationalStatus(b) === 'open'
         ) ||
         centerRooms.some(
           (r) =>
             Boolean(r?.building_is_mapped) &&
-            (!r?.building_status || r.building_status === 'open')
-        );
+            resolveBuildingOperationalStatus(null, r) === 'open'
+        ) ||
+        (buildings.length === 0 &&
+          centerBuildingsQuery.isLoading &&
+          Number(selectedCenter?.building_count || 0) > Number(selectedCenter?.unmapped_building_count || 0));
       if (!hasMappedOpenBuilding) {
         setError("Cannot assign families: Place at least one open building on the map first.");
         return;
@@ -1356,13 +1395,21 @@ export default function EvacuationCenterManager({
         loadingAvailableFamilies={loadingAvailableFamilies}
         selectedFamilyIdToAssign={selectedFamilyIdToAssign}
         assigningFamily={assigningFamily}
+        errorMessage={error}
         onClose={() => {
           setAssignModalOpen(false);
           setAssignTargetRoom(null);
           setAssignRoomSelectionEnabled(false);
+          setError("");
         }}
-        onFamilyChange={setSelectedFamilyIdToAssign}
-        onRoomChange={setAssignTargetRoom}
+        onFamilyChange={(nextId) => {
+          setSelectedFamilyIdToAssign(nextId);
+          if (error) setError("");
+        }}
+        onRoomChange={(nextRoom) => {
+          setAssignTargetRoom(nextRoom);
+          if (error) setError("");
+        }}
         onConfirm={handleConfirmAssignment}
       />
       <MoveFamilyModal

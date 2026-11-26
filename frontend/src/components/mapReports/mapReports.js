@@ -694,9 +694,11 @@ export function createReportPopup(report, options = {}) {
     const isResolved = statusVal === "resolved";
     const isValidated = statusVal === "validated";
 
+    let verifyBtn = null;
+
     // Verify / Validate button
     if (!isValidated && !isResolved && typeof options.onVerify === "function") {
-      const verifyBtn = document.createElement("button");
+      verifyBtn = document.createElement("button");
       verifyBtn.type = "button";
       verifyBtn.className = "map-report-btn-secondary";
       verifyBtn.textContent = "Verify";
@@ -705,14 +707,19 @@ export function createReportPopup(report, options = {}) {
         e.stopPropagation();
         verifyBtn.disabled = true;
         try {
-          await options.onVerify(report);
+          const confirmed = await options.onVerify(report);
+          if (confirmed !== true) {
+            verifyBtn.disabled = false;
+            return;
+          }
           statusPill.className = "map-report-status-pill status-validated";
           statusPill.innerHTML = "";
           const newDot = document.createElement("span");
           newDot.className = "map-report-status-dot";
           statusPill.append(newDot, document.createTextNode("Validated"));
           verifyBtn.remove();
-        } catch (err) {
+          verifyBtn = null;
+        } catch {
           verifyBtn.disabled = false;
         }
       });
@@ -730,14 +737,22 @@ export function createReportPopup(report, options = {}) {
         e.stopPropagation();
         resolveBtn.disabled = true;
         try {
-          await options.onResolve(report);
+          const confirmed = await options.onResolve(report);
+          if (confirmed !== true) {
+            resolveBtn.disabled = false;
+            return;
+          }
           statusPill.className = "map-report-status-pill status-resolved";
           statusPill.innerHTML = "";
           const newDot = document.createElement("span");
           newDot.className = "map-report-status-dot";
           statusPill.append(newDot, document.createTextNode("Resolved"));
+          if (verifyBtn) {
+            verifyBtn.remove();
+            verifyBtn = null;
+          }
           resolveBtn.remove();
-        } catch (err) {
+        } catch {
           resolveBtn.disabled = false;
         }
       });
@@ -767,7 +782,21 @@ export function createReportPopup(report, options = {}) {
       deleteBtn.addEventListener("click", async (e) => {
         e.preventDefault();
         e.stopPropagation();
-        await options.onDelete(report);
+        deleteBtn.disabled = true;
+        try {
+          const deleted = await options.onDelete(report);
+          if (deleted !== true) {
+            deleteBtn.disabled = false;
+            return;
+          }
+          if (typeof options.onClose === "function") {
+            options.onClose();
+          } else if (options.popup && typeof options.popup.remove === "function") {
+            options.popup.remove();
+          }
+        } catch {
+          deleteBtn.disabled = false;
+        }
       });
       actionRow.appendChild(deleteBtn);
     }

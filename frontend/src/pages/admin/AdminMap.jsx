@@ -711,7 +711,7 @@ export default function AdminMap() {
         tone: "info",
       }
     );
-    if (!ok) return;
+    if (!ok) return false;
     try {
       const result = await api.validateHazardReport(report.id, "validated");
       queryClient.invalidateQueries({ queryKey: ["hazard-reports"] });
@@ -727,12 +727,14 @@ export default function AdminMap() {
           }
         );
       }
+      return true;
     } catch (err) {
       console.error("Failed to verify hazard report:", err);
       await appAlert(err.message || "Failed to validate hazard report.", {
         title: "Validation Failed",
         tone: "danger",
       });
+      return false;
     }
   }, [queryClient]);
 
@@ -745,7 +747,7 @@ export default function AdminMap() {
         tone: "success",
       }
     );
-    if (!ok) return;
+    if (!ok) return false;
     try {
       let result = null;
       if (isBlockedRoadReport(report)) {
@@ -766,12 +768,14 @@ export default function AdminMap() {
           }
         );
       }
+      return true;
     } catch (err) {
       console.error("Failed to resolve hazard report:", err);
       await appAlert(err.message || "Failed to resolve hazard report.", {
         title: "Resolution Failed",
         tone: "danger",
       });
+      return false;
     }
   }, [queryClient]);
 
@@ -785,14 +789,20 @@ export default function AdminMap() {
       confirmText: "Delete Report",
       danger: true,
     });
-    if (!ok) return;
+    if (!ok) return false;
     try {
       await api.deleteHazardReport(report.id);
       queryClient.invalidateQueries({ queryKey: ["hazard-reports"] });
       queryClient.invalidateQueries({ queryKey: ["hazard-zones"] });
       queryClient.invalidateQueries({ queryKey: ["road-segments"] });
+      return true;
     } catch (err) {
       console.error("Failed to delete hazard report:", err);
+      await appAlert(err.message || "Failed to delete hazard report.", {
+        title: "Delete Failed",
+        tone: "danger",
+      });
+      return false;
     }
   }, [queryClient]);
 

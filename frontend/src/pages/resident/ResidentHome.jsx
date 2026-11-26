@@ -1849,7 +1849,6 @@ const ResidentHome = () => {
   const [findSomeoneOpen, setFindSomeoneOpen] = useState(false);
   const [findSomeoneName, setFindSomeoneName] = useState("");
   const [findSomeoneBarangayId, setFindSomeoneBarangayId] = useState("");
-  const [findSomeoneAdditionalDetail, setFindSomeoneAdditionalDetail] = useState("");
   const [findSomeoneBarangays, setFindSomeoneBarangays] = useState([]);
   const [findSomeoneBarangaysLoading, setFindSomeoneBarangaysLoading] = useState(false);
   const [findSomeoneLoading, setFindSomeoneLoading] = useState(false);
@@ -5750,7 +5749,6 @@ const ResidentHome = () => {
     clearFoundPersonLocation();
     setFindSomeoneOpen(true);
     setFindSomeoneBarangayId("");
-    setFindSomeoneAdditionalDetail("");
     setFindSomeoneBarangaysLoading(true);
     api.getPublicBarangays()
       .then((barangays) => setFindSomeoneBarangays(Array.isArray(barangays) ? barangays : []))
@@ -5763,7 +5761,6 @@ const ResidentHome = () => {
     setFindSomeoneOpen(false);
     setFindSomeoneName("");
     setFindSomeoneBarangayId("");
-    setFindSomeoneAdditionalDetail("");
     setFindSomeoneHint("");
     setFindSomeoneResults([]);
     setFindSomeoneSearched(false);
@@ -5790,7 +5787,6 @@ const ResidentHome = () => {
       const result = await api.findSomeoneCenter(
         query,
         findSomeoneBarangayId,
-        findSomeoneAdditionalDetail.trim(),
       );
       setFindSomeoneResults(result.center_name ? [{ center_name: result.center_name }] : []);
     } catch (error) {
@@ -8234,20 +8230,6 @@ const ResidentHome = () => {
                     <option key={barangay.id} value={barangay.id}>{barangay.name}</option>
                   ))}
                 </select>
-                <label className="mc-label" htmlFor="fs-additional-detail">Purok or additional detail (optional)</label>
-                <input
-                  id="fs-additional-detail"
-                  type="text"
-                  className="mc-input"
-                  value={findSomeoneAdditionalDetail}
-                  onChange={(event) => {
-                    setFindSomeoneAdditionalDetail(event.target.value);
-                    if (findSomeoneHint) setFindSomeoneHint("");
-                  }}
-                  placeholder="For example, Purok 4"
-                  autoComplete="off"
-                  maxLength={100}
-                />
                 {findSomeoneHint && (
                   <div className="mc-error" role="status" style={{ marginTop: "8px" }}>
                     {findSomeoneHint}
@@ -8287,7 +8269,7 @@ const ResidentHome = () => {
                   </div>
                 ) : (
                   <div className="find-someone-empty">
-                    No match found. Check the full name and barangay, or add a purok detail and try again.
+                    No match found. Check the full name and barangay and try again.
                   </div>
                 )
               )}

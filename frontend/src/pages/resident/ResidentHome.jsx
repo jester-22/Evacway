@@ -1672,12 +1672,12 @@ const ResidentHome = () => {
   const [assistanceSent, setAssistanceSent] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const profileDropdownRef = useRef(null);
-  const [findSomeoneSearchable, setFindSomeoneSearchable] = useState(false);
+  const [findSomeoneSearchable, setFindSomeoneSearchable] = useState(true);
   const [findSomeonePrivacyLoading, setFindSomeonePrivacyLoading] = useState(false);
   const [findSomeonePrivacySaving, setFindSomeonePrivacySaving] = useState(false);
   const [findSomeonePrivacyError, setFindSomeonePrivacyError] = useState("");
   const [findSomeonePrivacyPromptOpen, setFindSomeonePrivacyPromptOpen] = useState(false);
-  const [findSomeonePromptChoice, setFindSomeonePromptChoice] = useState(false);
+  const [findSomeonePromptChoice, setFindSomeonePromptChoice] = useState(true);
 
   useEffect(() => {
     if (!profileDropdownOpen) return;
@@ -1708,16 +1708,17 @@ const ResidentHome = () => {
   useEffect(() => {
     if (!isLoggedInResident) {
       setFindSomeonePrivacyPromptOpen(false);
-      setFindSomeoneSearchable(false);
+      setFindSomeoneSearchable(true);
       return undefined;
     }
     let active = true;
     api.getFindSomeonePrivacy()
       .then((result) => {
         if (!active) return;
-        setFindSomeoneSearchable(Boolean(result.searchable));
+        const searchable = Boolean(result.searchable);
+        setFindSomeoneSearchable(searchable);
         if (result.prompt_pending) {
-          setFindSomeonePromptChoice(false);
+          setFindSomeonePromptChoice(searchable);
           setFindSomeonePrivacyPromptOpen(true);
         }
       })
@@ -2469,20 +2470,40 @@ const ResidentHome = () => {
   }, [user, isLoggedInResident]);
 
   useEffect(() => {
-    const centerName = myCenter?.evacuation_center?.name;
-    if (!centerName || myCenter.evacuation_center.id != null) return;
+    const centerInfo = myCenter?.evacuation_center;
+    const centerName = centerInfo?.name;
+    const currentId = centerInfo?.id ?? null;
+    const hasCoords =
+      centerInfo?.latitude != null &&
+      centerInfo?.latitude !== "" &&
+      centerInfo?.longitude != null &&
+      centerInfo?.longitude !== "" &&
+      Number.isFinite(Number(centerInfo.latitude)) &&
+      Number.isFinite(Number(centerInfo.longitude));
+    if ((!centerName && currentId == null) || (currentId != null && hasCoords)) return;
     const feature = evacCenters?.features?.find((center) => {
       const properties = center.properties || center;
-      return String(properties.name || "").trim().toLowerCase() ===
-        String(centerName).trim().toLowerCase();
+      const featureId = properties.id ?? center.id;
+      if (currentId != null && featureId != null && String(featureId) === String(currentId)) {
+        return true;
+      }
+      return Boolean(centerName) &&
+        String(properties.name || "").trim().toLowerCase() ===
+          String(centerName).trim().toLowerCase();
     });
-    const id = feature?.properties?.id ?? feature?.id;
-    if (id == null) return;
+    if (!feature) return;
+    const nextId = currentId ?? (feature.properties?.id ?? feature.id ?? null);
+    const coords = hasCoords ? null : getCenterCoordinates(feature, buildingsGeoJSON);
+    if (nextId === currentId && !coords) return;
     setMyCenter((previous) => previous ? {
       ...previous,
-      evacuation_center: { ...previous.evacuation_center, id },
+      evacuation_center: {
+        ...previous.evacuation_center,
+        ...(nextId != null ? { id: nextId } : {}),
+        ...(coords ? { latitude: coords.latitude, longitude: coords.longitude } : {}),
+      },
     } : previous);
-  }, [myCenter, evacCenters]);
+  }, [myCenter, evacCenters, buildingsGeoJSON]);
 
   // Automatic GPS arrival & check-in detection
   // --------------------------------------------------
@@ -4511,6 +4532,8 @@ const ResidentHome = () => {
               alternative_center: result?.alternative_center || null,
               selection_reason: result?.selection_reason || null,
               no_safe_center: Boolean(result?.no_safe_center),
+              user_trapped: Boolean(result?.user_trapped || result?.fallback_state === "trapped"),
+              trapped_reason: result?.trapped_reason || null,
               fallback_state: result?.fallback_state || "no_safe_center",
               assigned_center: result?.assigned_center || null,
               _requestedCenterId: assignedCenterId,
@@ -4520,9 +4543,14 @@ const ResidentHome = () => {
               estimated_time_min: null,
             };
             setAssistanceSent(false);
+            setRouteDetailsOpen(false);
+            setOtherCentersOpen(false);
             routeSafetySignatureRef.current = routeSafetySignature;
             routeDataRef.current = blockedNotice;
             setRoute(blockedNotice);
+            if (blockedNotice.user_trapped) {
+              playAlertSound("hazard");
+            }
             setFindingRoute(false);
             return;
           }
@@ -5133,6 +5161,55 @@ const ResidentHome = () => {
             const targetCenterId = target?.id || target?.center_id;
             api.getEvacuationRoute(rawLocation[0], rawLocation[1], targetCenterId, movementHeading)
               .then(async (backendResult) => {
+                if (
+                  !backendResult ||
+                  backendResult.no_roads_available ||
+                  backendResult.all_blocked ||
+                  backendResult.user_trapped ||
+                  backendResult.fallback_state === "trapped" ||
+                  !Array.isArray(backendResult.route) ||
+                  backendResult.route.length === 0
+                ) {
+                  const isTrapped = Boolean(
+                    backendResult?.user_trapped || backendResult?.fallback_state === "trapped"
+                  );
+                  const blockedNotice = {
+                    no_roads_available: true,
+                    all_blocked: true,
+                    no_safe_center: Boolean(backendResult?.no_safe_center ?? true),
+                    user_trapped: isTrapped,
+                    trapped_reason: backendResult?.trapped_reason || null,
+                    fallback_state: backendResult?.fallback_state || (isTrapped ? "trapped" : "no_safe_center"),
+                    evacuation_center:
+                      backendResult?.evacuation_center ||
+                      latestRoute?.evacuation_center ||
+                      myCenter?.evacuation_center || { name: "Evacuation Center" },
+                    assigned_center: backendResult?.assigned_center || latestRoute?.assigned_center || null,
+                    message:
+                      backendResult?.message ||
+                      (isTrapped
+                        ? "You appear to be surrounded by closed or flooded roads. Do not attempt to cross — stay put in a safe, elevated place and wait for rescue."
+                        : "No safe evacuation center with available spaces can be reached."),
+                    route: [],
+                    distance_km: null,
+                    estimated_time_min: null,
+                  };
+                  routeDataRef.current = blockedNotice;
+                  setRoute(blockedNotice);
+                  stopWalkingNavigation("");
+                  const liveMap = mapRef.current;
+                  if (liveMap && liveMap.isStyleLoaded()) {
+                    const emptyLine = { type: "Feature", geometry: { type: "LineString", coordinates: [] }, properties: {} };
+                    liveMap.getSource("evacuation-route")?.setData(emptyLine);
+                    liveMap.getSource("evacuation-route-walked")?.setData(emptyLine);
+                    liveMap.getSource("evacuation-route-arrows-source")?.setData({ type: "FeatureCollection", features: [] });
+                  }
+                  if (isTrapped) {
+                    playAlertSound("hazard");
+                  }
+                  return;
+                }
+
                 let candidateEntrance = backendResult?.chosen_entrance;
                 const currentEntrance = activeEntranceRef.current || latestRoute?.chosen_entrance;
 
@@ -5659,15 +5736,17 @@ const ResidentHome = () => {
         String(centerName || "").trim().toLowerCase();
     });
     const properties = feature?.properties || feature || {};
+    const coords = feature ? getCenterCoordinates(feature, buildingsGeoJSON) : null;
     return {
       evacuation_center: {
         ...(properties.id != null ? { id: properties.id } : {}),
+        ...(coords ? { latitude: coords.latitude, longitude: coords.longitude } : {}),
         name: centerName,
       },
       room,
       ...details,
     };
-  }, [evacCenters]);
+  }, [evacCenters, buildingsGeoJSON]);
 
   const openMyCenter = useCallback(async () => {
     setLookupError("");
@@ -6048,12 +6127,32 @@ const ResidentHome = () => {
     if (!map) return;
 
     clearFoundPersonLocation();
-    const building = resolveRoomBuilding(myCenter?.room, buildingsGeoJSON, myCenter?.evacuation_center?.id);
+
+    const assignedCenterId = myCenter?.evacuation_center?.id ?? null;
+    const assignedCenterName = String(myCenter?.evacuation_center?.name || "").trim().toLowerCase();
+    const centerFeature = evacCenters?.features?.find((center) => {
+      const properties = center.properties || center;
+      const featureId = properties.id ?? center.id;
+      if (assignedCenterId != null && featureId != null && String(featureId) === String(assignedCenterId)) {
+        return true;
+      }
+      return Boolean(assignedCenterName) &&
+        String(properties.name || "").trim().toLowerCase() === assignedCenterName;
+    }) || null;
+    const resolvedCenterId =
+      assignedCenterId ?? centerFeature?.properties?.id ?? centerFeature?.id ?? null;
+
+    const building = resolveRoomBuilding(myCenter?.room, buildingsGeoJSON, resolvedCenterId);
     const bId = building?.id;
     const bFeature = building?.feature;
 
     let target = null;
-    if (bFeature?.geometry?.coordinates?.[0]?.length > 0) {
+    let targetZoom = 18.5;
+    let usedBounds = false;
+    const hasFiniteCoord = (val) =>
+      val !== null && val !== undefined && val !== "" && Number.isFinite(Number(val));
+
+    if (bFeature?.geometry?.type === "Polygon" && bFeature?.geometry?.coordinates?.[0]?.length > 0) {
       const ring = bFeature.geometry.coordinates[0];
       let sumLng = 0;
       let sumLat = 0;
@@ -6062,36 +6161,91 @@ const ResidentHome = () => {
         sumLat += pt[1];
       });
       target = [sumLng / ring.length, sumLat / ring.length];
-    } else if (myCenter?.room?.longitude && myCenter?.room?.latitude) {
-      target = [myCenter.room.longitude, myCenter.room.latitude];
+    } else if (bFeature) {
+      const buildingCoords = getCenterCoordinates(bFeature);
+      if (buildingCoords) {
+        target = [buildingCoords.longitude, buildingCoords.latitude];
+      }
     } else if (
-      myCenter?.evacuation_center?.longitude &&
-      myCenter?.evacuation_center?.latitude
+      hasFiniteCoord(myCenter?.room?.longitude) &&
+      hasFiniteCoord(myCenter?.room?.latitude)
     ) {
-      target = [
-        myCenter.evacuation_center.longitude,
-        myCenter.evacuation_center.latitude,
-      ];
+      target = [Number(myCenter.room.longitude), Number(myCenter.room.latitude)];
+    } else {
+      targetZoom = 17.5;
+      const centerBounds = centerFeature?.geometry ? getGeometryBounds(centerFeature.geometry) : null;
+      const hasAreaBounds =
+        centerBounds &&
+        (centerBounds[0][0] !== centerBounds[1][0] || centerBounds[0][1] !== centerBounds[1][1]);
+
+      if (hasAreaBounds) {
+        map.fitBounds(centerBounds, {
+          padding: 80,
+          maxZoom: 17.5,
+          pitch: 0,
+          essential: true,
+          duration: 1200,
+        });
+        usedBounds = true;
+      } else {
+        const centerCoords = centerFeature
+          ? getCenterCoordinates(centerFeature, buildingsGeoJSON)
+          : null;
+        if (centerCoords) {
+          target = [centerCoords.longitude, centerCoords.latitude];
+        } else if (
+          hasFiniteCoord(myCenter?.evacuation_center?.longitude) &&
+          hasFiniteCoord(myCenter?.evacuation_center?.latitude)
+        ) {
+          target = [
+            Number(myCenter.evacuation_center.longitude),
+            Number(myCenter.evacuation_center.latitude),
+          ];
+        } else if (resolvedCenterId != null && Array.isArray(entrancesGeoJSON?.features)) {
+          const entrance = entrancesGeoJSON.features.find((f) => {
+            const props = f.properties || f;
+            return String(props.evacuation_center_id ?? "") === String(resolvedCenterId);
+          });
+          const entranceCoords = entrance?.geometry?.coordinates;
+          if (
+            Array.isArray(entranceCoords) &&
+            entranceCoords.length >= 2 &&
+            hasFiniteCoord(entranceCoords[0]) &&
+            hasFiniteCoord(entranceCoords[1])
+          ) {
+            target = [Number(entranceCoords[0]), Number(entranceCoords[1])];
+          }
+        }
+      }
     }
 
-    if (target) {
+    if (!usedBounds && target) {
       map.flyTo({
         center: target,
-        zoom: 18.5,
+        zoom: targetZoom,
         pitch: 0,
         essential: true,
         duration: 1200,
       });
     }
 
-    pulseBuilding(map, bId);
-    setUserBuilding(map, bId);
+    if (bId != null) {
+      pulseBuilding(map, bId);
+      setUserBuilding(map, bId);
+    }
     setRoomCardExpanded(false);
   };
 
   const handleStartWalkingToMyRoom = () => {
-    if (!myCenter?.evacuation_center?.id) return;
-    handleFindRoute(myCenter.evacuation_center.id);
+    const directId = myCenter?.evacuation_center?.id;
+    const assignedCenterName = String(myCenter?.evacuation_center?.name || "").trim().toLowerCase();
+    const resolvedId = directId ?? evacCenters?.features?.find((center) => {
+      const properties = center.properties || center;
+      return Boolean(assignedCenterName) &&
+        String(properties.name || "").trim().toLowerCase() === assignedCenterName;
+    })?.properties?.id;
+    if (!resolvedId) return;
+    handleFindRoute(resolvedId);
   };
 
   // --------------------------------------------------
@@ -6500,6 +6654,21 @@ const ResidentHome = () => {
                     </div>
                   )}
                   {isLoggedInResident && <div className="profile-dropdown-divider" aria-hidden="true" />}
+                  {isLoggedInResident && (
+                    <button
+                      type="button"
+                      className="profile-dropdown-logout-btn"
+                      style={{ color: "#1e293b" }}
+                      role="menuitem"
+                      onClick={() => {
+                        setProfileDropdownOpen(false);
+                        navigate("/resident/profile");
+                      }}
+                    >
+                      <FontAwesomeIcon icon={faUser} />
+                      <span>Manage Profile</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="profile-dropdown-logout-btn"
@@ -7700,10 +7869,16 @@ const ResidentHome = () => {
                   </div>
                   <div className="route-blocked-header-text">
                     <span className="route-blocked-dest">
-                      {displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
+                      {route.user_trapped
+                        ? "Stay Put · Wait for Rescue"
+                        : displayEntityName(route.evacuation_center?.name, "Evacuation Center")}
                     </span>
                     <span className="route-blocked-status-tag">
-                      {route.no_safe_center ? "No Safe Center" : "Access Blocked"}
+                      {route.user_trapped
+                        ? "Trapped · Roads Blocked"
+                        : route.no_safe_center
+                          ? "No Safe Center"
+                          : "Access Blocked"}
                     </span>
                   </div>
                 </div>
@@ -7719,14 +7894,18 @@ const ResidentHome = () => {
               </div>
 
               <div className="route-blocked-notice-message">
-                {route.no_safe_center ? (
+                {route.user_trapped || route.no_safe_center ? (
                   <>
-                    <p>No safe evacuation center with available family slots and people spaces can be reached.</p>
+                    <p>
+                      {route.user_trapped
+                        ? (route.message || "You appear to be surrounded by closed or flooded roads. Do not attempt to cross — stay put in a safe, elevated place and wait for rescue.")
+                        : "No safe evacuation center with available family slots and people spaces can be reached."}
+                    </p>
                     <button
                       type="button"
                       className="route-request-assistance-btn"
                       onClick={() => {
-                        setRescueCoordinates(myLocation);
+                        setRescueCoordinates(route._requestedOrigin || myLocation);
                         setRescueAlertOpen(true);
                       }}
                     >
@@ -8137,7 +8316,7 @@ const ResidentHome = () => {
             <div className="mc-body">
               <p className="mc-hint">Let others find my family's evacuation center?</p>
               <fieldset className="find-someone-prompt-options">
-                <legend>Choose Yes or No. No is selected by default.</legend>
+                <legend>Choose Yes or No. Yes is selected by default; you can change this anytime in your profile menu.</legend>
                 <label>
                   <input
                     type="radio"
@@ -8158,7 +8337,7 @@ const ResidentHome = () => {
                 </label>
               </fieldset>
               <p className="mc-hint find-someone-prompt-note">
-                If you choose Yes, other signed-in residents can search with the family member's full name and barangay.
+                When enabled, only your evacuation center name can be looked up. Choosing No hides your family from Find someone and guest lookup, while you can still view your own center when signed in.
               </p>
               {findSomeonePrivacyError && (
                 <div className="mc-error" role="alert">{findSomeonePrivacyError}</div>

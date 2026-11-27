@@ -24,6 +24,7 @@ import "./Sidebar.css";
 import NotificationCenter from "./NotificationCenter";
 import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
+import { REGISTRATIONS_UPDATED_EVENT } from "../../utils/notificationSync";
 
 const NAV_SECTIONS = [
   {
@@ -168,9 +169,11 @@ function Sidebar({
     };
     refreshPendingCount();
     const interval = window.setInterval(refreshPendingCount, 15000);
+    window.addEventListener(REGISTRATIONS_UPDATED_EVENT, refreshPendingCount);
     return () => {
       active = false;
       window.clearInterval(interval);
+      window.removeEventListener(REGISTRATIONS_UPDATED_EVENT, refreshPendingCount);
     };
   }, [role, tab]);
 

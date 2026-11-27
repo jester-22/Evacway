@@ -166,6 +166,8 @@ class User(BaseModel):
             "resident_id": self.resident_id,
             "role": self.role,
             "is_active": self.is_active,
+            "totp_enabled": bool(self.totp_enabled),
+            "mfa_enabled": bool(self.totp_enabled or self.role == "admin"),
             "created_at": (
                 to_utc_iso(self.created_at)
                 if self.created_at
@@ -1185,8 +1187,8 @@ class Family(BaseModel):
     searchable = db.Column(
         db.Boolean,
         nullable=False,
-        default=False,
-        server_default=db.false(),
+        default=True,
+        server_default=db.true(),
     )
 
     uploaded_by = db.Column(
@@ -1507,6 +1509,16 @@ class ResidentAccount(BaseModel):
         nullable=False
     )
 
+    display_name = db.Column(
+        db.String(100),
+        nullable=True
+    )
+
+    contact_number = db.Column(
+        db.String(20),
+        nullable=True
+    )
+
     password_hash = db.Column(
         db.String(255),
         nullable=False
@@ -1554,6 +1566,8 @@ class ResidentAccount(BaseModel):
             "id": self.id,
             "resident_id": self.resident_id,
             "email": self.email,
+            "display_name": self.display_name,
+            "contact_number": self.contact_number,
             "is_active": self.is_active,
             "created_at": (
                 to_utc_iso(self.created_at)

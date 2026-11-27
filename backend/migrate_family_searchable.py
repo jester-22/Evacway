@@ -1,7 +1,8 @@
-"""Default Find someone family search to hidden.
+"""Default family center search visibility to opt-out (searchable=TRUE).
 
-Existing families are hidden when the searchable column is first added. On a
-later run, existing opt-in choices are preserved.
+Residents can turn off family search visibility from their own account
+(find_someone_opt_out=TRUE, searchable=FALSE). Existing explicit opt-out
+choices are preserved.
 
 Usage (from inside backend/, with the project environment active):
     python migrate_family_searchable.py
@@ -20,9 +21,21 @@ if __name__ == "__main__":
         with db.engine.begin() as connection:
             if "searchable" not in existing_columns:
                 connection.execute(text(
-                    "ALTER TABLE families ADD COLUMN searchable BOOLEAN NOT NULL DEFAULT FALSE"
+                    "ALTER TABLE families ADD COLUMN searchable BOOLEAN NOT NULL DEFAULT TRUE"
                 ))
-                connection.execute(text("UPDATE families SET searchable = FALSE"))
+            else:
+                connection.execute(text(
+                    "ALTER TABLE families ALTER COLUMN searchable SET DEFAULT TRUE"
+                ))
+            if "find_someone_opt_out" in existing_columns:
+                connection.execute(text(
+                    "UPDATE families SET searchable = TRUE "
+                    "WHERE COALESCE(find_someone_opt_out, FALSE) = FALSE"
+                ))
+                connection.execute(text(
+                    "UPDATE families SET searchable = FALSE "
+                    "WHERE find_someone_opt_out = TRUE"
+                ))
             connection.execute(text(
                 "CREATE INDEX IF NOT EXISTS ix_families_searchable_barangay "
                 "ON families (searchable, barangay_id)"

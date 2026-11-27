@@ -365,6 +365,17 @@ def _family_list_rows(families):
     if not family_ids:
         return []
 
+    # Pre-warm Barangay and RosterYear in SQLAlchemy's identity map in 2 bulk
+    # queries so Family.to_dict(), family.barangay, and Resident.to_dict()
+    # never trigger per-row lazy queries.
+    barangay_ids = {f.barangay_id for f in families if f.barangay_id is not None}
+    barangays_by_id = {
+        b.id: b for b in Barangay.query.filter(Barangay.id.in_(barangay_ids)).all()
+    } if barangay_ids else {}
+    roster_year_ids = {f.roster_year_id for f in families if f.roster_year_id is not None}
+    if roster_year_ids:
+        RosterYear.query.filter(RosterYear.id.in_(roster_year_ids)).all()
+
     members = Resident.query.filter(Resident.family_id.in_(family_ids)).order_by(Resident.id.asc()).all()
     members_by_family = defaultdict(list)
     for member in members:
@@ -482,9 +493,10 @@ def _family_list_rows(families):
         primary_assignment = assignments[0] if assignments else None
         total_checked_in = sum(item['checked_in_members'] for item in assignments)
         is_checked_in = total_checked_in > 0
+        barangay_obj = barangays_by_id.get(family.barangay_id) if family.barangay_id is not None else None
         result.append({
             **family.to_dict(),
-            'barangay': family.barangay.name if family.barangay else None,
+            'barangay': barangay_obj.name if barangay_obj else (family.barangay.name if family.barangay else None),
             'member_count': len(family_members),
             'resident_count': len(family_members),
             'members': [m.to_dict() for m in family_members],

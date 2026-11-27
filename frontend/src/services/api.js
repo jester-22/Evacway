@@ -534,6 +534,24 @@ export const api = {
   requestMyPasswordReset: () =>
     request("/api/users/me/reset-password", { method: "POST" }),
 
+  sendMyMfaEnableCode: () =>
+    request("/api/users/me/mfa/enable/send", { method: "POST" }),
+
+  confirmMyMfaEnable: (verificationToken, code) =>
+    request("/api/users/me/mfa/enable/confirm", {
+      method: "POST",
+      body: JSON.stringify({
+        verification_token: verificationToken,
+        code,
+      }),
+    }),
+
+  disableMyMfa: (currentPassword) =>
+    request("/api/users/me/mfa/disable", {
+      method: "POST",
+      body: JSON.stringify({ current_password: currentPassword }),
+    }),
+
   createUser: (payload) =>
     request("/api/users", {
       method: "POST",
@@ -632,6 +650,26 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ searchable }),
     }),
+
+  getResidentProfile: () => request("/api/residents/me/profile"),
+
+  updateResidentProfile: (payload) =>
+    request("/api/residents/me/profile", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  changeResidentPassword: (currentPassword, newPassword) =>
+    request("/api/residents/me/password", {
+      method: "POST",
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    }),
+
+  requestResidentPasswordReset: () =>
+    request("/api/residents/me/reset-password", { method: "POST" }),
 
   // -------------------------------------------------------
   // ROOMS

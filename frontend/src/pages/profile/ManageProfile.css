@@ -215,6 +215,298 @@
   border: 1px solid var(--success-border);
 }
 
+.profile-status-pill.is-inactive {
+  background-color: var(--neutral-soft);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+/* Two-Factor Authentication (2FA) Card */
+.profile-mfa-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-4);
+  border-radius: var(--radius-control);
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.profile-mfa-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.profile-mfa-meta-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.profile-mfa-meta-desc {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.profile-mfa-panel {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.profile-mfa-panel.is-danger {
+  border-color: var(--danger-border);
+  background-color: var(--danger-soft);
+}
+
+.profile-mfa-panel-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.profile-mfa-panel-desc {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.profile-mfa-otp-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.profile-mfa-otp-input {
+  max-width: 220px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 18px;
+  letter-spacing: 0.25em;
+  text-align: center;
+}
+
+.profile-mfa-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.profile-btn-danger {
+  background-color: var(--danger);
+  color: #ffffff;
+  border: 1px solid var(--danger);
+}
+
+.profile-btn-danger:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.profile-btn-danger-outline {
+  background-color: var(--surface);
+  color: var(--danger-text);
+  border: 1px solid var(--danger-border);
+}
+
+.profile-btn-danger-outline:hover:not(:disabled) {
+  background-color: var(--danger-soft);
+}
+
+/* 2FA Confirmation Modals */
+.profile-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 6000;
+  background: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+.profile-modal {
+  width: 100%;
+  max-width: 440px;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.22);
+  overflow: hidden;
+  animation: profileModalIn 0.16s ease-out;
+}
+
+@keyframes profileModalIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.profile-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-modal-title-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.profile-modal-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.profile-modal-icon.is-brand {
+  background-color: var(--brand-soft);
+  color: var(--brand);
+  border: 1px solid var(--brand-border);
+}
+
+.profile-modal-icon.is-danger {
+  background-color: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger-border);
+}
+
+.profile-modal-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.profile-modal-subtitle {
+  margin: 2px 0 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.profile-modal-close {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color var(--transition), color var(--transition);
+}
+
+.profile-modal-close:hover:not(:disabled) {
+  background-color: var(--bg);
+  color: var(--ink);
+}
+
+.profile-modal-body {
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.profile-modal-desc {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.profile-mfa-otp-input.is-modal {
+  max-width: 100%;
+  width: 100%;
+  height: 48px;
+  font-size: 22px;
+  letter-spacing: 0.35em;
+}
+
+.profile-modal-resend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.profile-modal-resend-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--brand);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.profile-modal-resend-btn:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.profile-modal-resend-btn:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.profile-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--bg);
+}
+
+@media (max-width: 480px) {
+  .profile-modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .profile-modal-footer .profile-btn {
+    width: 100%;
+  }
+}
+
 /* Forms */
 .profile-form {
   display: flex;

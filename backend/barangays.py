@@ -3,6 +3,7 @@ import re
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload, selectinload
 
 from models import (
     db,
@@ -159,32 +160,20 @@ def get_barangay(barangay_id):
 
     active_year_id = _active_roster_year_id()
 
-    fam_q = Family.query.filter(Family.barangay_id == barangay.id)
+    fam_q = Family.query.options(
+        joinedload(Family.roster_year),
+        joinedload(Family.barangay),
+    ).filter(Family.barangay_id == barangay.id)
     if active_year_id is not None:
         fam_q = fam_q.filter(Family.roster_year_id == active_year_id)
     families = fam_q.order_by(Family.family_code.asc()).all()
 
     family_count = len(families)
 
-    res_q = (
-        db.session.query(func.count(func.distinct(Resident.id)))
-        .join(Family, Resident.family_id == Family.id)
-        .filter(Family.barangay_id == barangay.id)
-    )
-    if active_year_id is not None:
-        res_q = res_q.filter(Family.roster_year_id == active_year_id)
-    resident_count = res_q.scalar() or 0
-
-    evacuation_center_count = CenterBarangay.query.join(
-        EvacuationCenter,
-        EvacuationCenter.id == CenterBarangay.center_id
-    ).filter(
-        CenterBarangay.barangay_id == barangay.id,
-        EvacuationCenter.is_active.is_(True)
-    ).count()
-
     from routes.families import _family_list_rows
     family_rows = _family_list_rows(families)
+
+    resident_count = sum(int(f.get("member_count") or 0) for f in family_rows)
 
     assigned_count = sum(
         1 for f in family_rows
@@ -192,6 +181,7 @@ def get_barangay(barangay_id):
     )
 
     center_rows = _barangay_center_rows(barangay, False)
+    evacuation_center_count = len(center_rows)
     buildings_map = {}
     for c_row in center_rows:
         for b_item in c_row.get("buildings", []):
@@ -231,6 +221,10 @@ def get_barangay(barangay_id):
 def _barangay_center_rows(barangay, include_inactive):
     center_query = (
         EvacuationCenter.query
+        .options(
+            selectinload(EvacuationCenter.barangay_links).joinedload(CenterBarangay.barangay),
+            selectinload(EvacuationCenter.amenities),
+        )
         .join(CenterBarangay, CenterBarangay.center_id == EvacuationCenter.id)
         .filter(CenterBarangay.barangay_id == barangay.id)
     )
@@ -238,11 +232,21 @@ def _barangay_center_rows(barangay, include_inactive):
         center_query = center_query.filter(EvacuationCenter.is_active.is_(True))
     centers = center_query.order_by(EvacuationCenter.name.asc()).all()
     center_ids = [center.id for center in centers]
+    center_by_id = {center.id: center for center in centers}
+    barangay_color_by_center = {
+        center.id: next(
+            (link.color for link in center.barangay_links if link.barangay_id == barangay.id),
+            None,
+        )
+        for center in centers
+    }
 
     rooms = []
     buildings_by_center = {}
     if center_ids:
-        room_query = EvacuationCenterRoom.query.filter(
+        room_query = EvacuationCenterRoom.query.options(
+            selectinload(EvacuationCenterRoom.building),
+        ).filter(
             EvacuationCenterRoom.evacuation_center_id.in_(center_ids)
         )
         if not include_inactive:
@@ -253,13 +257,14 @@ def _barangay_center_rows(barangay, include_inactive):
             EvacuationCenterBuilding.evacuation_center_id.in_(center_ids)
         ).order_by(EvacuationCenterBuilding.id.asc()).all()
         for bld in center_buildings:
+            center_obj = center_by_id.get(bld.evacuation_center_id)
             buildings_by_center.setdefault(bld.evacuation_center_id, []).append({
                 "id": bld.id,
                 "name": bld.name or f"Building #{bld.id}",
                 "status": bld.status or "open",
                 "evacuation_center_id": bld.evacuation_center_id,
                 "center_id": bld.evacuation_center_id,
-                "center_name": bld.evacuation_center.name if bld.evacuation_center else None,
+                "center_name": center_obj.name if center_obj else None,
             })
 
     room_ids = [room.id for room in rooms]
@@ -350,23 +355,20 @@ def _barangay_center_rows(barangay, include_inactive):
     for values in families_by_room.values():
         values.sort(key=lambda item: item["family_code"] or "")
 
+    usage_by_room = EvacuationCenterRoom.bulk_capacity_usage(rooms) if rooms else {}
     rooms_by_center = {}
     for room in rooms:
         assigned = room_assigned_map.get(room.id, 0)
         occupied = room_occupied_map.get(room.id, 0)
         room_families = families_by_room.get(room.id, [])
-        room_usage = room.capacity_usage()
-        room_dict = room.to_dict()
+        room_usage = usage_by_room.get(room.id) or room.capacity_usage()
+        room_dict = room.to_dict(usage=room_usage)
         room_dict.update({
             "barangay_id": barangay.id,
             "barangay": {
                 "id": barangay.id,
                 "name": barangay.name,
-                "color": next(
-                    (link.color for link in room.evacuation_center.barangay_links
-                     if link.barangay_id == barangay.id),
-                    None
-                )
+                "color": barangay_color_by_center.get(room.evacuation_center_id),
             },
             "assigned_count": assigned,
             "assigned": assigned,
@@ -698,7 +700,10 @@ def get_barangay_families(barangay_id):
         }), 404
 
     active_year_id = _active_roster_year_id()
-    fam_q = Family.query.filter(Family.barangay_id == barangay_id)
+    fam_q = Family.query.options(
+        joinedload(Family.roster_year),
+        joinedload(Family.barangay),
+    ).filter(Family.barangay_id == barangay_id)
     if active_year_id is not None:
         fam_q = fam_q.filter(Family.roster_year_id == active_year_id)
     families = fam_q.order_by(Family.family_code.asc()).all()

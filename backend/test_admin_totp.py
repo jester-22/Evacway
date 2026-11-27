@@ -8,6 +8,7 @@ from werkzeug.security import generate_password_hash
 from models import AdminMfaRecoveryRequest, ResidentAccount, SystemLog, User, db
 import routes.auth as auth_routes
 from routes.auth import auth_bp, generate_totp_code, _login_rate_buckets
+from routes.users import users_bp
 
 
 class AdminTotpTests(unittest.TestCase):
@@ -30,6 +31,7 @@ class AdminTotpTests(unittest.TestCase):
         db.init_app(cls.app)
         JWTManager(cls.app)
         cls.app.register_blueprint(auth_bp)
+        cls.app.register_blueprint(users_bp)
         cls.context = cls.app.app_context()
         cls.context.push()
         db.metadata.create_all(bind=db.engine, tables=[
@@ -357,6 +359,178 @@ class AdminTotpTests(unittest.TestCase):
             )
             self.assertEqual(verify_ok.status_code, 200, verify_ok.json)
             self.assertTrue(verify_ok.json.get("access_token"))
+
+    def test_lgu_can_enable_2fa_after_confirming_gmail_otp_and_disable_with_password(self):
+        from routes.auth import _consumed_email_otp_jtis, _email_otp_send_times
+
+        _email_otp_send_times.clear()
+        _consumed_email_otp_jtis.clear()
+        _login_rate_buckets.clear()
+
+        lgu = User(
+            name="LGU Officer",
+            email="officer.test@gmail.com",
+            password_hash=generate_password_hash("LguPass-123!"),
+            role="lgu_personnel",
+            is_active=True,
+        )
+        db.session.add(lgu)
+        db.session.commit()
+
+        # 1. Initially LGU signs in directly without 2FA
+        login1 = self.client.post("/api/auth/login", json={
+            "email": "officer.test@gmail.com",
+            "password": "LguPass-123!",
+        })
+        self.assertEqual(login1.status_code, 200)
+        self.assertIn("access_token", login1.json)
+        self.assertFalse(login1.json["user"]["totp_enabled"])
+        token1 = login1.json["access_token"]
+
+        # 2. Failed email send must NOT enable 2FA
+        with patch(
+            "routes.auth.send_staff_mfa_email_code",
+            side_effect=RuntimeError("SMTP unreachable"),
+        ):
+            failed_send = self.client.post(
+                "/api/users/me/mfa/enable/send",
+                headers={"Authorization": f"Bearer {token1}"},
+            )
+            self.assertEqual(failed_send.status_code, 503)
+        db.session.refresh(lgu)
+        self.assertFalse(lgu.totp_enabled)
+
+        # 3. Successful email test sends 6-digit OTP with purpose="enable_2fa"
+        sent = []
+        with patch(
+            "routes.auth.send_staff_mfa_email_code",
+            side_effect=lambda user, code, expires_minutes=10, purpose="signin": sent.append((user.email, code, purpose)),
+        ):
+            send_ok = self.client.post(
+                "/api/users/me/mfa/enable/send",
+                headers={"Authorization": f"Bearer {token1}"},
+            )
+            self.assertEqual(send_ok.status_code, 200, send_ok.json)
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0][0], "officer.test@gmail.com")
+            self.assertEqual(sent[0][2], "enable_2fa")
+            self.assertRegex(sent[0][1], r"^\d{6}$")
+            v_token = send_ok.json["verification_token"]
+
+            # Enable token cannot be replayed on the sign-in verify endpoint
+            cross_flow = self.client.post(
+                "/api/auth/staff/mfa/email/verify",
+                json={"email_otp_token": v_token, "code": sent[0][1]},
+            )
+            self.assertEqual(cross_flow.status_code, 401)
+
+        # Wrong OTP is rejected and does NOT enable 2FA
+        bad_code = "000000" if sent[0][1] != "000000" else "111111"
+        bad_confirm = self.client.post(
+            "/api/users/me/mfa/enable/confirm",
+            headers={"Authorization": f"Bearer {token1}"},
+            json={"verification_token": v_token, "code": bad_code},
+        )
+        self.assertEqual(bad_confirm.status_code, 401)
+        db.session.refresh(lgu)
+        self.assertFalse(lgu.totp_enabled)
+
+        # 4. Correct OTP enables 2FA and returns a fresh mfa_verified token
+        ok_confirm = self.client.post(
+            "/api/users/me/mfa/enable/confirm",
+            headers={"Authorization": f"Bearer {token1}"},
+            json={"verification_token": v_token, "code": sent[0][1]},
+        )
+        self.assertEqual(ok_confirm.status_code, 200, ok_confirm.json)
+        self.assertTrue(ok_confirm.json["user"]["totp_enabled"])
+        self.assertTrue(ok_confirm.json["user"]["mfa_enabled"])
+        token2 = ok_confirm.json["access_token"]
+        self.assertTrue(token2)
+
+        # Fresh token works on protected /api/users/me; old pre-2FA token is rejected
+        me_ok = self.client.get("/api/users/me", headers={"Authorization": f"Bearer {token2}"})
+        self.assertEqual(me_ok.status_code, 200)
+        self.assertTrue(me_ok.json["totp_enabled"])
+        me_old = self.client.get("/api/users/me", headers={"Authorization": f"Bearer {token1}"})
+        self.assertEqual(me_old.status_code, 403)
+
+        # 5. Next login for this LGU officer now requires 2FA email OTP!
+        _login_rate_buckets.clear()
+        login2 = self.client.post("/api/auth/login", json={
+            "email": "officer.test@gmail.com",
+            "password": "LguPass-123!",
+        })
+        self.assertEqual(login2.status_code, 200)
+        self.assertNotIn("access_token", login2.json)
+        self.assertTrue(login2.json.get("totp_enrollment_required") or login2.json.get("totp_required"))
+        self.assertTrue(login2.json.get("email_otp_available"))
+
+        # 6. Disabling 2FA requires the correct current password
+        bad_disable = self.client.post(
+            "/api/users/me/mfa/disable",
+            headers={"Authorization": f"Bearer {token2}"},
+            json={"current_password": "WrongPassword!1"},
+        )
+        self.assertEqual(bad_disable.status_code, 403)
+
+        ok_disable = self.client.post(
+            "/api/users/me/mfa/disable",
+            headers={"Authorization": f"Bearer {token2}"},
+            json={"current_password": "LguPass-123!"},
+        )
+        self.assertEqual(ok_disable.status_code, 200, ok_disable.json)
+        self.assertFalse(ok_disable.json["user"]["totp_enabled"])
+        self.assertFalse(ok_disable.json["user"]["mfa_enabled"])
+
+        # 7. After disabling, LGU signs in directly without 2FA again
+        _login_rate_buckets.clear()
+        login3 = self.client.post("/api/auth/login", json={
+            "email": "officer.test@gmail.com",
+            "password": "LguPass-123!",
+        })
+        self.assertEqual(login3.status_code, 200)
+        self.assertIn("access_token", login3.json)
+
+    def test_lgu_local_placeholder_email_blocked_from_enabling_2fa_and_admin_cannot_disable(self):
+        from routes.auth import _email_otp_send_times
+
+        _email_otp_send_times.clear()
+        _login_rate_buckets.clear()
+
+        local_lgu = User(
+            name="Local LGU",
+            email="lgu@evacway.local",
+            password_hash=generate_password_hash("LguPass-123!"),
+            role="lgu_personnel",
+            is_active=True,
+        )
+        db.session.add(local_lgu)
+        db.session.commit()
+
+        lgu_token = self.client.post("/api/auth/login", json={
+            "email": "lgu@evacway.local",
+            "password": "LguPass-123!",
+        }).json["access_token"]
+
+        blocked = self.client.post(
+            "/api/users/me/mfa/enable/send",
+            headers={"Authorization": f"Bearer {lgu_token}"},
+        )
+        self.assertEqual(blocked.status_code, 400)
+
+        # Admin cannot disable 2FA
+        admin_token = create_access_token(identity=str(self.admin.id), additional_claims={
+            "account_type": "user",
+            "role": "admin",
+            "mfa_verified": True,
+            "mfa_version": int(self.admin.mfa_version or 0),
+        })
+        admin_disable = self.client.post(
+            "/api/users/me/mfa/disable",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"current_password": "Admin-password-123!"},
+        )
+        self.assertEqual(admin_disable.status_code, 403)
 
 
 if __name__ == "__main__":

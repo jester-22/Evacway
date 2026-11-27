@@ -14,6 +14,7 @@ import NetworkStatus from "./components/NetworkStatus/NetworkStatus";
 import Dashboard from "./components/Dashboard/Dashboard";
 
 import ManageProfile from "./pages/profile/ManageProfile";
+import ResidentProfile from "./pages/resident/ResidentProfile";
 import AdminMap from "./pages/admin/AdminMap";
 import ErrorBoundary from "./components/ErrorBoundary/ErrorBoundary";
 import DataPrivacyNotice from "./pages/DataPrivacyNotice";
@@ -82,6 +83,15 @@ function App() {
               element={
                 <ProtectedRoute allowedRoles={["admin", "lgu_personnel"]}>
                   <ManageProfile />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/resident/profile"
+              element={
+                <ProtectedRoute allowedRoles={["resident"]}>
+                  <ResidentProfile />
                 </ProtectedRoute>
               }
             />

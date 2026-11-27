@@ -25,6 +25,10 @@ import {
   setAlertSoundMuted,
   unlockAlertAudio,
 } from "../../utils/alertSound";
+import {
+  markNotificationsSynced,
+  syncNotificationsToQueries,
+} from "../../utils/notificationSync";
 import { formatManilaDateTime } from "../../utils/dateTime";
 import "./NotificationCenter.css";
 
@@ -127,12 +131,13 @@ export default function NotificationCenter({ onSelect }) {
         if (notifId) soundPlayedIdsRef.current.add(notifId);
         playAlertSound(alertKind);
       }
+      syncNotificationsToQueries(queryClient, [payload]);
       refetchNotifications();
     }
 
     navigator.serviceWorker.addEventListener("message", handleSwMessage);
     return () => navigator.serviceWorker.removeEventListener("message", handleSwMessage);
-  }, [refetchNotifications]);
+  }, [queryClient, refetchNotifications]);
 
   useEffect(() => {
     if (!notificationsQuery.isSuccess) return;
@@ -140,6 +145,7 @@ export default function NotificationCenter({ onSelect }) {
     if (seenIdsRef.current === null) {
       seenIdsRef.current = currentIds;
       currentIds.forEach((id) => soundPlayedIdsRef.current.add(id));
+      markNotificationsSynced(notifications);
       return;
     }
     const newlyArrived = notifications.filter(
@@ -156,6 +162,7 @@ export default function NotificationCenter({ onSelect }) {
       if (alertKind) {
         playAlertSound(alertKind);
       }
+      syncNotificationsToQueries(queryClient, newlyArrived);
     }
 
     if (

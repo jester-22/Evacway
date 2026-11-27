@@ -116,8 +116,8 @@ export default function DataPrivacyNotice() {
           <p>
             Family records can include children’s information and details about disability,
             pregnancy, or assistance needs. Access to roster details is limited to authorized staff
-            roles. A resident family-search feature returns a center only and is available only for
-            families that choose to be searchable.
+            roles. Evacuation center lookup features return only the evacuation center name, and
+            residents can turn off family search visibility at any time from their account.
           </p>
         </section>
 

@@ -86,32 +86,35 @@ def _email_otp_digest(user_id, jti, code):
     return hmac.new(jwt_secret, message, hashlib.sha256).hexdigest()
 
 
-def _create_email_otp_token(user, code):
+def _create_email_otp_token(user, code, flow='staff_email_otp_challenge', extra_claims=None):
     jti = secrets.token_urlsafe(16)
     issued_at_ts = int(time.time())
+    claims = {
+        'account_type': 'user',
+        'mfa_flow': flow,
+        'mfa_version': int(user.mfa_version or 0),
+        'otp_jti': jti,
+        'otp_iat': issued_at_ts,
+        'otp_hash': _email_otp_digest(user.id, jti, code),
+    }
+    if extra_claims:
+        claims.update(extra_claims)
     token = create_access_token(
         identity=str(user.id),
         expires_delta=timedelta(minutes=_EMAIL_OTP_EXPIRES_MINUTES),
-        additional_claims={
-            'account_type': 'user',
-            'mfa_flow': 'staff_email_otp_challenge',
-            'mfa_version': int(user.mfa_version or 0),
-            'otp_jti': jti,
-            'otp_iat': issued_at_ts,
-            'otp_hash': _email_otp_digest(user.id, jti, code),
-        },
+        additional_claims=claims,
     )
     return token
 
 
-def _resolve_email_otp_token(token):
+def _resolve_email_otp_token(token, expected_flow='staff_email_otp_challenge'):
     if not token or not isinstance(token, str):
         return None, None
     try:
         claims = decode_token(token)
         if (
             claims.get('account_type') != 'user'
-            or claims.get('mfa_flow') != 'staff_email_otp_challenge'
+            or claims.get('mfa_flow') != expected_flow
         ):
             return None, None
         user_id = int(claims.get('sub'))
@@ -491,18 +494,29 @@ def _login(expected_type):
             _clear_login_failures(resident_account)
             resident_account.last_login_at = now
             db.session.commit()
+            effective_name = (
+                (resident_account.display_name or "").strip()
+                or (resident_account.resident.get_full_name() if resident_account.resident else "")
+                or "Resident"
+            )
+            effective_contact = (
+                (resident_account.contact_number or "").strip()
+                or (resident_account.resident.contact_number if resident_account.resident else None)
+                or None
+            )
             access_token = create_access_token(
                 identity=str(resident_account.id),
                 additional_claims={
                     "role": "resident",
-                    "name": resident_account.resident.get_full_name() if resident_account.resident else "Resident",
+                    "name": effective_name,
                     "account_type": "resident_account",
                     "resident_id": resident_account.resident_id,
                 },
             )
             response_user = {
                 "id": resident_account.id,
-                "name": resident_account.resident.get_full_name() if resident_account.resident else "Resident",
+                "name": effective_name,
+                "display_name": resident_account.display_name,
                 "email": resident_account.email,
                 "resident_id": resident_account.resident_id,
                 "family_member_count": (
@@ -510,13 +524,11 @@ def _login(expected_type):
                     if resident_account.resident and resident_account.resident.family
                     else 1
                 ),
-                "contact_number": (
-                    resident_account.resident.contact_number
-                    if resident_account.resident
-                    else None
-                ),
+                "contact_number": effective_contact,
+                "account_contact_number": resident_account.contact_number,
                 "role": "resident",
                 "is_active": True,
+                "created_at": to_utc_iso(resident_account.created_at),
                 "last_login_at": to_utc_iso(resident_account.last_login_at),
             }
         else:
@@ -749,6 +761,202 @@ def verify_staff_mfa_email_otp():
 
     _mark_email_otp_consumed(jti)
     return _mfa_success(user, 'Staff signed in with email verification code')
+
+
+def _staff_profile_payload(user):
+    delivery_email = _staff_verification_email(user)
+    required_by_policy = bool(
+        user.role == 'admin'
+        or (
+            user.role == 'lgu_personnel'
+            and current_app.config.get('LGU_TOTP_REQUIRED', False)
+        )
+    )
+    payload = user.to_dict()
+    payload.update({
+        'mfa_enabled': bool(user.totp_enabled or required_by_policy),
+        'mfa_required_by_policy': required_by_policy,
+        'mfa_delivery_email': delivery_email or None,
+        'mfa_masked_email': _mask_email(delivery_email) if delivery_email else None,
+        'mfa_email_deliverable': bool(delivery_email),
+    })
+    return payload
+
+
+@auth_bp.route('/api/users/me/mfa/enable/send', methods=['POST'])
+@role_required('admin', 'lgu_personnel')
+def send_my_mfa_enable_otp():
+    user = db.session.get(User, int(get_jwt_identity()))
+    if not user or not user.is_active:
+        return jsonify({'error': 'Account not found.'}), 404
+
+    if user.role == 'admin' or bool(user.totp_enabled):
+        return jsonify({'error': 'Two-factor authentication is already enabled on this account.'}), 400
+
+    delivery_email = _staff_verification_email(user)
+    if not delivery_email:
+        return jsonify({
+            'error': 'Please set a valid deliverable email address (such as Gmail) in Personal Information before enabling two-factor authentication.'
+        }), 400
+
+    cooldown_key = ('enable_2fa', user.id)
+    now_mono = time.monotonic()
+    with _email_otp_lock:
+        last_sent = _email_otp_send_times.get(cooldown_key)
+        if last_sent is not None:
+            elapsed = now_mono - last_sent
+            if elapsed < _EMAIL_OTP_RESEND_COOLDOWN_SECONDS:
+                wait_seconds = max(1, int(_EMAIL_OTP_RESEND_COOLDOWN_SECONDS - elapsed))
+                return jsonify({
+                    'error': f'Please wait {wait_seconds}s before requesting another confirmation code.',
+                    'retry_after_seconds': wait_seconds,
+                }), 429
+
+    code = f'{secrets.randbelow(1_000_000):06d}'
+    try:
+        send_staff_mfa_email_code(
+            user,
+            code,
+            expires_minutes=_EMAIL_OTP_EXPIRES_MINUTES,
+            purpose='enable_2fa',
+        )
+    except Exception:
+        current_app.logger.exception('Staff 2FA enable email test failed for user %s', user.id)
+        return jsonify({
+            'error': 'Could not send a test verification code to your email. Please check your email address and try again.'
+        }), 503
+
+    with _email_otp_lock:
+        _email_otp_send_times[cooldown_key] = time.monotonic()
+
+    verification_token = _create_email_otp_token(
+        user,
+        code,
+        flow='staff_email_mfa_enable',
+        extra_claims={'target_email': delivery_email},
+    )
+    masked_email = _mask_email(delivery_email)
+    db.session.add(SystemLog(
+        user_id=user.id,
+        action='Staff requested email confirmation code to enable two-factor authentication',
+        timestamp=utc_now(),
+    ))
+    db.session.commit()
+
+    return jsonify({
+        'message': f'A 6-digit test code was sent to {masked_email}. Enter it below to confirm your email and enable 2FA.',
+        'verification_token': verification_token,
+        'masked_email': masked_email,
+        'delivery_email': delivery_email,
+        'expires_in_seconds': _EMAIL_OTP_EXPIRES_MINUTES * 60,
+        'resend_cooldown_seconds': _EMAIL_OTP_RESEND_COOLDOWN_SECONDS,
+    }), 200
+
+
+@auth_bp.route('/api/users/me/mfa/enable/confirm', methods=['POST'])
+@role_required('admin', 'lgu_personnel')
+def confirm_my_mfa_enable():
+    caller_id = int(get_jwt_identity())
+    data = _mfa_payload()
+    token_user, claims = _resolve_email_otp_token(
+        data.get('verification_token'),
+        expected_flow='staff_email_mfa_enable',
+    )
+    if not token_user or not claims or token_user.id != caller_id:
+        return jsonify({'error': 'Confirmation code expired or invalid. Please request a new code.'}), 401
+
+    user = User.query.filter_by(id=caller_id).with_for_update().populate_existing().first()
+    if not user or not user.is_active:
+        return jsonify({'error': 'Account not found.'}), 404
+
+    current_delivery_email = _staff_verification_email(user)
+    if not current_delivery_email or claims.get('target_email') != current_delivery_email:
+        return jsonify({
+            'error': 'Your email address changed after the code was sent. Please request a new confirmation code.'
+        }), 400
+
+    jti = str(claims.get('otp_jti') or '')
+    with _email_otp_lock:
+        if jti and jti in _consumed_email_otp_jtis:
+            return jsonify({'error': 'This confirmation code has already been used. Please request a new code.'}), 401
+
+    normalized_code = re.sub(r'[\s-]+', '', str(data.get('code') or ''))
+    if not re.fullmatch(r'\d{6}', normalized_code):
+        return jsonify({'error': 'Enter the 6-digit verification code sent to your email.'}), 400
+
+    stored_hash = str(claims.get('otp_hash') or '')
+    expected_hash = _email_otp_digest(user.id, jti, normalized_code)
+    if not stored_hash or not hmac.compare_digest(expected_hash, stored_hash):
+        return jsonify({'error': 'Invalid verification code. Please check your email and try again.'}), 401
+
+    _mark_email_otp_consumed(jti)
+    user.totp_enabled = True
+    user.mfa_version = int(user.mfa_version or 0) + 1
+    now = utc_now()
+    db.session.add(SystemLog(
+        user_id=user.id,
+        action='Staff enabled email two-factor authentication from Manage Profile',
+        timestamp=now,
+    ))
+    db.session.commit()
+
+    return jsonify({
+        'message': 'Two-factor authentication is now enabled. You will receive an email verification code at sign in.',
+        'access_token': _staff_access_token(user, mfa_verified=True),
+        'user': _staff_profile_payload(user),
+    }), 200
+
+
+@auth_bp.route('/api/users/me/mfa/disable', methods=['POST'])
+@role_required('admin', 'lgu_personnel')
+def disable_my_mfa():
+    caller_id = int(get_jwt_identity())
+    data = _mfa_payload()
+    current_password = data.get('current_password')
+
+    user = User.query.filter_by(id=caller_id).with_for_update().populate_existing().first()
+    if not user or not user.is_active:
+        return jsonify({'error': 'Account not found.'}), 404
+
+    if user.role == 'admin':
+        return jsonify({
+            'error': 'Two-factor authentication is required for administrator accounts and cannot be disabled.'
+        }), 403
+
+    if user.role == 'lgu_personnel' and current_app.config.get('LGU_TOTP_REQUIRED', False):
+        return jsonify({
+            'error': 'Two-factor authentication is required by system policy and cannot be disabled.'
+        }), 403
+
+    if not user.totp_enabled:
+        return jsonify({'error': 'Two-factor authentication is already disabled.'}), 400
+
+    if not isinstance(current_password, str) or not current_password:
+        return jsonify({'error': 'Enter your current password to disable two-factor authentication.'}), 400
+
+    if not check_password_hash(user.password_hash, current_password):
+        return jsonify({'error': 'Current password is incorrect.'}), 403
+
+    user.totp_enabled = False
+    user.totp_secret_encrypted = None
+    user.totp_pending_secret_encrypted = None
+    user.totp_setup_expires_at = None
+    user.totp_last_used_step = None
+    user.totp_backup_codes_hashes = None
+    user.mfa_version = int(user.mfa_version or 0) + 1
+    now = utc_now()
+    db.session.add(SystemLog(
+        user_id=user.id,
+        action='Staff disabled two-factor authentication from Manage Profile',
+        timestamp=now,
+    ))
+    db.session.commit()
+
+    return jsonify({
+        'message': 'Two-factor authentication has been disabled.',
+        'access_token': _staff_access_token(user, mfa_verified=False),
+        'user': _staff_profile_payload(user),
+    }), 200
 
 
 @auth_bp.route('/api/auth/staff/totp/recovery', methods=['POST'])

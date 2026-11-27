@@ -76,6 +76,20 @@ const STATUS_META = {
   all: { label: "All", color: "#0f172a", bg: "rgba(15, 23, 42, 0.08)" },
 };
 
+const HAZARD_STATUS_PRIORITY = {
+  pending: 0,
+  validated: 1,
+  rejected: 2,
+  resolved: 3,
+};
+
+function getHazardStatusPriority(status = "") {
+  const normalized = String(status).trim().toLowerCase();
+  return Object.hasOwn(HAZARD_STATUS_PRIORITY, normalized)
+    ? HAZARD_STATUS_PRIORITY[normalized]
+    : 2;
+}
+
 function statusMeta(status) {
   return STATUS_META[status] || { label: status, color: "#64748b", bg: "#f1f5f9" };
 }
@@ -924,9 +938,11 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
   const validatedCount = statusCounts.validated || 0;
   const resolvedCount = statusCounts.resolved || 0;
 
-  // Filtered reports list
+  // Filtered & priority-sorted reports list:
+  // Pending first, then Validated, then other non-resolved, and Resolved last.
+  // Within each status group, newest submissions appear first.
   const filteredReports = useMemo(() => {
-    return reports.filter((r) => {
+    const matched = reports.filter((r) => {
       if (statusFilter !== "all" && r.status !== statusFilter) return false;
       if (typeFilter !== "all" && !String(r.report_type || "").toLowerCase().includes(typeFilter)) {
         return false;
@@ -956,6 +972,18 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
         }
       }
       return true;
+    });
+
+    return matched.sort((a, b) => {
+      const priorityDiff =
+        getHazardStatusPriority(a.status) - getHazardStatusPriority(b.status);
+      if (priorityDiff !== 0) return priorityDiff;
+
+      const timeA = parseTimestamp(a.submitted_at)?.getTime() || 0;
+      const timeB = parseTimestamp(b.submitted_at)?.getTime() || 0;
+      if (timeA !== timeB) return timeB - timeA;
+
+      return Number(b.id || 0) - Number(a.id || 0);
     });
   }, [reports, statusFilter, typeFilter, searchQuery, roadSegmentsData, resolvedBarangaysById, user?.role]);
 

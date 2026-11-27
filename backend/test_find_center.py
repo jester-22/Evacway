@@ -310,6 +310,17 @@ class FindCenterRouteTests(unittest.TestCase):
                     self.assertEqual(response.get_json()['center_name'], 'North Shelter')
                     self.assertIsNone(response.get_json()['room'])
 
+    def test_new_family_defaults_to_searchable_opt_out_model(self):
+        default_family = Family(
+            id=5, roster_year_id=1, barangay_id=2, head_name='Ana Lopez',
+            family_code='FAM-005', member_count=1,
+        )
+        db.session.add(default_family)
+        db.session.flush()
+        self.assertTrue(default_family.searchable)
+        self.assertFalse(default_family.find_someone_opt_out)
+        db.session.rollback()
+
     def test_opted_out_family_is_not_returned_or_suggested(self):
         self.assertFalse(self.fam_opted_out.searchable)
         result = self.client.post(
@@ -319,6 +330,12 @@ class FindCenterRouteTests(unittest.TestCase):
         )
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.get_json(), {'message': 'No match found.'})
+
+        guest_lookup = self._verify_center(
+            full_name='Pedro Cruz', barangay_id=2, birthdate='1975-08-09',
+        )
+        self.assertEqual(guest_lookup.status_code, 200)
+        self.assertEqual(guest_lookup.get_json(), {'message': 'No match found.'})
 
 
     def test_missing_barangay_returns_generic_no_match_and_logs_masked_fields(self):
@@ -439,7 +456,21 @@ class FindCenterRouteTests(unittest.TestCase):
         self.assertEqual(update.status_code, 200)
         self.assertEqual(update.get_json(), {'searchable': False, 'prompt_pending': False})
         self.assertFalse(db.session.get(Family, self.fam_a.id).searchable)
+        self.assertTrue(db.session.get(Family, self.fam_a.id).find_someone_opt_out)
         self.assertTrue(db.session.get(ResidentAccount, self.resident_account.id).find_someone_prompt_seen)
+
+        # Once opted out, guest lookup and Find Someone hide the family, while logged-in My Center still works
+        guest_after_opt_out = self._verify_center()
+        self.assertEqual(guest_after_opt_out.get_json(), {'message': 'No match found.'})
+        find_after_opt_out = self.client.post(
+            '/api/residents/find-center',
+            headers=self.resident_headers,
+            json={'full_name': 'Juan Reyes', 'barangay_id': 1},
+        )
+        self.assertEqual(find_after_opt_out.get_json(), {'message': 'No match found.'})
+        own_center = self.client.get('/api/residents/my-center', headers=self.resident_headers)
+        self.assertEqual(own_center.status_code, 200)
+        self.assertEqual(own_center.get_json()['center_name'], 'North Shelter')
 
         for role, headers in (
             ('guest', {}),

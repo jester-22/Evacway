@@ -7,6 +7,7 @@ from shapely.geometry import LineString
 from shapely.strtree import STRtree
 
 from services.pathfinding import (
+    assess_user_start_access,
     calculate_route_with_edge_snapping,
     choose_safe_route,
     describe_fallback_reason,
@@ -209,6 +210,145 @@ class RouteCandidateSelectionTests(unittest.TestCase):
         with patch("services.pathfinding.get_road_network", return_value=fake_net):
             _, _, matched_sub, _ = snap_point_to_road(10.39098, 124.98006, heading=0.0)
             self.assertEqual(matched_sub["road_name"], "North-South Ave")
+
+    def _build_trapped_test_network(self):
+        # Open main highway along north: lat=10.3910, lng=124.9800 -> 124.9830
+        o1 = (10.3910, 124.9800)
+        o2 = (10.3910, 124.9815)
+        o3 = (10.3910, 124.9830)
+        # Disconnected small open cul-de-sac to the south-east: lat=10.3895, lng=124.9820 -> 124.9825
+        iso1 = (10.3895, 124.9820)
+        iso2 = (10.3895, 124.9825)
+
+        G = nx.Graph()
+        G.add_edge(o1, o2, weight=0.166, base_weight=1.0, is_closed=False)
+        G.add_edge(o2, o3, weight=0.166, base_weight=1.0, is_closed=False)
+        G.add_edge(iso1, iso2, weight=0.055, base_weight=1.0, is_closed=False)
+
+        open_subs = [
+            {
+                "u": o1, "v": o2,
+                "sub_line": LineString([(o1[1], o1[0]), (o2[1], o2[0])]),
+                "seg_id": 1, "road_name": "North Highway", "base_weight": 1.0, "is_closed": False,
+            },
+            {
+                "u": o2, "v": o3,
+                "sub_line": LineString([(o2[1], o2[0]), (o3[1], o3[0])]),
+                "seg_id": 2, "road_name": "North Highway East", "base_weight": 1.0, "is_closed": False,
+            },
+            {
+                "u": iso1, "v": iso2,
+                "sub_line": LineString([(iso1[1], iso1[0]), (iso2[1], iso2[0])]),
+                "seg_id": 3, "road_name": "Isolated Alley", "base_weight": 1.0, "is_closed": False,
+            },
+        ]
+        open_lines = [s["sub_line"] for s in open_subs]
+
+        # Closed flooded roads boxing in the south side:
+        # 1) South horizontal flooded road at lat=10.3900, lng=124.9800 -> 124.9815
+        # 2) Vertical flooded connector at lng=124.9815, lat=10.3900 -> 10.3910 (meets o2)
+        # 3) Horizontal flooded barrier separating north highway from south block at lat=10.3905, lng=124.9800 -> 124.9815
+        closed_lines = [
+            LineString([(124.9800, 10.3900), (124.9815, 10.3900)]),
+            LineString([(124.9815, 10.3900), (124.9815, 10.3910)]),
+            LineString([(124.9800, 10.3905), (124.9815, 10.3905)]),
+        ]
+        closed_segments = [
+            {"sub_line": closed_lines[0], "seg_id": 10, "road_name": "Flooded South St"},
+            {"sub_line": closed_lines[1], "seg_id": 11, "road_name": "Flooded Connector"},
+            {"sub_line": closed_lines[2], "seg_id": 12, "road_name": "Flooded Mid Barrier"},
+        ]
+
+        return {
+            "graph": G,
+            "sub_segments": open_subs,
+            "sub_lines": open_lines,
+            "spatial_tree": STRtree(open_lines),
+            "closed_lines": closed_lines,
+            "closed_segments": closed_segments,
+            "closed_spatial_tree": STRtree(closed_lines),
+            "largest_cc": {o1, o2, o3},
+        }
+
+    def test_user_standing_on_closed_flooded_road_is_trapped_and_not_routed(self):
+        fake_net = self._build_trapped_test_network()
+        with patch("services.pathfinding.get_road_network", return_value=fake_net):
+            # User right on Flooded South St (~110m south of North Highway)
+            access = assess_user_start_access(10.39001, 124.9808)
+            self.assertTrue(access["trapped"])
+            self.assertEqual(access["reason"], "on_closed_road")
+
+            route = calculate_route_with_edge_snapping(10.39001, 124.9808, 10.3910, 124.9828)
+            self.assertIsNone(route)
+
+    def test_user_separated_from_open_road_by_closed_road_is_trapped(self):
+        fake_net = self._build_trapped_test_network()
+        with patch("services.pathfinding.get_road_network", return_value=fake_net):
+            # User in middle of residential block (lat=10.39025, lng=124.9807):
+            # walking north to North Highway crosses Flooded Mid Barrier (lat=10.3905)
+            access = assess_user_start_access(10.39025, 124.9807)
+            self.assertTrue(access["trapped"])
+            self.assertIn(access["reason"], {"surrounded_by_closed_roads", "blocked_access_road"})
+
+            route = calculate_route_with_edge_snapping(10.39025, 124.9807, 10.3910, 124.9828)
+            self.assertIsNone(route)
+
+    def test_user_on_disconnected_open_road_island_does_not_jump_to_main_network(self):
+        fake_net = self._build_trapped_test_network()
+        with patch("services.pathfinding.get_road_network", return_value=fake_net):
+            # User standing right on Isolated Alley (disconnected from North Highway)
+            access = assess_user_start_access(10.38951, 124.9822)
+            self.assertFalse(access["trapped"])
+            self.assertIsNotNone(access["snap"])
+            self.assertFalse(access["snap"][3])  # is_connected == False (stayed on isolated alley)
+            self.assertEqual(access["snap"][2]["road_name"], "Isolated Alley")
+
+            # Cannot reach a center on North Highway
+            route = calculate_route_with_edge_snapping(10.38951, 124.9822, 10.3910, 124.9828)
+            self.assertIsNone(route)
+
+    def test_user_on_open_road_near_closed_junction_still_routes_safely(self):
+        fake_net = self._build_trapped_test_network()
+        with patch("services.pathfinding.get_road_network", return_value=fake_net):
+            # User standing right on North Highway near the junction o2 with Flooded Connector
+            access = assess_user_start_access(10.39102, 124.98155)
+            self.assertFalse(access["trapped"])
+            route = calculate_route_with_edge_snapping(10.39102, 124.98155, 10.3910, 124.9828)
+            self.assertIsNotNone(route)
+            self.assertGreater(route["road_distance_meters"], 50.0)
+
+    def test_off_road_user_with_no_closed_roads_nearby_routes_normally(self):
+        fake_net = self._build_trapped_test_network()
+        with patch("services.pathfinding.get_road_network", return_value=fake_net):
+            # User 60m north of North Highway East (no closed roads near them)
+            access = assess_user_start_access(10.39154, 124.9824)
+            self.assertFalse(access["trapped"])
+            route = calculate_route_with_edge_snapping(10.39154, 124.9824, 10.3910, 124.9828)
+            self.assertIsNotNone(route)
+
+    def test_off_road_user_40m_from_isolated_pocket_does_not_jump_to_distant_main_road(self):
+        fake_net = self._build_trapped_test_network()
+        with patch("services.pathfinding.get_road_network", return_value=fake_net):
+            # User is ~45m south of Isolated Alley (lat=10.3891, lng=124.9822) —
+            # closer to Isolated Alley (~45m) than North Highway (~210m).
+            access = assess_user_start_access(10.3891, 124.9822)
+            self.assertFalse(access["trapped"])
+            self.assertIsNotNone(access["snap"])
+            self.assertFalse(access["snap"][3])  # stayed on Isolated Alley, did not leap to North Highway
+            self.assertEqual(access["snap"][2]["road_name"], "Isolated Alley")
+            route = calculate_route_with_edge_snapping(10.3891, 124.9822, 10.3910, 124.9828)
+            self.assertIsNone(route)
+
+    def test_user_whose_only_nearby_access_road_is_closed_at_65m_is_trapped(self):
+        fake_net = self._build_trapped_test_network()
+        with patch("services.pathfinding.get_road_network", return_value=fake_net):
+            # User is ~65m south of Flooded South St (lat=10.3894, lng=124.9806):
+            # nearest road is closed (65m), nearest open road is >150m away
+            access = assess_user_start_access(10.3894, 124.9806)
+            self.assertTrue(access["trapped"])
+            self.assertEqual(access["reason"], "blocked_access_road")
+            route = calculate_route_with_edge_snapping(10.3894, 124.9806, 10.3910, 124.9828)
+            self.assertIsNone(route)
 
 
 if __name__ == "__main__":

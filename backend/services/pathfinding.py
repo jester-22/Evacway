@@ -22,6 +22,12 @@ CLOSED_ROAD_PENALTY = 1000000
 HAZARD_ZONE_HIGH_RISK_PENALTY = 15.0
 HAZARD_ZONE_DEFAULT_PENALTY = 8.0
 MAX_ENTRANCE_SNAP_DISTANCE_METERS = 25.0
+TRAPPED_ON_CLOSED_ROAD_DISTANCE_METERS = 25.0
+TRAPPED_MIN_OPEN_ESCAPE_DISTANCE_METERS = 18.0
+TRAPPED_ISOLATED_ROAD_SNAP_METERS = 35.0
+TRAPPED_BLOCKED_ACCESS_CLOSED_METERS = 100.0
+TRAPPED_BLOCKED_ACCESS_OPEN_METERS = 45.0
+MAX_CONNECTED_JUMP_OVER_ISOLATED_METERS = 15.0
 
 _cached_network = None
 
@@ -95,9 +101,12 @@ def get_road_network():
 
     segments = RoadSegment.query.all()
 
-    # 1. Keep only open segments. Excluding the closed edge is sufficient; removing
-    # its endpoints would also block every open cross street sharing the junction.
+    # 1. Separate open and closed segments. Closed edges are excluded from routing,
+    # while their geometry is kept in a spatial index so trapped users cannot snap
+    # across closed/flooded roads onto distant open streets.
     open_segments = []
+    closed_lines = []
+    closed_segments = []
 
     for seg in segments:
         if not seg.geom:
@@ -110,6 +119,20 @@ def get_road_network():
 
         if not seg.is_closed:
             open_segments.append((seg, line))
+        else:
+            coords = list(line.coords)
+            for i in range(len(coords) - 1):
+                lng1, lat1 = coords[i]
+                lng2, lat2 = coords[i + 1]
+                closed_sub = LineString([(lng1, lat1), (lng2, lat2)])
+                closed_lines.append(closed_sub)
+                closed_segments.append(
+                    {
+                        "sub_line": closed_sub,
+                        "seg_id": seg.id,
+                        "road_name": seg.road_name or "Closed Road",
+                    }
+                )
 
     # Load active flood / landslide hazard zone polygons to penalize overlapping road edges
     # cleanly without severing road connectivity when no alternative road exists.
@@ -181,6 +204,7 @@ def get_road_network():
             )
 
     spatial_tree = STRtree(sub_lines) if sub_lines else None
+    closed_spatial_tree = STRtree(closed_lines) if closed_lines else None
 
     # Identify the largest connected component for connectivity validation
     largest_cc = set()
@@ -194,6 +218,9 @@ def get_road_network():
         "sub_segments": sub_segments,
         "sub_lines": sub_lines,
         "spatial_tree": spatial_tree,
+        "closed_lines": closed_lines,
+        "closed_segments": closed_segments,
+        "closed_spatial_tree": closed_spatial_tree,
         "largest_cc": largest_cc,
         "closed_ids": closed_ids,
     }
@@ -292,8 +319,230 @@ def snap_point_to_road(lat, lng, snap_to_intersection=False, heading=None):
     return (snap_lat, snap_lng), dist_meters, best_sub, is_connected
 
 
+def _access_line_crosses_closed_road(
+    start_lat, start_lng, snap_lat, snap_lng, closed_lines, closed_spatial_tree
+):
+    """
+    Returns True if walking straight from (start_lat, start_lng) to (snap_lat, snap_lng)
+    crosses or runs along a closed road segment. Trims the final ~3m near the open-road
+    snap point so standing on an open street at a junction with a closed street is not
+    falsely flagged as crossing the closed street.
+    """
+    if closed_spatial_tree is None or not closed_lines:
+        return False
+
+    dist_m = haversine(start_lat, start_lng, snap_lat, snap_lng) * 1000.0
+    if dist_m <= 1.0:
+        return False
+
+    # Trim ~3m (capped at 20% of segment length) off the snap endpoint so touching a
+    # shared intersection vertex with a closed road doesn't count as crossing it.
+    trim_ratio = min(0.20, 3.0 / max(dist_m, 3.0))
+    end_lat = start_lat + (snap_lat - start_lat) * (1.0 - trim_ratio)
+    end_lng = start_lng + (snap_lng - start_lng) * (1.0 - trim_ratio)
+    trimmed_line = LineString([(start_lng, start_lat), (end_lng, end_lat)])
+
+    try:
+        # Small ~2m buffer catches standing directly on a closed road polyline despite GPS/rounding jitter
+        nearby_closed_idxs = closed_spatial_tree.query(trimmed_line.buffer(0.00002))
+    except Exception:
+        return False
+
+    for idx in nearby_closed_idxs:
+        closed_line = closed_lines[int(idx)]
+        try:
+            if trimmed_line.intersects(closed_line):
+                return True
+            # Also reject if the midpoint/start lies right on top of a closed road (~3m)
+            if trimmed_line.distance(closed_line) <= 0.000025:
+                # Only treat proximity as blocked when it actually gets closer to the closed road
+                # than the open road snap distance (avoids flagging an open parallel sidewalk).
+                start_pt = Point(start_lng, start_lat)
+                c_proj = closed_line.interpolate(closed_line.project(start_pt))
+                d_start_closed = haversine(start_lat, start_lng, c_proj.y, c_proj.x) * 1000.0
+                if d_start_closed <= 6.0 and d_start_closed + 3.0 < dist_m:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def assess_user_start_access(lat, lng, heading=None):
+    """
+    Evaluates whether a user at (lat, lng) can safely reach an open road without
+    crossing closed/flooded roads or jumping across disconnected road pockets.
+    Returns a dict:
+      trapped: bool
+      reason: str | None ('on_closed_road' | 'surrounded_by_closed_roads' | 'blocked_access_road' | 'no_open_roads')
+      snap: ((snap_lat, snap_lng), dist_m, sub, is_connected) | None
+      nearest_closed_meters: float | None
+      nearest_closed_road: str | None
+    """
+    net = get_road_network()
+    spatial_tree = net.get("spatial_tree")
+    sub_segments = net.get("sub_segments") or []
+    closed_spatial_tree = net.get("closed_spatial_tree")
+    closed_lines = net.get("closed_lines") or []
+    closed_segments = net.get("closed_segments") or []
+    largest_cc = net.get("largest_cc") or set()
+
+    if spatial_tree is None or not sub_segments:
+        return {
+            "trapped": True,
+            "reason": "no_open_roads",
+            "snap": None,
+            "nearest_closed_meters": None,
+            "nearest_closed_road": None,
+        }
+
+    p = Point(lng, lat)
+    valid_heading = (
+        float(heading) % 360.0
+        if heading is not None and isinstance(heading, (int, float)) and math.isfinite(heading)
+        else None
+    )
+
+    nearest_closed_m = None
+    nearest_closed_road = None
+    if closed_spatial_tree is not None and closed_lines:
+        try:
+            c_idx = int(closed_spatial_tree.nearest(p))
+            c_line = closed_lines[c_idx]
+            c_proj = c_line.interpolate(c_line.project(p))
+            nearest_closed_m = haversine(lat, lng, c_proj.y, c_proj.x) * 1000.0
+            if c_idx < len(closed_segments):
+                nearest_closed_road = closed_segments[c_idx].get("road_name")
+        except Exception:
+            nearest_closed_m = None
+
+    # Gather nearby open road candidates (~120m radius) plus nearest open road
+    candidate_indices = set()
+    try:
+        for idx in spatial_tree.query(p.buffer(0.0011)):
+            candidate_indices.add(int(idx))
+    except Exception:
+        pass
+    candidate_indices.add(int(spatial_tree.nearest(p)))
+
+    evaluated = []
+    for idx in candidate_indices:
+        sub = sub_segments[idx]
+        proj = sub["sub_line"].project(p)
+        snap_geom = sub["sub_line"].interpolate(proj)
+        c_lat = round(snap_geom.y, 6)
+        c_lng = round(snap_geom.x, 6)
+        dist_m = haversine(lat, lng, c_lat, c_lng) * 1000.0
+        u, v = sub["u"], sub["v"]
+        is_conn = (u in largest_cc) or (v in largest_cc)
+        crosses_closed = _access_line_crosses_closed_road(
+            lat, lng, c_lat, c_lng, closed_lines, closed_spatial_tree
+        )
+
+        heading_penalty = 0.0
+        if valid_heading is not None and dist_m <= 35.0 and u != v:
+            seg_bearing_fwd = calculate_bearing(u[0], u[1], v[0], v[1])
+            seg_bearing_rev = (seg_bearing_fwd + 180.0) % 360.0
+            axis_misalignment = min(
+                smallest_angle_diff(valid_heading, seg_bearing_fwd),
+                smallest_angle_diff(valid_heading, seg_bearing_rev),
+            )
+            if axis_misalignment > 20.0:
+                heading_penalty = ((axis_misalignment - 20.0) / 70.0) * 12.0
+
+        evaluated.append(
+            {
+                "snap_pt": (c_lat, c_lng),
+                "dist_m": dist_m,
+                "score": dist_m + heading_penalty,
+                "sub": sub,
+                "is_conn": is_conn,
+                "crosses_closed": crosses_closed,
+            }
+        )
+
+    evaluated.sort(key=lambda item: item["dist_m"])
+    nearest_open = evaluated[0]
+
+    # 1. Standing directly on/along a closed road with no immediately adjacent open road
+    if (
+        nearest_closed_m is not None
+        and nearest_closed_m <= TRAPPED_ON_CLOSED_ROAD_DISTANCE_METERS
+        and nearest_open["dist_m"] > TRAPPED_MIN_OPEN_ESCAPE_DISTANCE_METERS
+        and (nearest_closed_m + 5.0) < nearest_open["dist_m"]
+    ):
+        return {
+            "trapped": True,
+            "reason": "on_closed_road",
+            "snap": None,
+            "nearest_closed_meters": round(nearest_closed_m, 1),
+            "nearest_closed_road": nearest_closed_road,
+        }
+
+    # 2. Filter out open segments whose straight walk crosses a closed road
+    unblocked = [item for item in evaluated if not item["crosses_closed"]]
+    if not unblocked:
+        return {
+            "trapped": True,
+            "reason": "surrounded_by_closed_roads",
+            "snap": None,
+            "nearest_closed_meters": round(nearest_closed_m, 1) if nearest_closed_m is not None else None,
+            "nearest_closed_road": nearest_closed_road,
+        }
+
+    # 3. User's access road is closed while the nearest unblocked open road is far across another block/terrain
+    nearest_unblocked = min(unblocked, key=lambda item: item["dist_m"])
+    if (
+        nearest_closed_m is not None
+        and nearest_closed_m <= TRAPPED_BLOCKED_ACCESS_CLOSED_METERS
+        and nearest_unblocked["dist_m"] > TRAPPED_BLOCKED_ACCESS_OPEN_METERS
+        and nearest_closed_m < nearest_unblocked["dist_m"]
+    ):
+        return {
+            "trapped": True,
+            "reason": "blocked_access_road",
+            "snap": None,
+            "nearest_closed_meters": round(nearest_closed_m, 1),
+            "nearest_closed_road": nearest_closed_road,
+        }
+
+    # 4. User is physically closer to a disconnected open-road pocket (isolated by closed roads):
+    # Do NOT leap across blocks/hazards to a distant open road in largest_cc.
+    connected_unblocked = [item for item in unblocked if item["is_conn"]]
+    nearest_connected = min(connected_unblocked, key=lambda item: item["dist_m"]) if connected_unblocked else None
+    if (
+        not nearest_unblocked["is_conn"]
+        and (
+            nearest_connected is None
+            or nearest_connected["dist_m"] > (nearest_unblocked["dist_m"] + MAX_CONNECTED_JUMP_OVER_ISOLATED_METERS)
+        )
+    ):
+        return {
+            "trapped": False,
+            "reason": None,
+            "snap": (
+                nearest_unblocked["snap_pt"],
+                nearest_unblocked["dist_m"],
+                nearest_unblocked["sub"],
+                False,
+            ),
+            "nearest_closed_meters": round(nearest_closed_m, 1) if nearest_closed_m is not None else None,
+            "nearest_closed_road": nearest_closed_road,
+        }
+
+    # Pick the best unblocked candidate (preferring connected open roads only when within jump tolerance)
+    pool = connected_unblocked if connected_unblocked else unblocked
+    best = min(pool, key=lambda item: item["score"])
+    return {
+        "trapped": False,
+        "reason": None,
+        "snap": (best["snap_pt"], best["dist_m"], best["sub"], best["is_conn"]),
+        "nearest_closed_meters": round(nearest_closed_m, 1) if nearest_closed_m is not None else None,
+        "nearest_closed_road": nearest_closed_road,
+    }
+
+
 def calculate_route_with_edge_snapping(
-    start_lat, start_lng, target_lat, target_lng, heading=None
+    start_lat, start_lng, target_lat, target_lng, heading=None, start_snap=None
 ):
     """
     Computes a walking route from start to target by snapping BOTH endpoints
@@ -314,9 +563,13 @@ def calculate_route_with_edge_snapping(
         else None
     )
 
-    u_snap, u_dist, u_sub, u_connected = snap_point_to_road(
-        start_lat, start_lng, snap_to_intersection=False, heading=valid_heading
-    )
+    if start_snap is not None:
+        u_snap, u_dist, u_sub, u_connected = start_snap
+    else:
+        start_access = assess_user_start_access(start_lat, start_lng, heading=valid_heading)
+        if start_access["trapped"] or start_access["snap"] is None:
+            return None
+        u_snap, u_dist, u_sub, u_connected = start_access["snap"]
     t_snap, t_dist, t_sub, t_connected = snap_point_to_road(
         target_lat, target_lng, snap_to_intersection=False
     )
@@ -613,7 +866,11 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None, heading=None)
     center_candidates = []
     capacity_by_center = get_centers_free_capacity(route_centers)
 
-    for center in route_centers:
+    start_access = assess_user_start_access(user_lat, user_lng, heading=heading)
+    user_trapped = bool(start_access["trapped"])
+    start_snap = start_access["snap"]
+
+    for center in ([] if user_trapped else route_centers):
         if center.entrance_geom is None:
             continue
 
@@ -659,7 +916,12 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None, heading=None)
 
             # Calculate edge-snapped walking path
             route_res = calculate_route_with_edge_snapping(
-                user_lat, user_lng, entrance_lat, entrance_lng, heading=heading
+                user_lat,
+                user_lng,
+                entrance_lat,
+                entrance_lng,
+                heading=heading,
+                start_snap=start_snap,
             )
             if not route_res:
                 logger.warning(
@@ -755,14 +1017,35 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None, heading=None)
                 "longitude": c_lng,
             }
 
+        # If no center could be reached at all (0 reachable candidates) and closed roads
+        # exist while mapped active centers exist, all routes out to shelters are cut off
+        # (regardless of whether the user's side of the cut happens to be largest_cc).
+        net_now = get_road_network()
+        has_closed_roads = bool(net_now.get("closed_lines"))
+        has_mapped_centers = any(c.entrance_geom is not None for c in route_centers)
+        isolated_trapped = (
+            not center_candidates
+            and (
+                user_trapped
+                or (has_closed_roads and has_mapped_centers)
+            )
+        )
+        is_trapped = bool(user_trapped or isolated_trapped)
+        trapped_message = (
+            "You appear to be surrounded by closed or flooded roads. "
+            "Do not attempt to cross — stay put in a safe, elevated place and wait for rescue."
+        )
+
         blocked_result = {
             "no_roads_available": True,
             "all_blocked": True,
             "no_safe_center": True,
-            "fallback_state": "no_safe_center",
+            "user_trapped": is_trapped,
+            "trapped_reason": start_access.get("reason") or ("all_routes_blocked_by_closed_roads" if is_trapped else None),
+            "fallback_state": "trapped" if is_trapped else "no_safe_center",
             "evacuation_center": center_info,
             "assigned_center": center_info if center_id is not None else None,
-            "message": "No safe evacuation center with available spaces can be reached.",
+            "message": trapped_message if is_trapped else "No safe evacuation center with available spaces can be reached.",
             "route": [],
             "distance_km": None,
             "estimated_time_min": None,

@@ -167,11 +167,17 @@ function BarangayManager() {
     };
   }, [selectedBarangayQuery.data]);
 
+  const embeddedCenters = Array.isArray(selectedBarangayQuery.data?.evacuation_centers)
+    ? selectedBarangayQuery.data.evacuation_centers
+    : null;
+
   const centersQuery = useBarangayCenters(selectedBarangay?.id, {
-    enabled: selectedBarangay?.id != null,
+    enabled: selectedBarangay?.id != null && embeddedCenters === null,
   });
   const centers = useMemo(() => {
-    const rawCenters = Array.isArray(centersQuery.data) ? centersQuery.data : [];
+    const rawCenters = Array.isArray(centersQuery.data)
+      ? centersQuery.data
+      : embeddedCenters || [];
     return rawCenters.map((c) => {
       const rawRooms = Array.isArray(c.rooms) ? c.rooms : [];
       return {
@@ -207,7 +213,7 @@ function BarangayManager() {
         }),
       };
     });
-  }, [centersQuery.data]);
+  }, [centersQuery.data, embeddedCenters]);
 
   // Feedback banners
   const [error, setError] = useState("");

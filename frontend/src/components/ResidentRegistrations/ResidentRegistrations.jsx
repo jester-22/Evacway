@@ -22,6 +22,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../context/AuthContext";
 import { api } from "../../services/api";
 import { queryKeys, useBarangays } from "../../hooks/useEvacuationQueries";
+import { REGISTRATIONS_UPDATED_EVENT } from "../../utils/notificationSync";
 import { formatManilaDate } from "../../utils/dateTime";
 import {
   getLocalMinDobIso,
@@ -228,10 +229,12 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const refreshList = useCallback(async () => {
+  const refreshList = useCallback(async ({ silent = false } = {}) => {
     const requestNumber = ++listRequestRef.current;
-    setListLoading(true);
-    setListError("");
+    if (!silent) {
+      setListLoading(true);
+      setListError("");
+    }
     try {
       const [filtered, all] = await Promise.all([
         api.getResidentRegistrations({ status: activeStatus, search }),
@@ -247,12 +250,12 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
       });
       setCounts(nextCounts);
     } catch (error) {
-      if (requestNumber === listRequestRef.current) {
+      if (requestNumber === listRequestRef.current && !silent) {
         setRequests([]);
         setListError(error.message || "Resident registrations could not be loaded.");
       }
     } finally {
-      if (requestNumber === listRequestRef.current) setListLoading(false);
+      if (requestNumber === listRequestRef.current && !silent) setListLoading(false);
     }
   }, [activeStatus, search]);
 
@@ -260,6 +263,14 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
     const timer = window.setTimeout(refreshList, search ? 220 : 0);
     return () => window.clearTimeout(timer);
   }, [refreshKey, refreshList, search]);
+
+  useEffect(() => {
+    const handleSilentRefresh = () => {
+      refreshList({ silent: true });
+    };
+    window.addEventListener(REGISTRATIONS_UPDATED_EVENT, handleSilentRefresh);
+    return () => window.removeEventListener(REGISTRATIONS_UPDATED_EVENT, handleSilentRefresh);
+  }, [refreshList]);
 
   const handleStatusFilterChange = useCallback(
     (nextStatus) => {

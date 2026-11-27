@@ -97,12 +97,14 @@ def list_users():
 @users_bp.route('/api/users/me', methods=['GET'])
 @role_required('admin', 'lgu_personnel')
 def get_my_profile():
-    return jsonify(current_user().to_dict())
+    from routes.auth import _staff_profile_payload
+    return jsonify(_staff_profile_payload(current_user()))
 
 
 @users_bp.route('/api/users/me', methods=['PATCH'])
 @role_required('admin', 'lgu_personnel')
 def update_my_profile():
+    from routes.auth import _is_deliverable_email, _staff_profile_payload
     user = current_user()
     data = request.get_json(silent=True) or {}
     name = str(data.get('name') or '').strip()
@@ -123,6 +125,13 @@ def update_my_profile():
         return jsonify({'error': recovery_err}), 400
     if contact_number and len(contact_number) > 20:
         return jsonify({'error': 'Contact number must be 20 characters or fewer'}), 400
+
+    next_recovery = recovery_email if recovery_email_provided else user.recovery_email
+    has_active_mfa = bool(user.totp_enabled) or user.role == 'admin'
+    if has_active_mfa and not _is_deliverable_email(email) and not _is_deliverable_email(next_recovery):
+        return jsonify({
+            'error': 'Accounts with two-factor authentication enabled must keep a valid deliverable email address.'
+        }), 400
 
     duplicate = User.query.filter(
         func.lower(User.email) == email,
@@ -147,7 +156,7 @@ def update_my_profile():
     except IntegrityError:
         db.session.rollback()
         return jsonify({'error': 'A user with this email already exists'}), 409
-    return jsonify(user.to_dict())
+    return jsonify(_staff_profile_payload(user))
 
 
 @users_bp.route('/api/users/me/password', methods=['POST'])

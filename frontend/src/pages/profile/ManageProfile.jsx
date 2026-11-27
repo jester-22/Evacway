@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
@@ -38,7 +39,7 @@ import Sidebar from "../../components/Sidebar/Sidebar";
 import "./ManageProfile.css";
 
 export default function ManageProfile() {
-  const { user, logout, updateUser } = useAuth();
+  const { user, logout, updateUser, completeStaffLogin } = useAuth();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
@@ -108,6 +109,40 @@ export default function ManageProfile() {
   const [resetStatusMsg, setResetStatusMsg] = useState("");
   const [resetErrorMsg, setResetErrorMsg] = useState("");
   const cooldownTimerRef = useRef(null);
+
+  // Two-Factor Authentication (2FA) State
+  const [mfaSending, setMfaSending] = useState(false);
+  const [mfaConfirming, setMfaConfirming] = useState(false);
+  const [mfaDisabling, setMfaDisabling] = useState(false);
+  const [mfaVerificationToken, setMfaVerificationToken] = useState("");
+  const [mfaMaskedEmail, setMfaMaskedEmail] = useState("");
+  const [mfaOtpCode, setMfaOtpCode] = useState("");
+  const [mfaResendCooldown, setMfaResendCooldown] = useState(0);
+  const [mfaShowDisableForm, setMfaShowDisableForm] = useState(false);
+  const [mfaDisablePassword, setMfaDisablePassword] = useState("");
+  const [mfaShowDisablePassword, setMfaShowDisablePassword] = useState(false);
+  const [mfaSuccessMsg, setMfaSuccessMsg] = useState("");
+  const [mfaErrorMsg, setMfaErrorMsg] = useState("");
+
+  // Refresh current profile from backend on mount so 2FA flags stay in sync
+  useEffect(() => {
+    let active = true;
+    api.getMyProfile()
+      .then((fresh) => {
+        if (active && fresh) updateUser(fresh);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (mfaResendCooldown <= 0) return undefined;
+    const timer = setTimeout(() => {
+      setMfaResendCooldown((prev) => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [mfaResendCooldown]);
 
   useEffect(() => {
     if (resetCooldown > 0) {
@@ -244,6 +279,8 @@ export default function ManageProfile() {
 
       // Update state in AuthContext without reload
       updateUser(updated);
+      setMfaVerificationToken("");
+      setMfaOtpCode("");
 
       // Invalidate queries
       await Promise.all([
@@ -313,6 +350,127 @@ export default function ManageProfile() {
       setResetErrorMsg(err.message || "Could not send password reset email.");
     } finally {
       setResetSending(false);
+    }
+  }
+
+  // Two-Factor Authentication (2FA) Actions
+  const mfaRequiredByPolicy = Boolean(user?.mfa_required_by_policy ?? isAdmin);
+  const mfaEnabled = Boolean(user?.mfa_enabled ?? (user?.totp_enabled || isAdmin));
+  const mfaDeliveryEmail =
+    user?.mfa_delivery_email ??
+    (user?.recovery_email || user?.email || "");
+  const mfaEmailDeliverable =
+    user?.mfa_email_deliverable !== undefined
+      ? Boolean(user.mfa_email_deliverable)
+      : Boolean(
+          mfaDeliveryEmail &&
+            !(/\.(local|localhost|invalid|internal|lan)$/i.test(mfaDeliveryEmail.trim()))
+        );
+  const mfaEnableModalOpen = Boolean(!mfaRequiredByPolicy && !mfaEnabled && mfaVerificationToken);
+  const mfaDisableModalOpen = Boolean(!mfaRequiredByPolicy && mfaEnabled && mfaShowDisableForm);
+
+  useEffect(() => {
+    if (!mfaEnableModalOpen && !mfaDisableModalOpen) return undefined;
+    function handleEsc(e) {
+      if (e.key !== "Escape") return;
+      if (mfaEnableModalOpen && !mfaConfirming) {
+        setMfaVerificationToken("");
+        setMfaOtpCode("");
+        setMfaErrorMsg("");
+        setMfaSuccessMsg("");
+      } else if (mfaDisableModalOpen && !mfaDisabling) {
+        setMfaShowDisableForm(false);
+        setMfaDisablePassword("");
+        setMfaErrorMsg("");
+      }
+    }
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [mfaEnableModalOpen, mfaDisableModalOpen, mfaConfirming, mfaDisabling]);
+
+  async function handleSendMfaEnableCode() {
+    if (mfaSending || mfaResendCooldown > 0) return;
+    setMfaSending(true);
+    setMfaSuccessMsg("");
+    setMfaErrorMsg("");
+    try {
+      const res = await api.sendMyMfaEnableCode();
+      setMfaVerificationToken(res.verification_token || "");
+      setMfaMaskedEmail(res.masked_email || mfaDeliveryEmail);
+      setMfaOtpCode("");
+      setMfaResendCooldown(Number(res.resend_cooldown_seconds) || 30);
+      setMfaSuccessMsg(
+        res.message || `A 6-digit test code was sent to ${res.masked_email || mfaDeliveryEmail}.`
+      );
+    } catch (err) {
+      setMfaErrorMsg(
+        err.message || "Could not send a verification code to your email. Please check your email address."
+      );
+    } finally {
+      setMfaSending(false);
+    }
+  }
+
+  async function handleConfirmMfaEnable(e) {
+    e.preventDefault();
+    if (mfaConfirming || !mfaVerificationToken) return;
+    setMfaConfirming(true);
+    setMfaSuccessMsg("");
+    setMfaErrorMsg("");
+    try {
+      const res = await api.confirmMyMfaEnable(mfaVerificationToken, mfaOtpCode);
+      if (res.access_token && res.user) {
+        completeStaffLogin(res);
+      } else if (res.user) {
+        updateUser(res.user);
+      }
+      setMfaVerificationToken("");
+      setMfaOtpCode("");
+      setMfaResendCooldown(0);
+      setMfaSuccessMsg(
+        res.message || "Two-factor authentication is now enabled on your account."
+      );
+      await queryClient.invalidateQueries({ queryKey: queryKeys.logs });
+    } catch (err) {
+      setMfaErrorMsg(err.message || "Invalid verification code. Please check your email and try again.");
+    } finally {
+      setMfaConfirming(false);
+    }
+  }
+
+  function handleCancelMfaEnable() {
+    setMfaVerificationToken("");
+    setMfaOtpCode("");
+    setMfaErrorMsg("");
+    setMfaSuccessMsg("");
+  }
+
+  async function handleDisableMfa(e) {
+    e.preventDefault();
+    if (mfaDisabling) return;
+    if (!mfaDisablePassword) {
+      setMfaErrorMsg("Enter your current password to disable two-factor authentication.");
+      return;
+    }
+    setMfaDisabling(true);
+    setMfaSuccessMsg("");
+    setMfaErrorMsg("");
+    try {
+      const res = await api.disableMyMfa(mfaDisablePassword);
+      if (res.access_token && res.user) {
+        completeStaffLogin(res);
+      } else if (res.user) {
+        updateUser(res.user);
+      }
+      setMfaShowDisableForm(false);
+      setMfaDisablePassword("");
+      setMfaShowDisablePassword(false);
+      setMfaSuccessMsg(res.message || "Two-factor authentication has been disabled.");
+      await queryClient.invalidateQueries({ queryKey: queryKeys.logs });
+    } catch (err) {
+      setMfaErrorMsg(err.message || "Could not disable two-factor authentication.");
+    } finally {
+      setMfaDisabling(false);
     }
   }
 
@@ -580,7 +738,337 @@ export default function ManageProfile() {
             </div>
           </section>
 
-          {/* 3. PASSWORD & SECURITY SECTION */}
+          {/* 3. TWO-FACTOR AUTHENTICATION (2FA) SECTION */}
+          <section className="profile-card ds-card" aria-labelledby="mfa-heading">
+            <div className="profile-card-header">
+              <div>
+                <h2 id="mfa-heading" className="profile-card-title">
+                  Two-Factor Authentication (2FA)
+                </h2>
+                <p className="profile-card-desc">
+                  Add an extra layer of sign-in security with a one-time 6-digit verification code sent to your email.
+                </p>
+              </div>
+              <span
+                className={`profile-status-pill ${mfaEnabled ? "is-active" : "is-inactive"}`}
+              >
+                <FontAwesomeIcon icon={mfaEnabled ? faCircleCheck : faShieldHalved} />
+                <span>
+                  {mfaRequiredByPolicy
+                    ? "Required & Active"
+                    : mfaEnabled
+                    ? "Enabled"
+                    : "Disabled"}
+                </span>
+              </span>
+            </div>
+
+            {mfaSuccessMsg && !mfaEnableModalOpen && !mfaDisableModalOpen && (
+              <div className="profile-alert is-success ds-banner ds-banner--success" role="status">
+                <FontAwesomeIcon icon={faCircleCheck} />
+                <span>{mfaSuccessMsg}</span>
+              </div>
+            )}
+
+            {mfaErrorMsg && !mfaEnableModalOpen && !mfaDisableModalOpen && (
+              <div className="profile-alert is-error ds-banner ds-banner--danger" role="alert">
+                <FontAwesomeIcon icon={faTriangleExclamation} />
+                <span>{mfaErrorMsg}</span>
+              </div>
+            )}
+
+            <div className="profile-mfa-summary">
+              <div className="profile-mfa-meta">
+                <p className="profile-mfa-meta-title">
+                  Email verification code (OTP)
+                </p>
+                <p className="profile-mfa-meta-desc">
+                  {mfaEmailDeliverable ? (
+                    <>
+                      Verification codes are sent to <strong>{mfaDeliveryEmail}</strong>.
+                    </>
+                  ) : (
+                    <>
+                      Your current address (<strong>{user?.email || "—"}</strong>) cannot receive external email codes. Update your email in Personal Information to a working address (e.g. Gmail) first.
+                    </>
+                  )}
+                </p>
+              </div>
+
+              {!mfaRequiredByPolicy && !mfaEnabled && (
+                <button
+                  type="button"
+                  onClick={handleSendMfaEnableCode}
+                  disabled={mfaSending || !mfaEmailDeliverable}
+                  className="profile-btn profile-btn-primary ds-btn ds-btn--primary"
+                >
+                  <FontAwesomeIcon icon={faPaperPlane} />
+                  <span>
+                    {mfaSending ? "Sending test code..." : "Test Email & Enable 2FA"}
+                  </span>
+                </button>
+              )}
+
+              {!mfaRequiredByPolicy && mfaEnabled && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMfaErrorMsg("");
+                    setMfaSuccessMsg("");
+                    setMfaDisablePassword("");
+                    setMfaShowDisableForm(true);
+                  }}
+                  className="profile-btn profile-btn-danger-outline"
+                >
+                  <FontAwesomeIcon icon={faXmark} />
+                  <span>Disable 2FA</span>
+                </button>
+              )}
+            </div>
+
+            {mfaRequiredByPolicy && (
+              <p className="profile-mfa-panel-desc" style={{ marginTop: "12px" }}>
+                Two-factor authentication is enforced by system policy for {isAdmin ? "Administrator" : "LGU"} accounts and cannot be turned off.
+              </p>
+            )}
+          </section>
+
+          {/* ENABLE 2FA OTP CONFIRMATION MODAL */}
+          {mfaEnableModalOpen &&
+            createPortal(
+              <div
+                className="profile-modal-backdrop"
+                role="presentation"
+                onClick={() => {
+                  if (!mfaConfirming) handleCancelMfaEnable();
+                }}
+              >
+                <div
+                  className="profile-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="mfa-enable-modal-title"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="profile-modal-header">
+                    <div className="profile-modal-title-group">
+                      <span className="profile-modal-icon is-brand" aria-hidden="true">
+                        <FontAwesomeIcon icon={faShieldHalved} />
+                      </span>
+                      <div>
+                        <h3 id="mfa-enable-modal-title" className="profile-modal-title">
+                          Confirm your email works
+                        </h3>
+                        <p className="profile-modal-subtitle">
+                          Two-Factor Authentication (2FA)
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="profile-modal-close"
+                      onClick={handleCancelMfaEnable}
+                      disabled={mfaConfirming}
+                      aria-label="Close modal"
+                    >
+                      <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleConfirmMfaEnable} className="profile-modal-body">
+                    <p className="profile-modal-desc">
+                      We sent a 6-digit test verification code to{" "}
+                      <strong>{mfaMaskedEmail || mfaDeliveryEmail}</strong>. Enter it below to verify email delivery and activate 2FA on your account.
+                    </p>
+
+                    {mfaSuccessMsg && (
+                      <div className="profile-alert is-success ds-banner ds-banner--success" role="status">
+                        <FontAwesomeIcon icon={faCircleCheck} />
+                        <span>{mfaSuccessMsg}</span>
+                      </div>
+                    )}
+
+                    {mfaErrorMsg && (
+                      <div className="profile-alert is-error ds-banner ds-banner--danger" role="alert">
+                        <FontAwesomeIcon icon={faTriangleExclamation} />
+                        <span>{mfaErrorMsg}</span>
+                      </div>
+                    )}
+
+                    <div className="profile-input-group">
+                      <label htmlFor="profile-mfa-otp">6-Digit Verification Code</label>
+                      <input
+                        id="profile-mfa-otp"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        autoFocus
+                        maxLength={6}
+                        required
+                        value={mfaOtpCode}
+                        onChange={(e) =>
+                          setMfaOtpCode(e.target.value.replace(/[^\d]/g, "").slice(0, 6))
+                        }
+                        className="profile-input profile-mfa-otp-input is-modal"
+                        placeholder="000000"
+                      />
+                    </div>
+
+                    <div className="profile-modal-resend-row">
+                      <span className="profile-modal-resend-hint">Didn&apos;t receive the code?</span>
+                      <button
+                        type="button"
+                        onClick={handleSendMfaEnableCode}
+                        disabled={mfaSending || mfaResendCooldown > 0}
+                        className="profile-modal-resend-btn"
+                      >
+                        {mfaSending
+                          ? "Sending..."
+                          : mfaResendCooldown > 0
+                          ? `Resend in ${mfaResendCooldown}s`
+                          : "Resend code"}
+                      </button>
+                    </div>
+
+                    <div className="profile-modal-footer">
+                      <button
+                        type="button"
+                        onClick={handleCancelMfaEnable}
+                        disabled={mfaConfirming}
+                        className="profile-btn profile-btn-secondary"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={mfaConfirming || mfaOtpCode.length !== 6}
+                        className="profile-btn profile-btn-primary"
+                      >
+                        <FontAwesomeIcon icon={faCheck} />
+                        <span>{mfaConfirming ? "Confirming..." : "Confirm & Enable 2FA"}</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>,
+              document.body
+            )}
+
+          {/* DISABLE 2FA CONFIRMATION MODAL */}
+          {mfaDisableModalOpen &&
+            createPortal(
+              <div
+                className="profile-modal-backdrop"
+                role="presentation"
+                onClick={() => {
+                  if (!mfaDisabling) {
+                    setMfaShowDisableForm(false);
+                    setMfaDisablePassword("");
+                    setMfaErrorMsg("");
+                  }
+                }}
+              >
+                <div
+                  className="profile-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="mfa-disable-modal-title"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="profile-modal-header">
+                    <div className="profile-modal-title-group">
+                      <span className="profile-modal-icon is-danger" aria-hidden="true">
+                        <FontAwesomeIcon icon={faTriangleExclamation} />
+                      </span>
+                      <div>
+                        <h3 id="mfa-disable-modal-title" className="profile-modal-title">
+                          Disable two-factor authentication?
+                        </h3>
+                        <p className="profile-modal-subtitle">
+                          Confirm with your password
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="profile-modal-close"
+                      onClick={() => {
+                        setMfaShowDisableForm(false);
+                        setMfaDisablePassword("");
+                        setMfaErrorMsg("");
+                      }}
+                      disabled={mfaDisabling}
+                      aria-label="Close modal"
+                    >
+                      <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleDisableMfa} className="profile-modal-body">
+                    <p className="profile-modal-desc">
+                      Your account will only require your email and password at sign in. Enter your current password to confirm disabling 2FA.
+                    </p>
+
+                    {mfaErrorMsg && (
+                      <div className="profile-alert is-error ds-banner ds-banner--danger" role="alert">
+                        <FontAwesomeIcon icon={faTriangleExclamation} />
+                        <span>{mfaErrorMsg}</span>
+                      </div>
+                    )}
+
+                    <div className="profile-input-group">
+                      <label htmlFor="mfa-disable-password">Current Password</label>
+                      <div className="profile-password-input-wrap">
+                        <input
+                          id="mfa-disable-password"
+                          type={mfaShowDisablePassword ? "text" : "password"}
+                          autoComplete="current-password"
+                          autoFocus
+                          required
+                          value={mfaDisablePassword}
+                          onChange={(e) => setMfaDisablePassword(e.target.value)}
+                          className="profile-input"
+                          placeholder="Enter current password"
+                        />
+                        <button
+                          type="button"
+                          className="profile-password-toggle"
+                          onClick={() => setMfaShowDisablePassword((prev) => !prev)}
+                          aria-label={mfaShowDisablePassword ? "Hide password" : "Show password"}
+                        >
+                          <FontAwesomeIcon icon={mfaShowDisablePassword ? faEyeSlash : faEye} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="profile-modal-footer">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMfaShowDisableForm(false);
+                          setMfaDisablePassword("");
+                          setMfaErrorMsg("");
+                        }}
+                        disabled={mfaDisabling}
+                        className="profile-btn profile-btn-secondary"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={mfaDisabling || !mfaDisablePassword}
+                        className="profile-btn profile-btn-danger"
+                      >
+                        <span>{mfaDisabling ? "Disabling..." : "Confirm Disable 2FA"}</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>,
+              document.body
+            )}
+
+          {/* 4. PASSWORD & SECURITY SECTION */}
           <section className="profile-card ds-card" aria-labelledby="password-heading">
             <div className="profile-card-header">
               <div>

@@ -7,10 +7,12 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, current_app, request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from models import (
     db,
@@ -29,7 +31,10 @@ from models import (
     User,
     RosterYear,
     philippines_now,
+    to_utc_iso,
 )
+from services.mailer import send_password_setup_email
+from services.password_setup import create_password_setup_token
 
 from utils import get_optional_caller, public_room_payload, role_required
 
@@ -2323,7 +2328,11 @@ def lookup_my_evacuation_center():
     matching_families = []
     normalized_name = normalize_name(full_name)
     if normalized_name and barangay_id and birthdate:
-        for family in Family.query.filter_by(barangay_id=barangay_id).all():
+        for family in Family.query.filter_by(
+            barangay_id=barangay_id,
+            searchable=True,
+            find_someone_opt_out=False,
+        ).all():
             if normalize_name(family.head_name) != normalized_name:
                 continue
             heads = Resident.query.filter_by(
@@ -2435,7 +2444,11 @@ def find_evacuation_center_for_resident():
         and barangay_id is not None
         and barangay_id > 0
     ):
-        families = Family.query.filter_by(searchable=True, barangay_id=barangay_id).all()
+        families = Family.query.filter_by(
+            searchable=True,
+            find_someone_opt_out=False,
+            barangay_id=barangay_id,
+        ).all()
         matching_families = []
         for family in families:
             residents = Resident.query.filter_by(family_id=family.id).all()
@@ -2496,6 +2509,243 @@ def resident_find_someone_privacy():
     family.find_someone_opt_out = not value
     db.session.commit()
     return jsonify({'searchable': bool(family.searchable), 'prompt_pending': False}), 200
+
+
+# =========================================================
+# RESIDENT ACCOUNT PROFILE (ACCOUNT-ONLY EDITS + ROSTER GUIDE)
+# =========================================================
+
+_RESIDENT_PASSWORD_POLICY_ERROR = (
+    'Password must be at least 8 characters and include uppercase, '
+    'lowercase, a number, and a special character.'
+)
+
+
+def _valid_resident_password(password):
+    if not isinstance(password, str) or len(password) < 8:
+        return False
+    return (
+        re.search(r'[A-Z]', password) is not None
+        and re.search(r'[a-z]', password) is not None
+        and re.search(r'[0-9]', password) is not None
+        and re.search(r'[^A-Za-z0-9\s]', password) is not None
+    )
+
+
+def _resident_profile_response(account):
+    resident = db.session.get(Resident, account.resident_id) if account.resident_id else None
+    family = db.session.get(Family, resident.family_id) if resident and resident.family_id else None
+    center = None
+    if resident:
+        assignment = EvacuationAssignment.query.filter_by(
+            resident_id=resident.id
+        ).order_by(EvacuationAssignment.id.asc()).first()
+        room = (
+            db.session.get(EvacuationCenterRoom, assignment.room_id)
+            if assignment and assignment.room_id
+            else None
+        )
+        center_id = (
+            room.evacuation_center_id
+            if room
+            else (assignment.evacuation_center_id if assignment else None)
+        )
+        if center_id:
+            center = db.session.query(
+                EvacuationCenter.id, EvacuationCenter.name
+            ).filter_by(id=center_id).first()
+
+    roster_full_name = resident.get_full_name() if resident else ''
+    effective_name = (account.display_name or '').strip() or roster_full_name or 'Resident'
+    effective_contact = (
+        (account.contact_number or '').strip()
+        or (resident.contact_number if resident else None)
+        or None
+    )
+    barangay_name = (
+        db.session.query(Barangay.name).filter_by(id=family.barangay_id).scalar()
+        if family and family.barangay_id
+        else None
+    )
+    if not barangay_name and resident:
+        barangay_name = resident.barangay
+
+    account_payload = {
+        'id': account.id,
+        'resident_id': account.resident_id,
+        'display_name': account.display_name or '',
+        'name': effective_name,
+        'email': account.email,
+        'contact_number': account.contact_number or '',
+        'effective_contact_number': effective_contact,
+        'role': 'resident',
+        'is_active': bool(account.is_active),
+        'created_at': to_utc_iso(account.created_at),
+        'updated_at': to_utc_iso(account.updated_at),
+        'last_login_at': to_utc_iso(account.last_login_at),
+    }
+
+    resident_record = {
+        'id': resident.id,
+        'full_name': roster_full_name,
+        'first_name': resident.first_name,
+        'middle_name': resident.middle_name,
+        'last_name': resident.last_name,
+        'suffix': resident.suffix,
+        'date_of_birth': resident.date_of_birth.isoformat() if resident.date_of_birth else None,
+        'age': resident.age,
+        'gender': resident.gender,
+        'barangay': barangay_name,
+        'address': resident.address,
+        'contact_number': resident.contact_number,
+        'household_head_name': (
+            (family.head_name if family and family.head_name else None)
+            or resident.household_head_name
+        ),
+        'relationship_to_head': resident.relationship_to_head,
+        'family_code': family.family_code if family else None,
+        'family_member_count': (
+            max(int(family.member_count or 1), 1)
+            if family
+            else 1
+        ),
+        'evacuation_center_name': center.name if center else None,
+    } if resident else None
+
+    user_sync = {
+        'id': account.id,
+        'name': effective_name,
+        'display_name': account.display_name,
+        'email': account.email,
+        'resident_id': account.resident_id,
+        'family_member_count': resident_record['family_member_count'] if resident_record else 1,
+        'contact_number': effective_contact,
+        'account_contact_number': account.contact_number,
+        'role': 'resident',
+        'is_active': bool(account.is_active),
+        'created_at': to_utc_iso(account.created_at),
+        'last_login_at': to_utc_iso(account.last_login_at),
+    }
+
+    return {
+        'account': account_payload,
+        'resident_record': resident_record,
+        'privacy': {
+            'searchable': bool(family.searchable) if family else True,
+            'has_family': family is not None,
+        },
+        'user': user_sync,
+    }
+
+
+@residents_bp.route('/api/residents/me/profile', methods=['GET'])
+@role_required('resident')
+def get_resident_profile():
+    account = db.session.get(ResidentAccount, int(get_jwt_identity()))
+    if not account or not account.is_active:
+        return jsonify({'error': 'Account not found.'}), 404
+    return jsonify(_resident_profile_response(account)), 200
+
+
+@residents_bp.route('/api/residents/me/profile', methods=['PATCH'])
+@role_required('resident')
+def update_resident_profile():
+    """Update only resident_accounts fields; never modifies the official residents roster."""
+    account = db.session.get(ResidentAccount, int(get_jwt_identity()))
+    if not account or not account.is_active:
+        return jsonify({'error': 'Account not found.'}), 404
+
+    data = request.get_json(silent=True) or {}
+    email = str(data.get('email') or '').strip().lower()
+    display_name = str(data.get('display_name') or '').strip() or None
+    contact_number = str(data.get('contact_number') or '').strip() or None
+
+    if not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email):
+        return jsonify({'error': 'Enter a valid email address.'}), 400
+    if display_name and len(display_name) > 100:
+        return jsonify({'error': 'Display name must be 100 characters or fewer.'}), 400
+    if contact_number and len(contact_number) > 20:
+        return jsonify({'error': 'Contact number must be 20 characters or fewer.'}), 400
+
+    if User.query.filter(func.lower(User.email) == email).first():
+        return jsonify({'error': 'An account with this email already exists.'}), 409
+    if ResidentAccount.query.filter(
+        func.lower(ResidentAccount.email) == email,
+        ResidentAccount.id != account.id,
+        ResidentAccount.is_active.is_(True),
+    ).first():
+        return jsonify({'error': 'An account with this email already exists.'}), 409
+
+    account.email = email
+    account.display_name = display_name
+    account.contact_number = contact_number
+    db.session.add(SystemLog(
+        user_id=None,
+        action=f'Resident account #{account.id} updated own account details',
+    ))
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'An account with this email already exists.'}), 409
+
+    payload = _resident_profile_response(account)
+    payload['message'] = 'Account profile updated successfully.'
+    return jsonify(payload), 200
+
+
+@residents_bp.route('/api/residents/me/password', methods=['POST'])
+@role_required('resident')
+def change_resident_password():
+    account = db.session.get(ResidentAccount, int(get_jwt_identity()))
+    if not account or not account.is_active:
+        return jsonify({'error': 'Account not found.'}), 404
+
+    data = request.get_json(silent=True) or {}
+    current_password = data.get('current_password')
+    new_password = data.get('new_password')
+
+    if not isinstance(current_password, str) or not isinstance(new_password, str):
+        return jsonify({'error': 'Current password and new password are required.'}), 400
+    if not check_password_hash(account.password_hash, current_password):
+        return jsonify({'error': 'Current password is incorrect.'}), 403
+    if not _valid_resident_password(new_password):
+        return jsonify({'error': _RESIDENT_PASSWORD_POLICY_ERROR}), 400
+
+    account.password_hash = generate_password_hash(new_password)
+    db.session.add(SystemLog(
+        user_id=None,
+        action=f'Resident account #{account.id} changed own password',
+    ))
+    db.session.commit()
+    return jsonify({'message': 'Password changed successfully.'}), 200
+
+
+@residents_bp.route('/api/residents/me/reset-password', methods=['POST'])
+@role_required('resident')
+def request_resident_password_reset():
+    account = db.session.get(ResidentAccount, int(get_jwt_identity()))
+    if not account or not account.is_active:
+        return jsonify({'error': 'Account not found.'}), 404
+
+    try:
+        token = create_password_setup_token(account)
+        send_password_setup_email(account, token, purpose='reset')
+    except Exception:
+        current_app.logger.exception(
+            'Could not send password reset email to resident account %s',
+            account.id,
+        )
+        return jsonify({
+            'error': 'Password reset email could not be sent right now. Please try again later.'
+        }), 503
+
+    db.session.add(SystemLog(
+        user_id=None,
+        action=f'Resident account #{account.id} requested own password reset email',
+    ))
+    db.session.commit()
+    return jsonify({'message': f'Password reset link sent to {account.email}.'}), 200
 
 
 # =========================================================

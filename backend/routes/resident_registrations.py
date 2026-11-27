@@ -916,7 +916,7 @@ def resend_resident_registration_email(request_id):
 
 
 def _resolve_registration_account(registration):
-    """Find the active ResidentAccount (or legacy resident User) for an approved registration."""
+    """Find the active ResidentAccount (or legacy resident-role User) for an approved registration."""
     if registration.matched_resident_id:
         acct = ResidentAccount.query.filter_by(
             resident_id=registration.matched_resident_id,
@@ -926,6 +926,7 @@ def _resolve_registration_account(registration):
             return acct
         usr = User.query.filter_by(
             resident_id=registration.matched_resident_id,
+            role='resident',
             is_active=True,
         ).first()
         if usr:
@@ -941,6 +942,7 @@ def _resolve_registration_account(registration):
             return acct
         usr = User.query.filter(
             func.lower(User.email) == email,
+            User.role == 'resident',
             User.is_active == True,
         ).first()
         if usr:

@@ -130,13 +130,18 @@ def role_required(*allowed_roles):
             claims = get_jwt()
             account_type = claims.get("account_type", "user")
 
-            if is_staff_route:
+            try:
+                numeric_id = int(identity)
+            except (TypeError, ValueError):
+                return jsonify({"error": "You don't have permission to do this"}), 403
+
+            if account_type == "user" and is_staff_route:
                 # STAFF ROUTE: Only accept non-challenge user tokens
-                if account_type != "user" or claims.get("mfa_flow"):
+                if claims.get("mfa_flow"):
                     return jsonify({"error": "You don't have permission to do this"}), 403
 
                 # Load user from users table by id (never from token claims)
-                user = db.session.get(User, int(identity))
+                user = db.session.get(User, numeric_id)
                 if not user or not user.is_active:
                     return jsonify({"error": "You don't have permission to do this"}), 403
 
@@ -158,19 +163,17 @@ def role_required(*allowed_roles):
                     ):
                         return jsonify({"error": "You don't have permission to do this"}), 403
 
-            elif is_resident_route:
-                # RESIDENT ROUTE: Only accept resident_account tokens
-                if account_type != "resident_account":
-                    return jsonify({"error": "You don't have permission to do this"}), 403
-
+            elif account_type == "resident_account" and is_resident_route:
                 # Load account from resident_accounts table by id
-                account = db.session.get(ResidentAccount, int(identity))
+                account = db.session.get(ResidentAccount, numeric_id)
                 if not account or not account.is_active:
                     return jsonify({"error": "You don't have permission to do this"}), 403
 
                 # Resident role is implicit from account type, not from token claim
                 if RESIDENT_ROLE not in allowed_roles:
                     return jsonify({"error": "You don't have permission to do this"}), 403
+            else:
+                return jsonify({"error": "You don't have permission to do this"}), 403
 
             return fn(*args, **kwargs)
 

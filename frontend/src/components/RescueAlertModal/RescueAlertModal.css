@@ -200,141 +200,156 @@
 }
 
 /* ==========================================
-   PHOTO UPLOAD SECTION
+   PHOTO UPLOAD SECTION (matches HazardReportModal)
    ========================================== */
 .rescue-file-input-hidden {
   display: none !important;
 }
 
-.rescue-photo-upload {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.rescue-photo-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.08);
+  padding: 2px 8px;
+  border-radius: 999px;
 }
 
-.rescue-upload-trigger {
+.rescue-photo-drop {
+  position: relative;
+  display: block;
   width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
+  padding: 0;
   border: 1.5px dashed #cbd5e1;
   border-radius: 10px;
-  background: #f8fafc;
-  color: #334155;
-  text-align: left;
+  background: #f9fafb;
   cursor: pointer;
-  transition: all 0.15s ease;
+  overflow: hidden;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.rescue-upload-trigger:hover {
+.rescue-photo-drop:hover,
+.rescue-photo-drop.is-dragging {
   border-color: #2563eb;
-  background: #eff6ff;
+  background: rgba(37, 99, 235, 0.04);
 }
 
-.rescue-upload-icon-badge {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: #e2e8f0;
-  color: #475569;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  flex-shrink: 0;
-  transition: all 0.15s ease;
+.rescue-photo-drop:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
-.rescue-upload-trigger:hover .rescue-upload-icon-badge {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.rescue-upload-copy {
+.rescue-photo-placeholder {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.rescue-upload-copy strong {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 12px;
+  color: #6b7280;
   font-size: 13px;
-  font-weight: 700;
-  color: #0f172a;
+  font-weight: 600;
+  text-align: center;
 }
 
-.rescue-upload-copy small {
+.rescue-photo-placeholder svg {
+  font-size: 20px;
+  color: #9ca3af;
+}
+
+.rescue-photo-subhint {
   font-size: 11.5px;
   font-weight: 500;
   color: #64748b;
 }
 
-.rescue-upload-cta {
-  padding: 5px 11px;
-  border-radius: 6px;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
-  color: #1e293b;
-  font-size: 12px;
-  font-weight: 600;
-  flex-shrink: 0;
-  transition: all 0.15s ease;
+.rescue-multi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
 }
 
-.rescue-upload-trigger:hover .rescue-upload-cta {
-  border-color: #93c5fd;
-  color: #1d4ed8;
-}
-
-.rescue-image-preview {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.rescue-image-preview-item {
+.rescue-preview-card-thumb {
   position: relative;
-  width: 68px;
-  height: 68px;
+  height: 84px;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #cbd5e1;
+  border: 1px solid #e2e8f0;
   background: #f1f5f9;
-  box-shadow: var(--shadow-xs);
+  cursor: zoom-in;
+  transition: border-color 0.15s ease, transform 0.15s ease;
 }
 
-.rescue-image-preview-img {
+.rescue-preview-card-thumb:hover {
+  border-color: #2563eb;
+}
+
+.rescue-card-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.rescue-image-remove {
+.rescue-cover-badge {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  background: rgba(37, 99, 235, 0.9);
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rescue-remove-btn {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.7);
   color: #ffffff;
-  background: rgba(15, 23, 42, 0.82);
-  cursor: pointer;
-  display: inline-flex;
+  border: none;
+  display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
-  line-height: 1;
-  padding: 0;
-  transition: background-color 0.15s ease, transform 150ms ease;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 150ms ease;
 }
 
-.rescue-image-remove:hover {
+.rescue-remove-btn:hover {
   background: #dc2626;
-  transform: scale(1.06);
+  transform: scale(1.1);
+}
+
+.rescue-add-more-card {
+  position: relative;
+  height: 84px;
+  border: 1.5px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.rescue-add-more-card:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.04);
 }
 
 /* LOCATION SECTION */

@@ -6,6 +6,7 @@ from services.pathfinding import (
     snap_point_to_road,
     invalidate_road_network_cache,
 )
+from utils import role_required
 
 routing_bp = Blueprint("routing", __name__)
 
@@ -17,6 +18,8 @@ def get_evacuation_route():
         user_lng = float(request.args.get("lng"))
     except (TypeError, ValueError):
         return jsonify({"error": "lat and lng query params are required"}), 400
+    if not (math.isfinite(user_lat) and math.isfinite(user_lng) and -90.0 <= user_lat <= 90.0 and -180.0 <= user_lng <= 180.0):
+        return jsonify({"error": "Valid finite lat and lng coordinates are required"}), 400
 
     raw_center_id = request.args.get("center_id")
     center_id = None
@@ -55,6 +58,7 @@ def get_evacuation_route():
 
 
 @routing_bp.route("/api/routing/problem-entrances", methods=["GET"])
+@role_required("admin", "lgu_personnel")
 def get_problem_entrances():
     """Returns all active center entrances flagged for snap distance > 25m or disconnected roads."""
     problems = audit_problem_entrances()
@@ -74,6 +78,8 @@ def snap_coordinate():
         lng = float(request.args.get("lng"))
     except (TypeError, ValueError):
         return jsonify({"error": "lat and lng query params are required"}), 400
+    if not (math.isfinite(lat) and math.isfinite(lng) and -90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+        return jsonify({"error": "Valid finite lat and lng coordinates are required"}), 400
 
     snap_to_intersection = request.args.get("snap_intersection", "false").lower() in {"1", "true", "yes"}
     raw_heading = request.args.get("heading")

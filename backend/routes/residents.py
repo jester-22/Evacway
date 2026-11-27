@@ -11,7 +11,7 @@ from flask import Blueprint, current_app, request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from models import (
@@ -2328,18 +2328,22 @@ def lookup_my_evacuation_center():
     matching_families = []
     normalized_name = normalize_name(full_name)
     if normalized_name and barangay_id and birthdate:
-        for family in Family.query.filter_by(
-            barangay_id=barangay_id,
-            searchable=True,
-            find_someone_opt_out=False,
-        ).all():
+        candidate_families = (
+            Family.query.options(selectinload(Family.residents))
+            .filter_by(
+                barangay_id=barangay_id,
+                searchable=True,
+                find_someone_opt_out=False,
+            )
+            .all()
+        )
+        for family in candidate_families:
             if normalize_name(family.head_name) != normalized_name:
                 continue
-            heads = Resident.query.filter_by(
-                family_id=family.id,
-                is_head_of_family=True,
-            ).all()
-            if any(head.date_of_birth == birthdate for head in heads):
+            if any(
+                head.is_head_of_family and head.date_of_birth == birthdate
+                for head in family.residents
+            ):
                 matching_families.append(family)
                 if len(matching_families) > 1:
                     break
@@ -2444,17 +2448,20 @@ def find_evacuation_center_for_resident():
         and barangay_id is not None
         and barangay_id > 0
     ):
-        families = Family.query.filter_by(
-            searchable=True,
-            find_someone_opt_out=False,
-            barangay_id=barangay_id,
-        ).all()
+        families = (
+            Family.query.options(selectinload(Family.residents))
+            .filter_by(
+                searchable=True,
+                find_someone_opt_out=False,
+                barangay_id=barangay_id,
+            )
+            .all()
+        )
         matching_families = []
         for family in families:
-            residents = Resident.query.filter_by(family_id=family.id).all()
             if not any(
                 normalize_name(resident.get_full_name()) == normalized_name
-                for resident in residents
+                for resident in family.residents
             ):
                 continue
             if additional_detail and normalize_name(additional_detail) not in normalize_name(family.address or ''):
@@ -2467,9 +2474,9 @@ def find_evacuation_center_for_resident():
     found = bool(center)
     barangay_log_value = barangay_value
     if barangay_id is not None and barangay_id > 0:
-        barangay = db.session.get(Barangay, barangay_id)
-        if barangay:
-            barangay_log_value = barangay.name
+        barangay_row = db.session.query(Barangay.name).filter_by(id=barangay_id).first()
+        if barangay_row:
+            barangay_log_value = barangay_row.name
     _record_resident_lookup(
         'find_someone', caller, full_name, barangay_log_value,
         found=found, extra=additional_detail,

@@ -42,11 +42,11 @@ async function request(path, options = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    if (
-      res.status === 401 &&
-      token &&
-      !String(path || "").startsWith("/api/auth/")
-    ) {
+    const normalizedPath = String(path || "");
+    const isAuthFlowPath =
+      normalizedPath.startsWith("/api/auth/") ||
+      (normalizedPath.startsWith("/api/users/me/mfa/") && !data.msg);
+    if (res.status === 401 && token && !isAuthFlowPath) {
       window.dispatchEvent(new CustomEvent("evacway:auth-expired"));
     }
     const err = new Error(
@@ -502,6 +502,9 @@ export const api = {
         method: "POST",
       }
     ),
+
+  deleteHazardReport: (id) =>
+    request(`/api/hazard-reports/${id}`, { method: "DELETE" }),
 
 
   // -------------------------------------------------------

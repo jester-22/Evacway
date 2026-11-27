@@ -127,7 +127,9 @@ async function storeMapTile(request, response) {
 }
 
 async function cacheTile(request, response) {
-  mapTileWriteQueue = mapTileWriteQueue.then(() => storeMapTile(request, response));
+  mapTileWriteQueue = mapTileWriteQueue
+    .catch(() => undefined)
+    .then(() => storeMapTile(request, response).catch(() => undefined));
   await mapTileWriteQueue;
 }
 
@@ -142,7 +144,9 @@ async function handleMapTile(request, event) {
   }
 
   const response = await fetch(request);
-  if (response.ok) await cacheTile(request, response.clone());
+  if (response.ok) {
+    event.waitUntil(cacheTile(request, response.clone()).catch(() => undefined));
+  }
   return response;
 }
 

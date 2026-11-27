@@ -1,18 +1,25 @@
 import math
 import logging
+import threading
 import networkx as nx
 from flask import g, has_request_context
 from shapely.geometry import Point, LineString
+from shapely.prepared import prep
 from shapely.strtree import STRtree
 from geoalchemy2.shape import to_shape
 from sqlalchemy import func
+from sqlalchemy.orm import defer, joinedload, selectinload
 from models import (
     db,
+    Barangay,
+    CenterBarangay,
     RoadSegment,
     HazardZone,
     EvacuationCenter,
+    EvacuationCenterBuilding,
     EvacuationCenterRoom,
     EvacuationAssignment,
+    EvacuationOperation,
     NonRegisteredEvacuee,
 )
 
@@ -30,6 +37,7 @@ TRAPPED_BLOCKED_ACCESS_OPEN_METERS = 45.0
 MAX_CONNECTED_JUMP_OVER_ISOLATED_METERS = 15.0
 
 _cached_network = None
+_network_lock = threading.Lock()
 
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -64,7 +72,8 @@ def smallest_angle_diff(deg1, deg2):
 def invalidate_road_network_cache():
     """Call whenever road segments or hazard closures change."""
     global _cached_network
-    _cached_network = None
+    with _network_lock:
+        _cached_network = None
     if has_request_context():
         g.pop("_closed_road_ids", None)
 
@@ -92,139 +101,161 @@ def get_road_network():
         if has_request_context():
             g._closed_road_ids = closed_ids
 
-    if _cached_network is not None and _cached_network.get("closed_ids") == closed_ids:
-        return _cached_network
+    cached = _cached_network
+    if cached is not None and cached.get("closed_ids") == closed_ids:
+        return cached
 
-    G = nx.Graph()
-    sub_segments = []
-    sub_lines = []
+    with _network_lock:
+        cached = _cached_network
+        if cached is not None and cached.get("closed_ids") == closed_ids:
+            return cached
 
-    segments = RoadSegment.query.all()
+        G = nx.Graph()
+        sub_segments = []
+        sub_lines = []
 
-    # 1. Separate open and closed segments. Closed edges are excluded from routing,
-    # while their geometry is kept in a spatial index so trapped users cannot snap
-    # across closed/flooded roads onto distant open streets.
-    open_segments = []
-    closed_lines = []
-    closed_segments = []
+        segments = RoadSegment.query.all()
 
-    for seg in segments:
-        if not seg.geom:
-            continue
+        # 1. Separate open and closed segments. Closed edges are excluded from routing,
+        # while their geometry is kept in a spatial index so trapped users cannot snap
+        # across closed/flooded roads onto distant open streets.
+        open_segments = []
+        closed_lines = []
+        closed_segments = []
+
+        for seg in segments:
+            if not seg.geom:
+                continue
+            try:
+                line = to_shape(seg.geom)
+            except Exception as e:
+                logger.warning(f"Failed to parse geometry for road segment {seg.id}: {e}")
+                continue
+
+            if not seg.is_closed:
+                open_segments.append((seg, line))
+            else:
+                coords = list(line.coords)
+                for i in range(len(coords) - 1):
+                    lng1, lat1 = coords[i]
+                    lng2, lat2 = coords[i + 1]
+                    closed_sub = LineString([(lng1, lat1), (lng2, lat2)])
+                    closed_lines.append(closed_sub)
+                    closed_segments.append(
+                        {
+                            "sub_line": closed_sub,
+                            "seg_id": seg.id,
+                            "road_name": seg.road_name or "Closed Road",
+                        }
+                    )
+
+        # Load active flood / landslide hazard zone polygons to penalize overlapping road edges
+        # cleanly without severing road connectivity when no alternative road exists.
+        hazard_raw_polys = []
+        hazard_prepared = []
         try:
-            line = to_shape(seg.geom)
-        except Exception as e:
-            logger.warning(f"Failed to parse geometry for road segment {seg.id}: {e}")
-            continue
+            zones = HazardZone.query.all()
+            for zone in zones:
+                if not getattr(zone, "geom", None):
+                    continue
+                hz_type = str(getattr(zone, "hazard_type", "") or "").strip().lower()
+                if hz_type and not any(k in hz_type for k in ("flood", "landslide", "storm", "hazard")):
+                    continue
+                risk = str(getattr(zone, "risk_level", "") or "").strip().lower()
+                multiplier = (
+                    HAZARD_ZONE_HIGH_RISK_PENALTY
+                    if "high" in risk or "critical" in risk
+                    else HAZARD_ZONE_DEFAULT_PENALTY
+                )
+                hz_poly = to_shape(zone.geom)
+                hazard_raw_polys.append(hz_poly)
+                hazard_prepared.append((prep(hz_poly), multiplier))
+        except Exception:
+            hazard_raw_polys = []
+            hazard_prepared = []
 
-        if not seg.is_closed:
-            open_segments.append((seg, line))
-        else:
+        hazard_tree = STRtree(hazard_raw_polys) if hazard_raw_polys else None
+
+        # 2. Build graph and spatial index exclusively from open segments
+        for seg, line in open_segments:
             coords = list(line.coords)
             for i in range(len(coords) - 1):
                 lng1, lat1 = coords[i]
                 lng2, lat2 = coords[i + 1]
-                closed_sub = LineString([(lng1, lat1), (lng2, lat2)])
-                closed_lines.append(closed_sub)
-                closed_segments.append(
+
+                u = (round(lat1, 6), round(lng1, 6))
+                v = (round(lat2, 6), round(lng2, 6))
+                if u == v:
+                    continue
+
+                sub_line = LineString([(lng1, lat1), (lng2, lat2)])
+                dist_km = haversine(lat1, lng1, lat2, lng2)
+                effective_weight_factor = float(seg.base_weight or 1.0)
+                if hazard_tree is not None:
+                    max_hz_mult = 1.0
+                    try:
+                        candidate_hz_idxs = hazard_tree.query(sub_line)
+                    except Exception:
+                        candidate_hz_idxs = range(len(hazard_prepared))
+                    for hz_idx in candidate_hz_idxs:
+                        try:
+                            prep_poly, hz_mult = hazard_prepared[int(hz_idx)]
+                            if prep_poly.intersects(sub_line):
+                                max_hz_mult = max(max_hz_mult, hz_mult)
+                        except Exception:
+                            continue
+                    effective_weight_factor *= max_hz_mult
+
+                weight = dist_km * effective_weight_factor
+
+                existing = G.get_edge_data(u, v)
+                if existing is None or weight < existing.get("weight", float("inf")):
+                    G.add_edge(
+                        u,
+                        v,
+                        weight=weight,
+                        length_km=dist_km,
+                        base_weight=effective_weight_factor,
+                        is_closed=False,
+                        seg_id=seg.id,
+                        road_name=seg.road_name or "Road",
+                    )
+
+                sub_lines.append(sub_line)
+                sub_segments.append(
                     {
-                        "sub_line": closed_sub,
+                        "u": u,
+                        "v": v,
+                        "sub_line": sub_line,
                         "seg_id": seg.id,
-                        "road_name": seg.road_name or "Closed Road",
+                        "road_name": seg.road_name or "Road",
+                        "base_weight": effective_weight_factor,
+                        "is_closed": False,
                     }
                 )
 
-    # Load active flood / landslide hazard zone polygons to penalize overlapping road edges
-    # cleanly without severing road connectivity when no alternative road exists.
-    hazard_polygons = []
-    try:
-        zones = HazardZone.query.all()
-        for zone in zones:
-            if not getattr(zone, "geom", None):
-                continue
-            hz_type = str(getattr(zone, "hazard_type", "") or "").strip().lower()
-            if hz_type and not any(k in hz_type for k in ("flood", "landslide", "storm", "hazard")):
-                continue
-            risk = str(getattr(zone, "risk_level", "") or "").strip().lower()
-            multiplier = (
-                HAZARD_ZONE_HIGH_RISK_PENALTY
-                if "high" in risk or "critical" in risk
-                else HAZARD_ZONE_DEFAULT_PENALTY
-            )
-            hazard_polygons.append((to_shape(zone.geom), multiplier))
-    except Exception:
-        hazard_polygons = []
+        spatial_tree = STRtree(sub_lines) if sub_lines else None
+        closed_spatial_tree = STRtree(closed_lines) if closed_lines else None
 
-    # 2. Build graph and spatial index exclusively from open segments
-    for seg, line in open_segments:
-        coords = list(line.coords)
-        for i in range(len(coords) - 1):
-            lng1, lat1 = coords[i]
-            lng2, lat2 = coords[i + 1]
+        # Identify the largest connected component for connectivity validation
+        largest_cc = set()
+        if G.number_of_nodes() > 0:
+            connected_components = list(nx.connected_components(G))
+            if connected_components:
+                largest_cc = max(connected_components, key=len)
 
-            u = (round(lat1, 6), round(lng1, 6))
-            v = (round(lat2, 6), round(lng2, 6))
-
-            sub_line = LineString([(lng1, lat1), (lng2, lat2)])
-            dist_km = haversine(lat1, lng1, lat2, lng2)
-            effective_weight_factor = float(seg.base_weight or 1.0)
-            if hazard_polygons:
-                max_hz_mult = 1.0
-                for hz_poly, hz_mult in hazard_polygons:
-                    try:
-                        if hz_poly.intersects(sub_line):
-                            max_hz_mult = max(max_hz_mult, hz_mult)
-                    except Exception:
-                        continue
-                effective_weight_factor *= max_hz_mult
-
-            weight = dist_km * effective_weight_factor
-
-            G.add_edge(
-                u,
-                v,
-                weight=weight,
-                base_weight=effective_weight_factor,
-                is_closed=False,
-                seg_id=seg.id,
-                road_name=seg.road_name or "Road",
-            )
-
-            sub_lines.append(sub_line)
-            sub_segments.append(
-                {
-                    "u": u,
-                    "v": v,
-                    "sub_line": sub_line,
-                    "seg_id": seg.id,
-                    "road_name": seg.road_name or "Road",
-                    "base_weight": effective_weight_factor,
-                    "is_closed": False,
-                }
-            )
-
-    spatial_tree = STRtree(sub_lines) if sub_lines else None
-    closed_spatial_tree = STRtree(closed_lines) if closed_lines else None
-
-    # Identify the largest connected component for connectivity validation
-    largest_cc = set()
-    if G.number_of_nodes() > 0:
-        connected_components = list(nx.connected_components(G))
-        if connected_components:
-            largest_cc = max(connected_components, key=len)
-
-    _cached_network = {
-        "graph": G,
-        "sub_segments": sub_segments,
-        "sub_lines": sub_lines,
-        "spatial_tree": spatial_tree,
-        "closed_lines": closed_lines,
-        "closed_segments": closed_segments,
-        "closed_spatial_tree": closed_spatial_tree,
-        "largest_cc": largest_cc,
-        "closed_ids": closed_ids,
-    }
-    return _cached_network
+        _cached_network = {
+            "graph": G,
+            "sub_segments": sub_segments,
+            "sub_lines": sub_lines,
+            "spatial_tree": spatial_tree,
+            "closed_lines": closed_lines,
+            "closed_segments": closed_segments,
+            "closed_spatial_tree": closed_spatial_tree,
+            "largest_cc": largest_cc,
+            "closed_ids": closed_ids,
+        }
+        return _cached_network
 
 
 def snap_point_to_road(lat, lng, snap_to_intersection=False, heading=None):
@@ -605,7 +636,7 @@ def calculate_route_with_edge_snapping(
                     return
                 d = haversine(n1[0], n1[1], n2[0], n2[1])
                 w = d * (u_sub["base_weight"] or 1.0)
-                G.add_edge(n1, n2, weight=w, is_closed=False)
+                G.add_edge(n1, n2, weight=w, length_km=d, is_closed=False)
 
         add_split_edge(u_node, first_pt)
         add_split_edge(first_pt, second_pt)
@@ -636,9 +667,9 @@ def calculate_route_with_edge_snapping(
 
                 # Only connect to u_node/v_node if they exist in G_base (not impassable)
                 if G_base.has_node(u_node):
-                    G.add_edge(u_node, snap_pt, weight=w1, is_closed=False)
+                    G.add_edge(u_node, snap_pt, weight=w1, length_km=d1, is_closed=False)
                 if G_base.has_node(v_node):
-                    G.add_edge(snap_pt, v_node, weight=w2, is_closed=False)
+                    G.add_edge(snap_pt, v_node, weight=w2, length_km=d2, is_closed=False)
 
     path = None
     road_km = 0.0
@@ -646,7 +677,15 @@ def calculate_route_with_edge_snapping(
     if G.has_node(u_snap) and G.has_node(t_snap):
         try:
             path = nx.dijkstra_path(G, u_snap, t_snap, weight="weight")
-            road_km = nx.dijkstra_path_length(G, u_snap, t_snap, weight="weight")
+            road_km = sum(
+                float(
+                    (G.get_edge_data(path[i], path[i + 1]) or {}).get(
+                        "length_km",
+                        haversine(path[i][0], path[i][1], path[i + 1][0], path[i + 1][1]),
+                    )
+                )
+                for i in range(len(path) - 1)
+            )
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             path = None
 
@@ -721,9 +760,17 @@ def get_centers_free_capacity(centers):
     if not center_ids:
         return capacity_by_center
 
-    rooms = EvacuationCenterRoom.query.filter_by(
-        is_active=True,
-    ).filter(EvacuationCenterRoom.evacuation_center_id.in_(center_ids)).all()
+    rooms = (
+        EvacuationCenterRoom.query.options(
+            joinedload(EvacuationCenterRoom.building).load_only(
+                EvacuationCenterBuilding.id,
+                EvacuationCenterBuilding.status,
+            )
+        )
+        .filter_by(is_active=True)
+        .filter(EvacuationCenterRoom.evacuation_center_id.in_(center_ids))
+        .all()
+    )
     rooms = [
         room for room in rooms
         if room.building is None
@@ -753,18 +800,27 @@ def get_centers_free_capacity(centers):
             .group_by(EvacuationAssignment.evacuation_center_id)
             .all()
         )
-        walkin_counts = dict(
-            db.session.query(
-                NonRegisteredEvacuee.center_id,
-                func.count(NonRegisteredEvacuee.id),
+        walkin_counts = {}
+        try:
+            walkin_counts = dict(
+                db.session.query(
+                    NonRegisteredEvacuee.center_id,
+                    func.count(NonRegisteredEvacuee.id),
+                )
+                .join(
+                    EvacuationOperation,
+                    NonRegisteredEvacuee.operation_id == EvacuationOperation.id,
+                )
+                .filter(
+                    NonRegisteredEvacuee.center_id.in_(open_area_ids),
+                    NonRegisteredEvacuee.departed_at.is_(None),
+                    EvacuationOperation.status == "active",
+                )
+                .group_by(NonRegisteredEvacuee.center_id)
+                .all()
             )
-            .filter(
-                NonRegisteredEvacuee.center_id.in_(open_area_ids),
-                NonRegisteredEvacuee.departed_at.is_(None),
-            )
-            .group_by(NonRegisteredEvacuee.center_id)
-            .all()
-        )
+        except Exception:
+            db.session.rollback()
         for center in open_area_centers:
             total_cap = int(center.capacity or 0)
             used_people = int(assigned_counts.get(center.id, 0) or 0) + int(walkin_counts.get(center.id, 0) or 0)
@@ -854,13 +910,29 @@ def find_best_evacuation_route(user_lat, user_lng, center_id=None, heading=None)
     Finds the optimal evacuation center entrance based on REAL walking distance
     to its snapped road point, skipping unreachable or out-of-bounds entrances.
     """
-    all_active_centers = EvacuationCenter.query.filter_by(is_active=True).all()
+    all_active_centers = (
+        EvacuationCenter.query.options(
+            defer(EvacuationCenter.geom),
+            selectinload(EvacuationCenter.barangay_links)
+            .joinedload(CenterBarangay.barangay)
+            .load_only(Barangay.id, Barangay.name),
+        )
+        .filter_by(is_active=True)
+        .all()
+    )
     centers = [
         center for center in all_active_centers
         if str(center.evacuation_status or "standby").strip().lower()
         not in {"closed", "concluded"}
     ]
-    assigned_center = EvacuationCenter.query.get(center_id) if center_id is not None else None
+    assigned_center = None
+    if center_id is not None:
+        assigned_center = next(
+            (c for c in all_active_centers if str(c.id) == str(center_id)),
+            None,
+        )
+        if assigned_center is None:
+            assigned_center = db.session.get(EvacuationCenter, center_id)
     route_centers = centers
     alternative_reason = "Next closest safe center by walking distance."
     center_candidates = []

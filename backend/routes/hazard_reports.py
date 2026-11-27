@@ -17,7 +17,7 @@ from models import (
     to_utc_iso,
 )
 from sqlalchemy import func
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, selectinload
 from geoalchemy2 import Geography
 from geoalchemy2.shape import to_shape, from_shape
 from shapely.geometry import mapping, Point
@@ -45,7 +45,7 @@ from services.public_status import (
 
 reports_bp = Blueprint('reports', __name__)
 
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'jpe', 'webp'}
 
 ALLOWED_HAZARD_TRANSITIONS = {
     'pending': {'validated', 'rejected'},
@@ -548,7 +548,7 @@ def submit_hazard_report():
 
     for f in uploaded_files:
         if not allowed_file(f.filename):
-            return jsonify({"error": f"Invalid file format: '{f.filename}'. Allowed formats: png, jpg, jpeg, webp"}), 400
+            return jsonify({"error": f"Invalid file format: '{f.filename}'. Allowed formats: png, jpg, jpeg, jpe, webp"}), 400
 
     description = request.form.get('description')
     report_type = request.form.get('report_type')
@@ -567,7 +567,7 @@ def submit_hazard_report():
         current_app.logger.exception("Could not validate hazard report against the Sogod boundary")
         return jsonify({"error": "Location validation is temporarily unavailable. Please try again later."}), 503
 
-    uploader_folder = secure_filename(str(reporter_display_name or '').strip()) or 'user'
+    uploader_folder = utc_now().strftime('%Y%m')
 
     saved_photo_urls = []
     saved_photo_metas = []
@@ -622,13 +622,22 @@ def submit_hazard_report():
             message=f'{reporter_display_name} submitted a {report_type or "hazard"} report for review.',
         )
         db.session.commit()
-        send_staff_push_notifications(notifications)
-    except Exception as e:
+    except ValueError as e:
+        db.session.rollback()
+        for photo_meta in saved_photo_metas:
+            delete_uploaded_photo(photo_meta)
+        return jsonify({"error": str(e)}), 400
+    except Exception:
         db.session.rollback()
         for photo_meta in saved_photo_metas:
             delete_uploaded_photo(photo_meta)
         current_app.logger.exception("Failed to submit hazard report")
-        return jsonify({"error": f"Failed to submit hazard report: {str(e)}"}), 500
+        return jsonify({"error": "Failed to submit hazard report. Please try again."}), 500
+
+    try:
+        send_staff_push_notifications(notifications)
+    except Exception:
+        current_app.logger.warning("Push notification dispatch failed for hazard report %s", report.id)
 
     return jsonify(report_to_dict(report)), 201
 
@@ -729,16 +738,38 @@ def closed_road_names_near(report):
 def list_public_hazard_reports():
     # Public on purpose: residents don't log in. Only active reports,
     # and only fields that are safe to show on the public map.
-    query = db.session.query(
-        HazardReport,
-        func.ST_Y(HazardReport.geom).label('latitude'),
-        func.ST_X(HazardReport.geom).label('longitude')
-    ).filter(active_hazard_status_filter())
+    query = (
+        db.session.query(
+            HazardReport,
+            func.ST_Y(HazardReport.geom).label('latitude'),
+            func.ST_X(HazardReport.geom).label('longitude'),
+        )
+        .options(selectinload(HazardReport.photos))
+        .filter(active_hazard_status_filter())
+    )
     rows = query.order_by(HazardReport.submitted_at.desc()).all()
+
+    report_ids = [report.id for report, _, _ in rows]
+    closed_roads_by_report = defaultdict(list)
+    if report_ids:
+        closed_segments_rows = (
+            db.session.query(
+                RoadSegment.id,
+                RoadSegment.road_name,
+                RoadSegment.closed_by_report_id,
+            )
+            .filter(
+                RoadSegment.is_closed.is_(True),
+                RoadSegment.closed_by_report_id.in_(report_ids),
+            )
+            .all()
+        )
+        for seg_id, seg_name, report_id in closed_segments_rows:
+            closed_roads_by_report[report_id].append(seg_name or f"Road #{seg_id}")
 
     result = []
     for report, lat, lng in rows:
-        closed_roads = closed_road_names_near(report)
+        closed_roads = dedupe(closed_roads_by_report.get(report.id, []))
         photos = []
         if getattr(report, 'photos', None):
             photos = [p.photo_path for p in report.photos if p.photo_path]

@@ -41,6 +41,11 @@ export default function PublicMapDialogShell({
     focusTarget?.focus();
 
     const onKeyDown = (event) => {
+      // Yield keyboard focus/Escape handling when a top-level overlay (e.g. camera/lightbox) is open
+      const topOverlay = document.querySelector(".ccm-overlay, .ccm-lightbox-overlay");
+      if (topOverlay && !backdropRef.current?.contains(topOverlay)) {
+        return;
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         onCloseRef.current?.();

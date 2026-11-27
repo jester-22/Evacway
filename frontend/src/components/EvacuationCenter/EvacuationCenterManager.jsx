@@ -259,8 +259,11 @@ export default function EvacuationCenterManager({
   // Confirmation dialog
   const [confirmDialog, setConfirmDialog] = useState(null);
 
-  // Escape closes the confirmation dialog (some confirm flows have no onCancel).
-  useEscapeKey(confirmDialog != null, () => setConfirmDialog(null));
+  // Escape closes the confirmation dialog and runs its cancel handler when provided.
+  useEscapeKey(confirmDialog != null, () => {
+    confirmDialog?.onCancel?.();
+    setConfirmDialog(null);
+  });
 
   // Mapbox drawing states (ref to avoid re-renders on URL sync)
   const handledUrlRef = useRef("");
@@ -504,6 +507,21 @@ export default function EvacuationCenterManager({
     }
   }
 
+  async function toggleCenterActiveDirect(center) {
+    const props = center.properties || center;
+    const isCurrentlyActive = props.is_active;
+    try {
+      await api.toggleCenterActive(props.id);
+      setNotice(`Evacuation center "${props.name}" ${isCurrentlyActive ? "deactivated" : "reactivated"}.`);
+      if (selectedCenter && selectedCenter.id === props.id) {
+        setSelectedCenter((prev) => ({ ...prev, is_active: !isCurrentlyActive }));
+      }
+      await invalidateCenterData();
+    } catch (err) {
+      setError(err.message || "Failed to toggle center active status.");
+    }
+  }
+
   function confirmToggleCenterActive(center) {
     const props = center.properties || center;
     const isCurrentlyActive = props.is_active;
@@ -515,18 +533,7 @@ export default function EvacuationCenterManager({
         : `Reactivate evacuation center "${props.name}"?`,
       confirmText: isCurrentlyActive ? "Deactivate" : "Reactivate",
       danger: isCurrentlyActive,
-      onConfirm: async () => {
-        try {
-          await api.toggleCenterActive(props.id);
-          setNotice(`Evacuation center "${props.name}" ${isCurrentlyActive ? "deactivated" : "reactivated"}.`);
-          if (selectedCenter && selectedCenter.id === props.id) {
-            setSelectedCenter((prev) => ({ ...prev, is_active: !isCurrentlyActive }));
-          }
-          await invalidateCenterData();
-        } catch (err) {
-          setError(err.message || "Failed to toggle center active status.");
-        }
-      },
+      onConfirm: () => toggleCenterActiveDirect(center),
     });
   }
 
@@ -1049,8 +1056,15 @@ export default function EvacuationCenterManager({
     return centerFeatures.filter((c) => !isCenterMapped(c)).length;
   }, [centerFeatures]);
 
+  const hasActiveFilters =
+    Boolean(searchQuery.trim()) ||
+    Boolean(barangayFilter) ||
+    statusFilter !== "all" ||
+    mappingFilter !== "all" ||
+    occupancyFilter !== "all";
+
   useEffect(() => {
-    if (selectedCenter) {
+    if (selectedCenter && hasActiveFilters) {
       const stillVisible = filteredCenters.some(
         (item) => String((item.properties || item).id) === String(selectedCenter.id)
       );
@@ -1061,14 +1075,7 @@ export default function EvacuationCenterManager({
         }, 0);
       }
     }
-  }, [filteredCenters, selectedCenter]);
-
-  const hasActiveFilters =
-    Boolean(searchQuery.trim()) ||
-    Boolean(barangayFilter) ||
-    statusFilter !== "all" ||
-    mappingFilter !== "all" ||
-    occupancyFilter !== "all";
+  }, [filteredCenters, selectedCenter, hasActiveFilters]);
 
   function clearFilters() {
     setSearchQuery("");
@@ -1261,7 +1268,7 @@ export default function EvacuationCenterManager({
         ) : (
         <CenterDetailPage
           center={selectedCenter}
-          onDeactivate={confirmToggleCenterActive}
+          onDeactivate={toggleCenterActiveDirect}
           counts={{
             structure: centerRooms.length,
             households: allCenterFamilies.length,
@@ -1597,7 +1604,7 @@ export default function EvacuationCenterManager({
           <div className="ecm-print-header">
             <div className="ecm-print-logo-text">
               <h4>REPUBLIC OF THE PHILIPPINES</h4>
-              <h5>PROVINCE OF SOUTHERN LEYTE ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ MUNICIPALITY OF SOGOD</h5>
+              <h5>PROVINCE OF SOUTHERN LEYTE • MUNICIPALITY OF SOGOD</h5>
               <h3>MUNICIPAL DISASTER RISK REDUCTION AND MANAGEMENT OFFICE (MDRRMO)</h3>
               <h2>OFFICIAL EVACUATION CENTER MASTERLIST & EVACUEE MANIFEST</h2>
             </div>
@@ -1615,7 +1622,7 @@ export default function EvacuationCenterManager({
             <div className="ecm-print-meta-item">
               <span className="ecm-print-label">Barangays Served:</span>
               <strong>
-                {(selectedCenter.barangays || []).map((b) => b.name).join(", ") || "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}
+                {(selectedCenter.barangays || []).map((b) => b.name).join(", ") || "—"}
               </strong>
             </div>
             <div className="ecm-print-meta-item">
@@ -1697,13 +1704,13 @@ export default function EvacuationCenterManager({
                 <tr key={fam.family_id || idx}>
                   <td>{idx + 1}</td>
                   <td>
-                    <strong>{fam.household_head_name || fam.head_name || "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</strong>
+                    <strong>{fam.household_head_name || fam.head_name || "—"}</strong>
                   </td>
-                  <td>{fam.family_code || "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</td>
-                  <td>{formatRoomLabel(fam.room_number) || "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</td>
-                  <td>{displayEntityName(fam.barangay, "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â")}</td>
+                  <td>{fam.family_code || "—"}</td>
+                  <td>{formatRoomLabel(fam.room_number) || "—"}</td>
+                  <td>{displayEntityName(fam.barangay, "—")}</td>
                   <td>{fam.assigned_members || fam.family_members || 1}</td>
-                  <td>{fam.contact_number || "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â"}</td>
+                  <td>{fam.contact_number || "—"}</td>
                   <td style={{ borderBottom: "1px dashed #cbd5e1" }}></td>
                 </tr>
               ))}

@@ -175,6 +175,18 @@ def get_center_buildings(center_id):
                         geom = diff
         resolved_polys[b.id] = geom
 
+    all_my_room_ids = set()
+    if not is_staff and resident_id and room_ids:
+        all_my_room_ids = {
+            room_id
+            for (room_id,) in db.session.query(EvacuationAssignment.room_id)
+            .filter(
+                EvacuationAssignment.resident_id == resident_id,
+                EvacuationAssignment.room_id.in_(room_ids),
+            )
+            .all()
+        }
+
     for b in buildings:
         # Handle buildings with and without geometry
         if b.id in resolved_polys:
@@ -243,25 +255,32 @@ def get_center_buildings(center_id):
         ]
 
         if not is_staff:
-            my_room_ids = set()
-            if resident_id and room_ids:
-                my_room_ids = {
-                    room_id for (room_id,) in db.session.query(EvacuationAssignment.room_id)
-                    .filter(
-                        EvacuationAssignment.resident_id == resident_id,
-                        EvacuationAssignment.room_id.in_(room_ids),
-                    )
-                    .all()
-                }
             rooms_summary = [
                 public_room_payload(
                     room,
-                    room.id in my_room_ids,
+                    room.id in all_my_room_ids,
                     usage=room_usage_by_id[room.id],
                     building=b,
                 )
                 for room in rooms
             ]
+        else:
+            floor_summary = []
+            for floor in range(1, int(b.floors or 1) + 1):
+                floor_rooms = [room for room in rooms if room.floor == floor]
+                used_slots = sum(room_usage_by_id[room.id]["used_slots"] for room in floor_rooms)
+                used_spaces = sum(room_usage_by_id[room.id]["used_spaces"] for room in floor_rooms)
+                full_rooms = sum(1 for room in floor_rooms if room_usage_by_id[room.id]["is_full"])
+                floor_summary.append({
+                    "floor": floor,
+                    "room_count": len(floor_rooms),
+                    "assigned": used_slots,
+                    "family_slots": sum(room.family_slots or 0 for room in floor_rooms),
+                    "used_slots": used_slots,
+                    "people_spaces": sum(room.people_spaces or 0 for room in floor_rooms),
+                    "used_spaces": used_spaces,
+                    "full_rooms": full_rooms,
+                })
 
         features.append({
             "type": "Feature",
@@ -277,7 +296,7 @@ def get_center_buildings(center_id):
                 "id": b.id,
                 "name": b.name,
                 "floors": b.floors,
-                "floor_summary": b.to_dict().get("floor_summary", []),
+                "floor_summary": floor_summary,
                 "operational_status": b.status or "open",
                 "display_label": display_label,
                 "evacuation_center_id": center_id,

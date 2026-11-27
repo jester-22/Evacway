@@ -21,6 +21,13 @@ from models import UploadedFile, db
 
 
 def _guess_content_type(filename, fallback=None):
+    ext = str(filename or "").rsplit(".", 1)[-1].lower() if "." in str(filename or "") else ""
+    if ext in ("jpg", "jpeg", "jpe"):
+        return "image/jpeg"
+    if ext == "png":
+        return "image/png"
+    if ext == "webp":
+        return "image/webp"
     guessed, _ = mimetypes.guess_type(filename or "")
     if guessed:
         return guessed
@@ -35,11 +42,25 @@ def _normalize_storage_path(subpath):
     return "/".join(parts)
 
 
+_UPLOADED_FILES_READY_ENGINES = set()
+MAX_PHOTO_BYTES = 10 * 1024 * 1024  # 10 MB per photo
+
+
 def _uploaded_files_table_exists():
     try:
-        return inspect(db.engine).has_table("uploaded_files")
+        engine_key = id(db.engine)
+        if engine_key in _UPLOADED_FILES_READY_ENGINES:
+            return True
+        exists = inspect(db.engine).has_table("uploaded_files")
+        if exists:
+            _UPLOADED_FILES_READY_ENGINES.add(engine_key)
+        return exists
     except Exception:
         return False
+
+
+def _escape_like_literal(value):
+    return str(value).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _upload_to_supabase_storage(storage_path, file_bytes, content_type):
@@ -111,7 +132,9 @@ def save_uploaded_photo(file_storage, category, uploader_folder):
             file_storage.stream.seek(0)
         except Exception:
             pass
-    file_bytes = file_storage.read()
+    file_bytes = file_storage.read(MAX_PHOTO_BYTES + 1)
+    if len(file_bytes) > MAX_PHOTO_BYTES:
+        raise ValueError("Uploaded photo exceeds the 10 MB size limit.")
 
     # 1. Prefer Supabase Storage when configured
     public_url = _upload_to_supabase_storage(storage_path, file_bytes, content_type)
@@ -190,9 +213,10 @@ def get_uploaded_file_from_db(subpath):
     record = UploadedFile.query.filter_by(storage_path=normalized).first()
     if not record:
         basename = os.path.basename(normalized)
-        if basename:
+        if basename and "%" not in basename and "_" not in basename:
+            escaped = _escape_like_literal(basename)
             record = UploadedFile.query.filter(
-                UploadedFile.storage_path.like(f"%/{basename}")
+                UploadedFile.storage_path.like(f"%/{escaped}", escape="\\")
             ).first()
     if not record:
         return None

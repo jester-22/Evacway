@@ -571,7 +571,7 @@ function BarangayManager() {
     const isLgu = window.location.pathname.startsWith("/lgu");
     const targetPath = isLgu ? "/lgu" : "/admin";
     if (centerId) {
-      navigate(`${targetPath}?tab=centers&center=${centerId}&subtab=buildings`);
+      navigate(`${targetPath}?tab=centers&center=${centerId}&subtab=structure`);
     } else {
       navigate(`${targetPath}?tab=centers`);
     }

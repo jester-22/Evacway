@@ -17,6 +17,11 @@ import {
   faRoute,
   faCircleCheck,
 } from "@fortawesome/free-solid-svg-icons";
+import CameraCaptureModal, {
+  PhotoSourceModal,
+  PhotoLightboxModal,
+  canUseInternalCamera,
+} from "../CameraCaptureModal/CameraCaptureModal";
 import { createSelectedLocationElement } from "../../utils/mapLocationIndicators";
 import { appConfirm } from "../../utils/appDialog";
 import "./HazardReportModal.css";
@@ -44,6 +49,12 @@ function HazardReportModal({
   const [reportType, setReportType] = useState("flood");
   const [photos, setPhotos] = useState([]); // Array of File objects
   const [photoPreviews, setPhotoPreviews] = useState([]); // Array of blob URLs
+  const [photoSourceOpen, setPhotoSourceOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(null);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
   const [submitting, setSubmitting] = useState(false);
   const [locating, setLocating] = useState(false);
   const [error, setError] = useState("");
@@ -212,21 +223,59 @@ function HazardReportModal({
     };
   }, []);
 
-  function handlePhotoAdd(e) {
-    const selectedFiles = Array.from(e.target.files || []);
+  function appendPhotoFiles(selectedFiles) {
     if (!selectedFiles.length) return;
 
-    setError("");
     const combined = [...photos, ...selectedFiles];
-
     if (combined.length > MAX_PHOTOS) {
       setError(`You can upload a maximum of ${MAX_PHOTOS} photos. The first ${MAX_PHOTOS} were kept.`);
       setPhotos(combined.slice(0, MAX_PHOTOS));
     } else {
+      setError("");
       setPhotos(combined);
     }
+  }
 
+  function handlePhotoAdd(e) {
+    const selectedFiles = Array.from(e.target.files || []);
     e.target.value = "";
+    appendPhotoFiles(selectedFiles);
+  }
+
+  function handleOpenPhotoChooser() {
+    if (photos.length >= MAX_PHOTOS) return;
+    setPhotoSourceOpen(true);
+  }
+
+  function handleOpenCamera() {
+    if (photos.length >= MAX_PHOTOS) return;
+    if (canUseInternalCamera()) {
+      setCameraOpen(true);
+    } else {
+      cameraInputRef.current?.click();
+    }
+  }
+
+  function handleOpenGallery() {
+    if (photos.length >= MAX_PHOTOS) return;
+    fileInputRef.current?.click();
+  }
+
+  function handlePhotoDrop(e) {
+    e.preventDefault();
+    setIsDraggingPhoto(false);
+    const allDropped = Array.from(e.dataTransfer?.files || []);
+    if (!allDropped.length) return;
+    const droppedImages = allDropped.filter(
+      (file) =>
+        file.type.startsWith("image/") ||
+        /\.(png|jpe?g|jpe|webp)$/i.test(file.name || "")
+    );
+    if (!droppedImages.length) {
+      setError("Please drop image files only (JPG, JPEG, JPE, PNG, or WebP).");
+      return;
+    }
+    appendPhotoFiles(droppedImages);
   }
 
   function handleRemovePhoto(index) {
@@ -336,8 +385,9 @@ function HazardReportModal({
   }
 
   return (
-    <PublicMapDialogShell onClose={onClose} labelledBy="hzm-dialog-title">
-      <form onSubmit={handleSubmit} className="hzm-modal" onClick={(e) => e.stopPropagation()}>
+    <>
+      <PublicMapDialogShell onClose={onClose} labelledBy="hzm-dialog-title">
+        <form onSubmit={handleSubmit} className="hzm-modal" onClick={(e) => e.stopPropagation()}>
         <div className="hzm-header">
           <div className="hzm-header-text">
             <h3 id="hzm-dialog-title" className="hzm-title">Report a Hazard</h3>
@@ -510,25 +560,59 @@ function HazardReportModal({
               </span>
             </div>
 
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png, image/jpeg, image/webp, .jpe"
+              multiple
+              onChange={handlePhotoAdd}
+              className="hzm-file-input-hidden"
+            />
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={handlePhotoAdd}
+              className="hzm-file-input-hidden"
+            />
+
             {photos.length === 0 ? (
-              <label className="hzm-photo-drop">
-                <input
-                  type="file"
-                  accept="image/png, image/jpeg, image/webp"
-                  multiple
-                  onChange={handlePhotoAdd}
-                  className="hzm-file-input"
-                  required
-                />
+              <button
+                type="button"
+                onClick={handleOpenPhotoChooser}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDraggingPhoto(true);
+                }}
+                onDragLeave={() => setIsDraggingPhoto(false)}
+                onDrop={handlePhotoDrop}
+                className={`hzm-photo-drop ${isDraggingPhoto ? "is-dragging" : ""}`}
+              >
                 <span className="hzm-photo-placeholder">
                   <FontAwesomeIcon icon={faCamera} />
                   <span>Tap or drop photos to upload (max {MAX_PHOTOS})</span>
+                  <small className="hzm-photo-subhint">Use camera or choose from gallery</small>
                 </span>
-              </label>
+              </button>
             ) : (
               <div className="hzm-multi-grid">
                 {photoPreviews.map((previewUrl, idx) => (
-                  <div key={previewUrl} className="hzm-preview-card">
+                  <div
+                    key={previewUrl}
+                    className="hzm-preview-card"
+                    onClick={() => setLightboxIndex(idx)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setLightboxIndex(idx);
+                      }
+                    }}
+                    aria-label={`View photo ${idx + 1} in full screen`}
+                    title="Click to view full photo"
+                  >
                     <img
                       src={previewUrl}
                       alt={`Hazard upload ${idx + 1}`}
@@ -537,7 +621,10 @@ function HazardReportModal({
                     {idx === 0 && <span className="hzm-cover-badge">Primary</span>}
                     <button
                       type="button"
-                      onClick={() => handleRemovePhoto(idx)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemovePhoto(idx);
+                      }}
                       className="hzm-remove-btn"
                       aria-label="Remove photo"
                       title="Remove this photo"
@@ -548,17 +635,15 @@ function HazardReportModal({
                 ))}
 
                 {photos.length < MAX_PHOTOS && (
-                  <label className="hzm-add-more-card" title="Add another photo">
-                    <input
-                      type="file"
-                      accept="image/png, image/jpeg, image/webp"
-                      multiple
-                      onChange={handlePhotoAdd}
-                      className="hzm-file-input"
-                    />
+                  <button
+                    type="button"
+                    onClick={handleOpenPhotoChooser}
+                    className="hzm-add-more-card"
+                    title="Add another photo"
+                  >
                     <FontAwesomeIcon icon={faPlus} />
                     <span>Add</span>
-                  </label>
+                  </button>
                 )}
               </div>
             )}
@@ -574,7 +659,35 @@ function HazardReportModal({
           </button>
         </div>
       </form>
-    </PublicMapDialogShell>
+      </PublicMapDialogShell>
+
+      <PhotoSourceModal
+        isOpen={photoSourceOpen}
+        onClose={() => setPhotoSourceOpen(false)}
+        onUseCamera={handleOpenCamera}
+        onChoosePhoto={handleOpenGallery}
+        title="Add hazard photo"
+      />
+
+      <PhotoLightboxModal
+        photos={photoPreviews}
+        activeIndex={lightboxIndex}
+        onClose={() => setLightboxIndex(null)}
+        onChangeIndex={setLightboxIndex}
+        onRemove={handleRemovePhoto}
+      />
+
+      <CameraCaptureModal
+        isOpen={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onCapture={(file) => appendPhotoFiles([file])}
+        onFallbackChooseFile={() => {
+          setCameraOpen(false);
+          fileInputRef.current?.click();
+        }}
+        title="Take hazard photo"
+      />
+    </>
   );
 }
 

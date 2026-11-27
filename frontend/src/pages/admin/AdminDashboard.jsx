@@ -163,16 +163,19 @@ function AdminDashboard() {
       setFocusedRescueId(null);
       setFocusedRegistrationId(null);
       setTab("reports");
+      navigate("/admin?tab=reports", { replace: true });
     } else if (notification.resource_type === "resident_registration" || notification.resource_type === "resident_account") {
       setFocusedRegistrationId(notification.resource_id);
       setFocusedReportId(null);
       setFocusedRescueId(null);
       setTab("registrations");
+      navigate("/admin?tab=registrations", { replace: true });
     } else {
       setFocusedRescueId(notification.resource_id);
       setFocusedReportId(null);
       setFocusedRegistrationId(null);
       setTab("rescue");
+      navigate("/admin?tab=rescue", { replace: true });
     }
   }
 

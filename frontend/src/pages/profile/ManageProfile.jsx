@@ -155,6 +155,7 @@ export default function ManageProfile() {
 
   // Navigation from Sidebar
   async function handleTabChange(nextTab) {
+    if (nextTab === "profile") return;
     if (isEditing && isDirty) {
       const { appConfirm } = await import("../../utils/appDialog");
       const confirmLeave = await appConfirm(
@@ -168,7 +169,6 @@ export default function ManageProfile() {
       if (!confirmLeave) return;
     }
 
-    if (nextTab === "profile") return;
     if (nextTab === "dashboard") {
       navigate("/dashboard");
       return;
@@ -799,12 +799,16 @@ export default function ManageProfile() {
                 <button
                   type="button"
                   onClick={handleSendMfaEnableCode}
-                  disabled={mfaSending || !mfaEmailDeliverable}
+                  disabled={mfaSending || mfaResendCooldown > 0 || !mfaEmailDeliverable}
                   className="profile-btn profile-btn-primary ds-btn ds-btn--primary"
                 >
                   <FontAwesomeIcon icon={faPaperPlane} />
                   <span>
-                    {mfaSending ? "Sending test code..." : "Test Email & Enable 2FA"}
+                    {mfaSending
+                      ? "Sending test code..."
+                      : mfaResendCooldown > 0
+                        ? `Wait ${mfaResendCooldown}s`
+                        : "Test Email & Enable 2FA"}
                   </span>
                 </button>
               )}

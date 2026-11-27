@@ -374,10 +374,21 @@ def reset_user_password(user_id):
 @role_required('admin')
 def toggle_user_active(user_id):
     user = User.query.get_or_404(user_id)
+    admin_id = int(get_jwt_identity())
+    if user.is_active and user.id == admin_id:
+        return jsonify({"error": "You cannot deactivate your own account."}), 400
+    if user.is_active and user.role == 'admin':
+        other_active_admins = User.query.filter(
+            User.role == 'admin',
+            User.is_active.is_(True),
+            User.id != user.id,
+        ).count()
+        if other_active_admins == 0:
+            return jsonify({"error": "Cannot deactivate the last active administrator account."}), 400
+
     user.is_active = not user.is_active
     db.session.commit()
 
-    admin_id = get_jwt_identity()
     action = "Activated" if user.is_active else "Deactivated"
     db.session.add(SystemLog(user_id=admin_id, action=f"{action} user account: {user.email}"))
     db.session.commit()

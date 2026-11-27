@@ -1070,7 +1070,7 @@ function Dashboard() {
       const nextStatus = event?.detail?.status;
       if (nextStatus) {
         setPushStatus(nextStatus);
-        if (nextStatus === "active") {
+        if (nextStatus === "active" && event?.detail?.source !== "dashboard") {
           setPushSuccess(false);
         }
       }
@@ -1125,7 +1125,7 @@ function Dashboard() {
       setPushSuccess(true);
       window.dispatchEvent(
         new CustomEvent("evacway:push-status-changed", {
-          detail: { status: "active", subscription: sub },
+          detail: { status: "active", subscription: sub, source: "dashboard" },
         })
       );
       setTimeout(() => {

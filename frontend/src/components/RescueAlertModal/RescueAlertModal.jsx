@@ -9,9 +9,15 @@ import {
   faXmark,
   faMapPin,
   faCamera,
+  faPlus,
   faUser,
   faPhone,
 } from "@fortawesome/free-solid-svg-icons";
+import CameraCaptureModal, {
+  PhotoSourceModal,
+  PhotoLightboxModal,
+  canUseInternalCamera,
+} from "../CameraCaptureModal/CameraCaptureModal";
 import { api } from "../../services/api";
 import { emergencyContacts } from "../../config/emergencyContacts";
 import { queryKeys } from "../../hooks/useEvacuationQueries";
@@ -63,11 +69,16 @@ export default function RescueAlertModal({
   const [submitting, setSubmitting] = useState(false);
   const [locating, setLocating] = useState(false);
   const [locationConfirmation, setLocationConfirmation] = useState(null);
+  const [photoSourceOpen, setPhotoSourceOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(null);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
 
   const previewContainerRef = useRef(null);
   const previewMapRef = useRef(null);
   const previewMarkerRef = useRef(null);
   const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
   const peopleCountTouchedRef = useRef(false);
   const contactTouchedRef = useRef(false);
 
@@ -92,13 +103,13 @@ export default function RescueAlertModal({
   // Close on Escape key
   useEffect(() => {
     function handleKeyDown(e) {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !cameraOpen && !photoSourceOpen && lightboxIndex === null) {
         onClose?.();
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, cameraOpen, photoSourceOpen, lightboxIndex]);
 
   // Create & cleanup object URLs for image previews
   const previewUrls = useMemo(
@@ -299,9 +310,7 @@ export default function RescueAlertModal({
       });
   }
 
-  function handleFilesSelected(event) {
-    const files = Array.from(event.target.files || []);
-    event.target.value = "";
+  function appendProofFiles(files) {
     if (!files.length) return;
 
     const remainingSlots = MAX_PHOTOS - proofImages.length;
@@ -313,9 +322,40 @@ export default function RescueAlertModal({
       }
       return;
     }
-
-    setProofImages((prev) => [...prev, ...files]);
     setError("");
+    setProofImages((prev) => [...prev, ...files]);
+  }
+
+  function handleFilesSelected(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    appendProofFiles(files);
+  }
+
+  function handleOpenCamera() {
+    if (proofImages.length >= MAX_PHOTOS) return;
+    if (canUseInternalCamera()) {
+      setCameraOpen(true);
+    } else {
+      cameraInputRef.current?.click();
+    }
+  }
+
+  function handlePhotoDrop(e) {
+    e.preventDefault();
+    setIsDraggingPhoto(false);
+    const allDropped = Array.from(e.dataTransfer?.files || []);
+    if (!allDropped.length) return;
+    const droppedImages = allDropped.filter(
+      (file) =>
+        file.type.startsWith("image/") ||
+        /\.(png|jpe?g|jpe|webp)$/i.test(file.name || "")
+    );
+    if (!droppedImages.length) {
+      setError("Please drop image files only (JPG, JPEG, JPE, PNG, or WebP).");
+      return;
+    }
+    appendProofFiles(droppedImages);
   }
 
   function handleRemovePhoto(indexToRemove) {
@@ -405,8 +445,9 @@ export default function RescueAlertModal({
       coordinates?.location_source === "approximate");
 
   return (
-    <PublicMapDialogShell onClose={onClose} labelledBy="rescue-title">
-      {!user ? (
+    <>
+      <PublicMapDialogShell onClose={onClose} labelledBy="rescue-title">
+        {!user ? (
         /* Not logged in: simple message screen with hotline card */
         <div
           className="rescue-modal"
@@ -664,66 +705,6 @@ export default function RescueAlertModal({
               />
             </label>
 
-            {/* Photo Upload */}
-            <div className="rescue-field">
-              <div className="rescue-field-label-row">
-                <span className="rescue-field-label">Situation photos</span>
-                <span className="rescue-field-optional">
-                  Optional ({proofImages.length}/{MAX_PHOTOS})
-                </span>
-              </div>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                multiple
-                className="rescue-file-input-hidden"
-                onChange={handleFilesSelected}
-              />
-
-              <div className="rescue-photo-upload">
-                {proofImages.length < MAX_PHOTOS && (
-                  <button
-                    type="button"
-                    className="rescue-upload-trigger"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <span className="rescue-upload-icon-badge">
-                      <FontAwesomeIcon icon={faCamera} />
-                    </span>
-                    <span className="rescue-upload-copy">
-                      <strong>Add photo proof</strong>
-                      <small>JPG, PNG, or WebP · Up to 5 photos</small>
-                    </span>
-                    <span className="rescue-upload-cta">Browse</span>
-                  </button>
-                )}
-
-                {proofImages.length > 0 && (
-                  <div className="rescue-image-preview">
-                    {proofImages.map((file, index) => (
-                      <div key={`${file.name}-${index}`} className="rescue-image-preview-item">
-                        <img
-                          src={previewUrls[index]}
-                          alt={`Selected proof ${index + 1}`}
-                          className="rescue-image-preview-img"
-                        />
-                        <button
-                          type="button"
-                          className="rescue-image-remove"
-                          onClick={() => handleRemovePhoto(index)}
-                          aria-label={`Remove photo ${index + 1}`}
-                        >
-                          <FontAwesomeIcon icon={faXmark} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
             {/* Location */}
             <div className="rescue-field">
               <div className="rescue-field-label-row">
@@ -828,6 +809,106 @@ export default function RescueAlertModal({
                 />
               </label>
             </div>
+
+            {/* Photo Upload (Bottom, matching Hazard Report upload box) */}
+            <div className="rescue-field">
+              <div className="rescue-field-label-row">
+                <span className="rescue-field-label">
+                  Photos (optional, up to {MAX_PHOTOS})
+                </span>
+                <span className="rescue-photo-count">
+                  {proofImages.length} / {MAX_PHOTOS}
+                </span>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,.jpe"
+                multiple
+                className="rescue-file-input-hidden"
+                onChange={handleFilesSelected}
+              />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="rescue-file-input-hidden"
+                onChange={handleFilesSelected}
+              />
+
+              {proofImages.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setPhotoSourceOpen(true)}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDraggingPhoto(true);
+                  }}
+                  onDragLeave={() => setIsDraggingPhoto(false)}
+                  onDrop={handlePhotoDrop}
+                  className={`rescue-photo-drop ${isDraggingPhoto ? "is-dragging" : ""}`}
+                >
+                  <span className="rescue-photo-placeholder">
+                    <FontAwesomeIcon icon={faCamera} />
+                    <span>Tap or drop photos to upload (max {MAX_PHOTOS})</span>
+                    <small className="rescue-photo-subhint">Use camera or choose from gallery</small>
+                  </span>
+                </button>
+              ) : (
+                <div className="rescue-multi-grid">
+                  {proofImages.map((file, index) => (
+                    <div
+                      key={`${file.name}-${index}`}
+                      className="rescue-preview-card-thumb"
+                      onClick={() => setLightboxIndex(index)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setLightboxIndex(index);
+                        }
+                      }}
+                      aria-label={`View photo ${index + 1} in full screen`}
+                      title="Click to view full photo"
+                    >
+                      <img
+                        src={previewUrls[index]}
+                        alt={`Selected proof ${index + 1}`}
+                        className="rescue-card-img"
+                      />
+                      {index === 0 && <span className="rescue-cover-badge">Primary</span>}
+                      <button
+                        type="button"
+                        className="rescue-remove-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemovePhoto(index);
+                        }}
+                        aria-label={`Remove photo ${index + 1}`}
+                        title="Remove this photo"
+                      >
+                        <FontAwesomeIcon icon={faXmark} />
+                      </button>
+                    </div>
+                  ))}
+
+                  {proofImages.length < MAX_PHOTOS && (
+                    <button
+                      type="button"
+                      onClick={() => setPhotoSourceOpen(true)}
+                      className="rescue-add-more-card"
+                      title="Add another photo"
+                    >
+                      <FontAwesomeIcon icon={faPlus} />
+                      <span>Add</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {needsLocationConfirmation(coordinates) && locationConfirmation === coordinates && (
@@ -847,6 +928,34 @@ export default function RescueAlertModal({
           </footer>
         </form>
       )}
-    </PublicMapDialogShell>
+      </PublicMapDialogShell>
+
+      <PhotoSourceModal
+        isOpen={photoSourceOpen}
+        onClose={() => setPhotoSourceOpen(false)}
+        onUseCamera={handleOpenCamera}
+        onChoosePhoto={() => fileInputRef.current?.click()}
+        title="Add situation photo"
+      />
+
+      <PhotoLightboxModal
+        photos={previewUrls}
+        activeIndex={lightboxIndex}
+        onClose={() => setLightboxIndex(null)}
+        onChangeIndex={setLightboxIndex}
+        onRemove={handleRemovePhoto}
+      />
+
+      <CameraCaptureModal
+        isOpen={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onCapture={(file) => appendProofFiles([file])}
+        onFallbackChooseFile={() => {
+          setCameraOpen(false);
+          fileInputRef.current?.click();
+        }}
+        title="Take situation photo"
+      />
+    </>
   );
 }

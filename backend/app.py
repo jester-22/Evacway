@@ -64,6 +64,12 @@ app.config["JWT_SECRET_KEY"] = (
 # Keep the user logged in for 7 days before the access token
 # expires.
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
+app.config.setdefault("MAX_CONTENT_LENGTH", 25 * 1024 * 1024)
+
+if app.config["JWT_SECRET_KEY"] == "evacway-dev-secret-change-this-later":
+    app.logger.warning(
+        "JWT_SECRET_KEY is using the default development fallback. Set JWT_SECRET_KEY in production!"
+    )
 
 jwt = JWTManager(app)
 
@@ -72,9 +78,50 @@ jwt = JWTManager(app)
 # CORS
 # =========================================================
 
+import re
+
+_ALLOWED_CORS_ORIGIN_PATTERNS = [
+    re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"),
+    re.compile(r"^https?://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$"),
+    re.compile(r"^https://evacway(-[a-z0-9-]+)?\.vercel\.app$"),
+]
+
+
+def _allowed_cors_origins():
+    origins = {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+        "https://evacway.vercel.app",
+    }
+    for env_key in ("FRONTEND_URL", "FRONTEND_URL_PUBLIC", "APP_URL_PUBLIC", "APP_URL_LOCAL"):
+        val = (os.environ.get(env_key) or app.config.get(env_key) or "").strip().rstrip("/")
+        if val:
+            origins.add(val)
+    extra = (os.environ.get("CORS_ALLOWED_ORIGINS") or "").strip()
+    if extra:
+        for item in extra.split(","):
+            cleaned = item.strip().rstrip("/")
+            if cleaned:
+                origins.add(cleaned)
+    return sorted(origins)
+
+
+ALLOWED_CORS_ORIGINS = _allowed_cors_origins()
+
+
+def _is_allowed_cors_origin(origin):
+    if not origin:
+        return False
+    if origin in ALLOWED_CORS_ORIGINS:
+        return True
+    return any(pattern.match(origin) for pattern in _ALLOWED_CORS_ORIGIN_PATTERNS)
+
+
 CORS(
     app,
-    resources={r"/*": {"origins": "*"}},
+    resources={r"/*": {"origins": [*ALLOWED_CORS_ORIGINS, *_ALLOWED_CORS_ORIGIN_PATTERNS]}},
     supports_credentials=True,
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
@@ -84,14 +131,14 @@ CORS(
 
 @app.after_request
 def add_cors_headers(response):
-    origin = request.headers.get("Origin")
-    if origin:
+    origin = (request.headers.get("Origin") or "").strip().rstrip("/")
+    if _is_allowed_cors_origin(origin):
         response.headers["Access-Control-Allow-Origin"] = origin
-    else:
-        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
-    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
     return response
 
 
@@ -222,10 +269,13 @@ def init_db():
 @app.route("/static/uploads/<path:subpath>")
 def serve_uploaded_file(subpath):
     static_root = os.path.join(app.root_path, "static")
+    uploads_roots = [
+        os.path.normpath(os.path.join(static_root, "uploads")),
+        os.path.normpath(os.path.join(static_root, "upload")),
+    ]
     candidates = [
         os.path.join(static_root, "uploads", subpath),
         os.path.join(static_root, "upload", subpath),
-        os.path.join(static_root, subpath),
     ]
     basename = os.path.basename(subpath)
     if basename:
@@ -233,7 +283,6 @@ def serve_uploaded_file(subpath):
             os.path.join(static_root, "uploads", "rescue"),
             os.path.join(static_root, "uploads", "hazard"),
             os.path.join(static_root, "uploads"),
-            os.path.join(static_root, "rescue"),
         ):
             if os.path.isdir(base_dir):
                 candidates.append(os.path.join(base_dir, basename))
@@ -241,15 +290,16 @@ def serve_uploaded_file(subpath):
                     if entry.is_dir():
                         candidates.append(os.path.join(entry.path, basename))
 
-    static_root_norm = os.path.normpath(static_root)
     for candidate in candidates:
         norm = os.path.normpath(candidate)
-        if (
-            os.path.commonpath([static_root_norm, norm]) == static_root_norm
-            and os.path.isfile(norm)
-        ):
+        in_allowed_root = any(
+            os.path.commonpath([root, norm]) == root for root in uploads_roots
+        )
+        if in_allowed_root and os.path.isfile(norm):
             directory, filename = os.path.split(norm)
-            return send_from_directory(directory, filename)
+            resp = send_from_directory(directory, filename)
+            resp.headers["X-Content-Type-Options"] = "nosniff"
+            return resp
 
     try:
         from services.upload_storage import get_uploaded_file_from_db
@@ -258,6 +308,7 @@ def serve_uploaded_file(subpath):
             data, content_type = stored
             response = Response(data, mimetype=content_type)
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            response.headers["X-Content-Type-Options"] = "nosniff"
             return response
     except Exception as exc:
         app.logger.warning("Could not load uploaded file %s from database: %s", subpath, exc)

@@ -2722,43 +2722,61 @@ def auto_geofence_check_in():
         return jsonify({"success": False, "message": err_msg, "error": err_msg}), 400
 
     # Validate coordinate overlap / proximity to the center entrance (<= 15m)
-    is_inside = False
-    if lat is not None and lng is not None:
-        import math
+    import math
+    if lat is None or lng is None:
+        return jsonify({
+            "success": False,
+            "error": "Current GPS latitude and longitude are required for automatic check-in.",
+            "is_inside": False,
+        }), 400
+    try:
         u_lat, u_lng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return jsonify({
+            "success": False,
+            "error": "Valid numeric latitude and longitude are required.",
+            "is_inside": False,
+        }), 400
+    if not (math.isfinite(u_lat) and math.isfinite(u_lng) and -90.0 <= u_lat <= 90.0 and -180.0 <= u_lng <= 180.0):
+        return jsonify({
+            "success": False,
+            "error": "Valid GPS coordinates are required.",
+            "is_inside": False,
+        }), 400
 
-        def _haversine_m(lat1, lng1, lat2, lng2):
-            R = 6371000.0
-            dlat = math.radians(lat2 - lat1)
-            dlng = math.radians(lng2 - lng1)
-            a = (
-                math.sin(dlat / 2) ** 2
-                + math.cos(math.radians(lat1))
-                * math.cos(math.radians(lat2))
-                * math.sin(dlng / 2) ** 2
-            )
-            return R * 2 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+    is_inside = False
+    def _haversine_m(lat1, lng1, lat2, lng2):
+        R = 6371000.0
+        dlat = math.radians(lat2 - lat1)
+        dlng = math.radians(lng2 - lng1)
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(math.radians(lat1))
+            * math.cos(math.radians(lat2))
+            * math.sin(dlng / 2) ** 2
+        )
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
 
-        if center.entrance_geom is not None:
-            try:
-                ent_shape = to_shape(center.entrance_geom)
-                ent_pts = list(ent_shape.geoms) if hasattr(ent_shape, "geoms") else [ent_shape]
-                for e_pt in ent_pts:
-                    if _haversine_m(u_lat, u_lng, float(e_pt.y), float(e_pt.x)) <= 15.0:
-                        is_inside = True
-                        break
-            except Exception:
-                pass
-        elif center.geom is not None:
-            try:
-                pt = Point(u_lng, u_lat)
-                center_shape = to_shape(center.geom)
-                if center_shape.contains(pt) or center_shape.distance(pt) <= 0.00014:
+    if center.entrance_geom is not None:
+        try:
+            ent_shape = to_shape(center.entrance_geom)
+            ent_pts = list(ent_shape.geoms) if hasattr(ent_shape, "geoms") else [ent_shape]
+            for e_pt in ent_pts:
+                if _haversine_m(u_lat, u_lng, float(e_pt.y), float(e_pt.x)) <= 15.0:
                     is_inside = True
-            except Exception:
-                pass
+                    break
+        except Exception:
+            pass
+    if not is_inside and center.geom is not None:
+        try:
+            pt = Point(u_lng, u_lat)
+            center_shape = to_shape(center.geom)
+            if center_shape.contains(pt) or center_shape.distance(pt) <= 0.00014:
+                is_inside = True
+        except Exception:
+            pass
 
-    if lat is not None and lng is not None and not is_inside:
+    if not is_inside:
         return jsonify({
             "success": False,
             "message": "Current location has not reached the evacuation center entrance yet.",

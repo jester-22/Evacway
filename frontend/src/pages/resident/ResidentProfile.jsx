@@ -92,6 +92,8 @@ export default function ResidentProfile() {
     return () => clearTimeout(cooldownTimerRef.current);
   }, [resetCooldown]);
 
+  const [reloadTick, setReloadTick] = useState(0);
+
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -122,7 +124,7 @@ export default function ResidentProfile() {
       active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reloadTick]);
 
   const effectiveName =
     accountData?.name ||
@@ -352,7 +354,15 @@ export default function ResidentProfile() {
           {loadError && (
             <div className="profile-alert is-error ds-banner ds-banner--danger" role="alert">
               <FontAwesomeIcon icon={faTriangleExclamation} />
-              <span>{loadError}</span>
+              <span style={{ flex: 1 }}>{loadError}</span>
+              <button
+                type="button"
+                onClick={() => setReloadTick((prev) => prev + 1)}
+                className="profile-btn profile-btn-secondary ds-btn ds-btn--secondary"
+                disabled={loading}
+              >
+                Retry
+              </button>
             </div>
           )}
 
@@ -384,7 +394,7 @@ export default function ResidentProfile() {
                   Changes here only update your EvacWay account and do not modify your official barangay resident record.
                 </p>
               </div>
-              {!isEditing && !loading && (
+              {!isEditing && !loading && accountData && !loadError && (
                 <button
                   type="button"
                   onClick={handleStartEdit}

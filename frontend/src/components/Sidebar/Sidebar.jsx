@@ -131,7 +131,25 @@ function Sidebar({
   const [drawerProfileMenuOpen, setDrawerProfileMenuOpen] = useState(false);
   const [mobileProfileMenuOpen, setMobileProfileMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [isCompactViewport, setIsCompactViewport] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return Boolean(isMobile);
+    }
+    return window.matchMedia("(max-width: 1024px)").matches;
+  });
   const logoutTimer = useRef(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const mq = window.matchMedia("(max-width: 1024px)");
+    const handleChange = (e) => setIsCompactViewport(e.matches);
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", handleChange);
+      return () => mq.removeEventListener("change", handleChange);
+    }
+    mq.addListener(handleChange);
+    return () => mq.removeListener(handleChange);
+  }, []);
 
   const cancelBtnRef = useRef(null);
   const submitBtnRef = useRef(null);
@@ -544,7 +562,7 @@ function Sidebar({
         </div>
 
         <div className="sidebar-mobile-right">
-          <NotificationCenter onSelect={onSelectNotification} />
+          {isCompactViewport && <NotificationCenter onSelect={onSelectNotification} />}
 
           <div className="sidebar-mobile-profile-wrap">
             <button
@@ -736,7 +754,7 @@ function Sidebar({
       <aside className="sidebar-rail">
         <div className="sidebar-brand">
           <img src="/evacway-logo-text.png" alt="EvacWay" className="sidebar-logo sidebar-logo-wide" />
-          <NotificationCenter onSelect={onSelectNotification} />
+          {!isCompactViewport && <NotificationCenter onSelect={onSelectNotification} />}
         </div>
 
         <nav className="sidebar-navigation" aria-label="Main navigation">

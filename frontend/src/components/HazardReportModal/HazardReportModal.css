@@ -414,9 +414,15 @@
   border-radius: 999px;
 }
 
+.hzm-file-input-hidden {
+  display: none !important;
+}
+
 .hzm-photo-drop {
   position: relative;
   display: block;
+  width: 100%;
+  padding: 0;
   border: 1.5px dashed #cbd5e1;
   border-radius: 10px;
   background: #f9fafb;
@@ -424,7 +430,17 @@
   overflow: hidden;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
-.hzm-photo-drop:hover { border-color: #2563eb; background: rgba(37, 99, 235, 0.04); }
+.hzm-photo-drop:hover,
+.hzm-photo-drop.is-dragging {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.04);
+}
+
+.hzm-photo-subhint {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #64748b;
+}
 
 .hzm-file-input {
   position: absolute;
@@ -460,6 +476,12 @@
   overflow: hidden;
   border: 1px solid #e2e8f0;
   background: #f1f5f9;
+  cursor: zoom-in;
+  transition: border-color 0.15s ease;
+}
+
+.hzm-preview-card:hover {
+  border-color: #2563eb;
 }
 
 .hzm-card-img {

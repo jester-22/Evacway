@@ -46,3 +46,29 @@ test("native public map dialogs stay hidden unless open", () => {
   assert.match(styles, /dialog\.public-map-dialog-panel\[open\]/);
   assert.doesNotMatch(styles, /dialog\.public-map-dialog-panel\s*\{/);
 });
+
+test("hazard and rescue modals keep secondary photo overlays outside PublicMapDialogShell", () => {
+  const hazardModal = readFileSync(
+    new URL("../HazardReportModal/HazardReportModal.jsx", import.meta.url),
+    "utf8"
+  );
+  const rescueModal = readFileSync(
+    new URL("../RescueAlertModal/RescueAlertModal.jsx", import.meta.url),
+    "utf8"
+  );
+  for (const [name, source] of [
+    ["HazardReportModal", hazardModal],
+    ["RescueAlertModal", rescueModal],
+  ]) {
+    const shellMatch = source.match(
+      /<PublicMapDialogShell[\s\S]*?<\/PublicMapDialogShell>/
+    );
+    assert.ok(shellMatch, `${name} should render PublicMapDialogShell`);
+    const insideShell = shellMatch[0];
+    assert.doesNotMatch(
+      insideShell,
+      /<(CameraCaptureModal|PhotoSourceModal|PhotoLightboxModal)\b/,
+      `${name} must keep secondary overlays outside PublicMapDialogShell so its single-child invariant holds`
+    );
+  }
+});

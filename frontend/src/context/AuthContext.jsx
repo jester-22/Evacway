@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../services/api";
 import { useNavigate } from "react-router-dom";
+import { resetNotificationSyncState } from "../utils/notificationSync";
 
 function isJwtExpired(token) {
   if (!token || typeof token !== "string") return true;
@@ -65,6 +66,7 @@ export function AuthProvider({ children }) {
     function handleAuthExpired() {
       const wasStaff = user?.role === "admin" || user?.role === "lgu_personnel";
       queryClient.clear();
+      resetNotificationSyncState();
       localStorage.removeItem("evacway_token");
       localStorage.removeItem("evacway_user");
       setUser(null);
@@ -83,7 +85,10 @@ export function AuthProvider({ children }) {
         ? String(user.id) === String(data.user.id)
         : user.email?.trim().toLowerCase() === data.user.email?.trim().toLowerCase())
     );
-    if (!sameAccount) queryClient.clear();
+    if (!sameAccount) {
+      queryClient.clear();
+      resetNotificationSyncState();
+    }
     localStorage.setItem("evacway_token", data.access_token);
     localStorage.setItem("evacway_user", JSON.stringify(data.user));
     setUser(data.user);
@@ -105,6 +110,7 @@ export function AuthProvider({ children }) {
 
   function clearSession() {
     queryClient.clear();
+    resetNotificationSyncState();
     localStorage.removeItem("evacway_token");
     localStorage.removeItem("evacway_user");
     setUser(null);

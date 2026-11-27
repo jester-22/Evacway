@@ -386,33 +386,35 @@ export function useBuildingsForCenters(centersData) {
       .filter((id) => id !== undefined && id !== null);
   }, [centersData]);
 
-  const queries = useQueries({
+  const combined = useQueries({
     queries: centerIds.map((centerId) => ({
       queryKey: queryKeys.buildings(centerId),
       queryFn: () => api.getCenterBuildings(centerId),
       enabled: centerId !== null && centerId !== undefined,
       staleTime: 60 * 1000,
     })),
+    combine: (results) => {
+      const allFeatures = [];
+      let isLoading = false;
+      let isFetching = false;
+      for (const q of results) {
+        if (q.isLoading) isLoading = true;
+        if (q.isFetching) isFetching = true;
+        if (q.data && Array.isArray(q.data.features)) {
+          allFeatures.push(...q.data.features);
+        }
+      }
+      return {
+        buildingsGeoJSON: {
+          type: "FeatureCollection",
+          features: allFeatures,
+        },
+        isLoading,
+        isFetching,
+        refetch: () => Promise.all(results.map((q) => q.refetch())),
+      };
+    },
   });
 
-  const buildingsGeoJSON = useMemo(() => {
-    const allFeatures = [];
-    queries.forEach((q) => {
-      const fc = q.data;
-      if (fc && Array.isArray(fc.features)) {
-        allFeatures.push(...fc.features);
-      }
-    });
-    return {
-      type: "FeatureCollection",
-      features: allFeatures,
-    };
-  }, [queries]);
-
-  return {
-    buildingsGeoJSON,
-    isLoading: queries.some((q) => q.isLoading),
-    isFetching: queries.some((q) => q.isFetching),
-    refetch: () => Promise.all(queries.map((q) => q.refetch())),
-  };
-}
+  return combined;
+}

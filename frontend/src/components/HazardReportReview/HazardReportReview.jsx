@@ -532,7 +532,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     };
   }, [selected]);
 
-  // Cleanup map instance on drawer close or unmount
+  // Cleanup map instance on drawer close
   useEffect(() => {
     if (!selected) {
       if (mapMarkerRef.current) {
@@ -545,6 +545,20 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
       }
     }
   }, [selected]);
+
+  // Ensure WebGL map context is released if component unmounts while drawer is open
+  useEffect(() => {
+    return () => {
+      if (mapMarkerRef.current) {
+        mapMarkerRef.current.remove();
+        mapMarkerRef.current = null;
+      }
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, []);
 
   // Keyboard navigation, Escape close, and Focus Trap for Incident Modal & Lightbox
   useEffect(() => {
@@ -625,7 +639,7 @@ function HazardReportReview({ focusReportId, onOpenMap }) {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [lightbox, selected, selectedPhotos]);
+  }, [lightbox, selected, selectedPhotos, noticeModal, confirmActionModal, submittingAction, reopening]);
 
   // Focus management: move focus into lightbox on open, restore to modal on close
   useEffect(() => {

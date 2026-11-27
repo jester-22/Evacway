@@ -4,7 +4,7 @@ import hashlib
 import re
 import secrets
 import time
-from datetime import timedelta
+from datetime import timedelta, timezone
 from collections import defaultdict
 from threading import Lock
 from urllib.parse import quote
@@ -88,7 +88,7 @@ def _email_otp_digest(user_id, jti, code):
 
 def _create_email_otp_token(user, code, flow='staff_email_otp_challenge', extra_claims=None):
     jti = secrets.token_urlsafe(16)
-    issued_at_ts = int(time.time())
+    issued_at_ts = time.time()
     claims = {
         'account_type': 'user',
         'mfa_flow': flow,
@@ -142,10 +142,12 @@ def _is_email_otp_replayed(user, claims):
     # Multi-worker replay protection: if user already completed a sign-in after this OTP was issued
     otp_iat = claims.get('otp_iat')
     if otp_iat is not None and user.last_login_at is not None:
-        last_login_ts = user.last_login_at.timestamp() if user.last_login_at.tzinfo else (
-            user.last_login_at.replace(tzinfo=utc_now().tzinfo).timestamp()
+        last_login_ts = (
+            user.last_login_at.timestamp()
+            if user.last_login_at.tzinfo
+            else user.last_login_at.replace(tzinfo=timezone.utc).timestamp()
         )
-        if last_login_ts >= float(otp_iat):
+        if last_login_ts > float(otp_iat):
             return True
     return False
 

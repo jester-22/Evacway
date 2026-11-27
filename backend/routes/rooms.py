@@ -799,17 +799,27 @@ def get_room_families(room_id):
     total_assigned = len(assignments)
     total_occupied = sum(1 for a in assignments if a.checked_in_at is not None)
 
+    resident_ids = [a.resident_id for a in assignments if a.resident_id is not None]
+    residents_by_id = (
+        {
+            r.id: r
+            for r in Resident.query.filter(Resident.id.in_(resident_ids)).all()
+        }
+        if resident_ids
+        else {}
+    )
+    today = date.today()
+
     # Group by family
     family_members_map = defaultdict(list)
     for assignment in assignments:
-        resident = Resident.query.get(assignment.resident_id)
+        resident = residents_by_id.get(assignment.resident_id)
         if not resident:
             continue
         family_id = resident.family_id
 
         age = None
         if resident.date_of_birth:
-            today = date.today()
             age = today.year - resident.date_of_birth.year - (
                 (today.month, today.day) < (resident.date_of_birth.month, resident.date_of_birth.day)
             )
@@ -868,6 +878,20 @@ def get_room_families(room_id):
                     tags.append(flag)
         return tags
 
+    family_ids = [fid for fid in family_members_map.keys() if fid]
+    families_by_id = (
+        {
+            f.id: f
+            for f in Family.query.options(
+                joinedload(Family.barangay).load_only(Barangay.id, Barangay.name)
+            )
+            .filter(Family.id.in_(family_ids))
+            .all()
+        }
+        if family_ids
+        else {}
+    )
+
     families = []
     for family_id, residents_in_room in family_members_map.items():
         fam_flags = extract_family_special_needs(residents_in_room)
@@ -875,7 +899,7 @@ def get_room_families(room_id):
         is_fam_checked_in = checked_in_mems > 0
         checkin_status = "Checked in" if is_fam_checked_in else "Not yet arrived"
         if family_id:
-            fam = Family.query.get(family_id)
+            fam = families_by_id.get(family_id)
             if fam:
                 families.append({
                     "family_id": fam.id,

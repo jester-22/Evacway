@@ -56,7 +56,13 @@ export default function EvacueeCheckIn() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedOperationId, setSelectedOperationId] = useState("active");
-  const [selectedCenterId, setSelectedCenterId] = useState("all");
+  const urlCenterId = searchParams.get("center_id");
+  const [selectedCenterId, setSelectedCenterId] = useState(() => urlCenterId || "all");
+  useEffect(() => {
+    if (urlCenterId && urlCenterId !== selectedCenterId) {
+      setSelectedCenterId(urlCenterId);
+    }
+  }, [urlCenterId]);
   const [selectedDate] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [nonRegisteredModal, setNonRegisteredModal] = useState(null);

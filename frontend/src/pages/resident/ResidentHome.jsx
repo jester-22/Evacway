@@ -2424,7 +2424,8 @@ const ResidentHome = () => {
       return;
     }
 
-    if (api && typeof api.getHazardReports === "function" && mapRef.current) {
+    const isStaffUser = user?.role === "admin" || user?.role === "lgu_personnel";
+    if (isStaffUser && api && typeof api.getHazardReports === "function" && mapRef.current) {
       api.getHazardReports("all")
         .then((all) => {
           const found = all?.find((r) => String(r.id) === targetId);
@@ -2434,7 +2435,7 @@ const ResidentHome = () => {
         })
         .catch(() => { });
     }
-  }, [mapLoaded, hazardReports]);
+  }, [mapLoaded, hazardReports, user?.role]);
 
   // --------------------------------------------------
   // Remove lookup data saved by the earlier name-only flow.
@@ -2508,6 +2509,10 @@ const ResidentHome = () => {
   // Automatic GPS arrival & check-in detection
   // --------------------------------------------------
   const autoCheckInAttemptedRef = useRef(false);
+  const latestMyCenterRef = useRef(myCenter);
+  useEffect(() => {
+    latestMyCenterRef.current = myCenter;
+  }, [myCenter]);
 
   useEffect(() => {
     if (!isLoggedInResident || !myLocation || !myCenter || myCenter.is_checked_in) return;
@@ -2534,14 +2539,21 @@ const ResidentHome = () => {
       }
       if (!centerCoord && myCenter.evacuation_center) {
         const cProps = myCenter.evacuation_center;
-        if (cProps.latitude && cProps.longitude) {
-          centerCoord = { lat: Number(cProps.latitude), lng: Number(cProps.longitude) };
+        if (cProps.latitude != null && cProps.longitude != null) {
+          centerCoord = {
+            latitude: Number(cProps.latitude),
+            longitude: Number(cProps.longitude),
+          };
         }
       }
       if (centerCoord) {
-        const dist = getDistanceMeters([myLocation.lat, myLocation.lng], [centerCoord.lat, centerCoord.lng]);
-        if (dist <= 50) {
-          isInside = true;
+        const cLat = Number(centerCoord.latitude ?? centerCoord.lat);
+        const cLng = Number(centerCoord.longitude ?? centerCoord.lng);
+        if (Number.isFinite(cLat) && Number.isFinite(cLng)) {
+          const dist = getDistanceMeters([myLocation.lat, myLocation.lng], [cLat, cLng]);
+          if (dist <= 50) {
+            isInside = true;
+          }
         }
       }
     }
@@ -2944,7 +2956,7 @@ const ResidentHome = () => {
               throw new Error("The map download reached the 50 MB offline limit.");
             }
 
-            if (!navigator.serviceWorker.controller) {
+            if (!navigator.serviceWorker?.controller) {
               const headers = new Headers(response.headers);
               headers.set("X-EvacWay-Tile-Bytes", buffer.byteLength);
               headers.set("X-EvacWay-Saved-At", new Date().toISOString());
@@ -3982,10 +3994,10 @@ const ResidentHome = () => {
           duration: 300,
         });
         accuracyCircleStateRef.current = myLocation;
-        const arrow = oldMarker.getElement()?.querySelector(".nav-arrow-svg");
-        if (arrow) {
+        const arrowDisc = oldMarker.getElement()?.querySelector(".nav-user-arrow-disc");
+        if (arrowDisc) {
           const heading = myLocation.heading || lastHeadingRef.current || 0;
-          arrow.style.transform = `rotate(${heading}deg)`;
+          arrowDisc.style.transform = `rotate(${heading}deg)`;
         }
       } else {
         oldMarker.setLngLat(userCoordinates);
@@ -4623,20 +4635,14 @@ const ResidentHome = () => {
 
           setLocationPermission("granted");
         } catch (err) {
-          const blockedNotice = {
-            no_roads_available: true,
-            all_blocked: true,
-            evacuation_center:
-              myCenter?.evacuation_center || { name: "Evacuation Center" },
-            message:
-              "No roads available. All routes to your evacuation center are blocked.",
-            route: [],
-            distance_km: null,
-            estimated_time_min: null,
-          };
           setAssistanceSent(false);
-          routeDataRef.current = blockedNotice;
-          setRoute(blockedNotice);
+          routeDataRef.current = null;
+          setRoute(null);
+          const msg =
+            err?.message === "Failed to fetch" || err?.name === "TypeError"
+              ? "Could not reach the routing server. Check your internet connection and try again."
+              : err?.message || "Couldn't compute an evacuation route right now. Please try again.";
+          setRouteError(msg);
         } finally {
           setFindingRoute(false);
         }
@@ -5035,12 +5041,13 @@ const ResidentHome = () => {
           setArrivalToast(arrivalMsg);
 
           // Auto check-in if user has assigned center
+          const currentMyCenter = latestMyCenterRef.current;
           const targetCenterId = target?.id || target?.center_id;
-          if (myCenter && !myCenter.is_checked_in && targetCenterId) {
+          if (currentMyCenter && !currentMyCenter.is_checked_in && targetCenterId) {
             api.autoGeofenceCheckIn({
               center_id: targetCenterId,
-              resident_id: myCenter.resident_id,
-              family_id: myCenter.family_id,
+              resident_id: currentMyCenter.resident_id,
+              family_id: currentMyCenter.family_id,
               latitude: rawLat,
               longitude: rawLng,
             }).then((res) => {
@@ -6204,7 +6211,7 @@ const ResidentHome = () => {
         } else if (resolvedCenterId != null && Array.isArray(entrancesGeoJSON?.features)) {
           const entrance = entrancesGeoJSON.features.find((f) => {
             const props = f.properties || f;
-            return String(props.evacuation_center_id ?? "") === String(resolvedCenterId);
+            return String(props.center_id ?? props.evacuation_center_id ?? "") === String(resolvedCenterId);
           });
           const entranceCoords = entrance?.geometry?.coordinates;
           if (
@@ -6387,7 +6394,7 @@ const ResidentHome = () => {
       ? (String(myCenter.room.room_number).toLowerCase().startsWith("room")
         ? myCenter.room.room_number
         : `Room ${myCenter.room.room_number}`)
-      : "Room 29"
+      : "Assigned Room"
   );
   const hasBuilding = Boolean(myCenter?.room?.building_id && myCenter?.room?.building_name);
   const myCheckinStatus =
@@ -6395,7 +6402,7 @@ const ResidentHome = () => {
       ? "Checked in"
       : "Reserved for your family";
   const centerDisplayName =
-    myCenter?.evacuation_center?.name || "Sogod Central School";
+    myCenter?.evacuation_center?.name || "Assigned Evacuation Center";
   const roomTitle = hasRoom
     ? (myCenter?.room?.room_name || roomNum)
     : (hasBuilding ? myCenter.room.building_name : "General Shelter");
@@ -6837,7 +6844,9 @@ const ResidentHome = () => {
                     {hasRoom && myCenter.room ? (
                       <>
                         {roomFloorLabel ? `Floor: ${roomFloorLabel}. ` : ""}
-                        Enter via {myCenter.room.recommended_entrance || "Entrance 3"}.
+                        {myCenter.room.recommended_entrance
+                          ? `Enter via ${myCenter.room.recommended_entrance}.`
+                          : "Report to the center entrance upon arrival."}
                       </>
                     ) : (
                       "Open space shelter · Report to reception/coordinator upon arrival."
@@ -6899,7 +6908,9 @@ const ResidentHome = () => {
                   {hasRoom && myCenter.room ? (
                     <>
                       {roomFloorLabel ? `Floor: ${roomFloorLabel}. ` : ""}
-                      Enter via {myCenter.room.recommended_entrance || "Entrance 3"}.
+                      {myCenter.room.recommended_entrance
+                        ? `Enter via ${myCenter.room.recommended_entrance}.`
+                        : "Report to the center entrance upon arrival."}
                     </>
                   ) : (
                     "Open space shelter · Report to reception/coordinator upon arrival."

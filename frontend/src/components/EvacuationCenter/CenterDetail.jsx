@@ -181,7 +181,9 @@ export default function CenterDetail({
   const visibleTabKeys = useMemo(() => visibleTabs.map((t) => t.key), [visibleTabs])
 
   const [searchParams, setSearchParams] = useSearchParams()
-  const activeTab = searchParams.get('tab') || 'overview'
+  const rawSubtab = searchParams.get('subtab')
+  const rawTab = searchParams.get('tab')
+  const activeTab = rawSubtab || (VALID_TABS.includes(rawTab) ? rawTab : 'overview')
   const effectiveActiveTab = VALID_TABS.includes(activeTab) && visibleTabKeys.includes(activeTab)
     ? activeTab
     : 'overview'
@@ -189,7 +191,18 @@ export default function CenterDetail({
   const handleSelectTab = useCallback(
     (tabKey) => {
       if (!visibleTabKeys.includes(tabKey)) return
-      setSearchParams({ tab: tabKey }, { replace: true })
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          if (prev.has('center') || (prev.has('tab') && !VALID_TABS.includes(prev.get('tab')))) {
+            next.set('subtab', tabKey)
+          } else {
+            next.set('tab', tabKey)
+          }
+          return next
+        },
+        { replace: true }
+      )
     },
     [setSearchParams, visibleTabKeys]
   )

@@ -27,7 +27,7 @@ from utils import role_required
 rescue_bp = Blueprint('rescue', __name__)
 RESCUE_STATUSES = {'pending', 'acknowledged', 'responding', 'resolved'}
 MAX_PROOF_IMAGES = 5
-ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'jpe', 'webp'}
 ALLOWED_RESCUE_NEEDS = {
     'Trapped', 'Injured', 'Flooding', 'Medical emergency', 'Need evacuation',
 }
@@ -223,7 +223,7 @@ def submit_rescue_request():
         return jsonify({'error': f'You may attach up to {MAX_PROOF_IMAGES} photos.'}), 400
     for photo in photo_files:
         if not _allowed_image(photo.filename):
-            return jsonify({'error': 'Photos must be png, jpg, jpeg, or webp images.'}), 400
+            return jsonify({'error': 'Photos must be png, jpg, jpeg, jpe, or webp images.'}), 400
 
     # FormData sends missing GPS as empty strings; treat those as "no GPS".
     raw_latitude = data.get('latitude')

@@ -561,7 +561,7 @@ export default function AdminMap() {
 
   const selectedCenterDetailsQuery = useQuery({
     queryKey: ["evacuation-center-details", selectedCenterId],
-    queryFn: () => api.getEvacuationCenterDetails(selectedCenterId),
+    queryFn: () => api.getEvacuationCenter(selectedCenterId),
     enabled: Boolean(selectedCenterId && centerModalOpen),
     staleTime: 10_000,
   });
@@ -4264,7 +4264,10 @@ export default function AdminMap() {
     );
     const showShelterAndFamilies = isVenueOrHouse || !mapped;
     const spaceLeft = Math.max(0, capacity - occupied);
-    const centerFamilies = selectedCenterDetailsQuery.data?.families || [];
+    const centerFamilies =
+      selectedCenterDetailsQuery.data?.assigned_families ||
+      selectedCenterDetailsQuery.data?.families ||
+      [];
     const isOwner = props.center_type === "private_property" && props.owner_name;
 
     const centerType = props.center_type || "campus";
@@ -4759,8 +4762,7 @@ export default function AdminMap() {
                     </div>
                   ))}
                 </div>
-              ) : selectedCenterDetailsQuery.isError &&
-                typeof api.getEvacuationCenterDetails === "function" ? (
+              ) : selectedCenterDetailsQuery.isError ? (
                 <div className="admin-map-panel-state is-error" role="alert">
                   <AlertCircle
                     size={20}

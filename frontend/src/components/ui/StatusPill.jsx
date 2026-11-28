@@ -21,6 +21,7 @@ const DEFAULT_LABELS = {
   unassigned: 'Unassigned',
   'no-records': 'No records',
   pending: 'Pending',
+  pending_confirmation: 'Awaiting email',
   approved: 'Approved',
   acknowledged: 'Acknowledged',
   responding: 'Responding',

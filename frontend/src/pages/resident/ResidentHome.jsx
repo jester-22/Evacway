@@ -1442,7 +1442,9 @@ const ResidentHome = () => {
     setAuthModalNotice(notice || "");
     signUpDialogRef.current?.close();
     setSignUpOpen(false);
-    loginDialogRef.current?.showModal();
+    if (loginDialogRef.current && !loginDialogRef.current.open) {
+      loginDialogRef.current.showModal();
+    }
   };
 
   const openSignUpDialog = () => {
@@ -2436,6 +2438,20 @@ const ResidentHome = () => {
         .catch(() => { });
     }
   }, [mapLoaded, hazardReports, user?.role]);
+
+  // Auto-open resident login modal when redirected from email confirmation (/map?login=1)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("login") !== "1" || isLoggedInResident) return;
+    const isConfirmed = params.get("confirmed") === "1";
+    openLoginDialog(
+      isConfirmed ? "Your account is active! Sign in with your email and password." : ""
+    );
+    params.delete("login");
+    params.delete("confirmed");
+    const nextSearch = params.toString();
+    navigate(nextSearch ? `${location.pathname}?${nextSearch}` : location.pathname, { replace: true });
+  }, [location.pathname, location.search, isLoggedInResident, navigate]);
 
   // --------------------------------------------------
   // Remove lookup data saved by the earlier name-only flow.

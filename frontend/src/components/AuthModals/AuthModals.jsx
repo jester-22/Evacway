@@ -437,7 +437,7 @@ export function ResidentSignUpDialog({ dialogRef, isOpen, onClose, onOpenLogin, 
             <p>Your request is awaiting staff review. Staff will review your details and match them with the resident roster.</p>
             <p><strong>Expected wait:</strong> Review times vary with staff workload; there is no fixed estimate.</p>
             <p>
-              We’ll email the decision to <strong>{values.email}</strong>.
+              We’ll email the decision to <strong>{values.email}</strong>. Once approved, click the confirmation link in that email to activate your account.
             </p>
           </div>
           <button type="button" className="ew-btn ew-btn-primary ew-btn-block" onClick={close}>Done</button>

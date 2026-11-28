@@ -80,6 +80,44 @@
   padding-left: calc(var(--space-3) * 2.5);
 }
 
+.login-input--password {
+  padding-right: 44px;
+}
+
+.login-input--password::-ms-reveal,
+.login-input--password::-ms-clear {
+  display: none;
+}
+
+.login-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.login-password-toggle:hover {
+  color: var(--ink);
+  background-color: var(--neutral-soft, #f1f5f9);
+}
+
+.login-password-toggle:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
 .login-input--plain {
   padding-left: var(--space-3);
 }

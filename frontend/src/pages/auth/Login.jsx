@@ -4,6 +4,8 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faEnvelope,
   faLock,
+  faEye,
+  faEyeSlash,
   faCircleNotch,
   faTriangleExclamation,
   faArrowLeft,
@@ -17,6 +19,7 @@ import "./Login.css";
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -160,13 +163,23 @@ function Login() {
               <FontAwesomeIcon icon={faLock} className="login-input-icon" aria-hidden="true" />
               <input
                 id="login-password"
-                type="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="login-input ds-input"
+                className="login-input login-input--password ds-input"
                 placeholder="Enter password"
                 required
               />
+              <button
+                type="button"
+                className="login-password-toggle"
+                onClick={() => setShowPassword((visible) => !visible)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+              >
+                <FontAwesomeIcon icon={showPassword ? faEyeSlash : faEye} aria-hidden="true" />
+              </button>
             </div>
 
             <Link to="/forgot-password" className="login-forgot-link">

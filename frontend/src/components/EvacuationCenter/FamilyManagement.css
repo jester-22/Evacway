@@ -110,19 +110,18 @@
   background: rgba(15, 23, 42, 0.06);
 }
 
-/* Fixed Top-Center Toast Notification Stack */
+/* Fixed Top-Right Toast Notification Stack (Evacuee Arrival style) */
 .fm-toast-viewport {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 16px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 2000;
+  top: calc(env(safe-area-inset-top, 0px) + 24px);
+  right: 24px;
+  z-index: 10000;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   width: max-content;
-  max-width: min(560px, calc(100vw - 32px));
+  max-width: min(460px, calc(100vw - 32px));
   pointer-events: none;
 }
 
@@ -131,23 +130,25 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  min-width: 300px;
+  gap: 12px;
   max-width: 100%;
-  padding: 12px 16px;
-  border-radius: var(--fm-radius-sm);
-  font-size: 13.5px;
-  font-weight: 600;
-  line-height: 1.45;
+  padding: 12px 20px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
   box-shadow: var(--shadow-lg);
-  animation: fmToastSlideIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fmToastSlideIn 0.2s ease-out forwards;
   transition: opacity 0.22s ease, transform 150ms ease;
 }
 
 .fm-toast-success {
-  background: #ecfdf5;
-  color: #15803d;
-  border: 1px solid #bbf7d0;
+  background: #0f172a;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .fm-toast.is-leaving {
@@ -164,7 +165,7 @@
 }
 
 .fm-toast-icon {
-  color: #15803d;
+  color: #22c55e;
   font-size: 15px;
   flex-shrink: 0;
 }
@@ -175,28 +176,28 @@
 }
 
 .fm-toast-dismiss {
-  border: 1px solid rgba(21, 128, 61, 0.35);
-  background: rgba(255, 255, 255, 0.65);
-  color: #15803d;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.85);
   cursor: pointer;
   padding: 4px 10px;
   border-radius: 6px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   font-family: inherit;
   flex-shrink: 0;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .fm-toast-dismiss:hover {
-  background: #ffffff;
-  border-color: #15803d;
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
 }
 
 @keyframes fmToastSlideIn {
   from {
     opacity: 0;
-    transform: translateY(-14px);
+    transform: translateY(-8px);
   }
   to {
     opacity: 1;

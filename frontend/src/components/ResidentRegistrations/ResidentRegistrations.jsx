@@ -38,7 +38,7 @@ import { Button, StatCard, StatusPill } from "../ui";
 import CreateResidentAccountModal from "./CreateResidentAccountModal";
 import "./ResidentRegistrations.css";
 
-const VALID_STATUS_FILTERS = ["all", "pending", "approved", "rejected"];
+const VALID_STATUS_FILTERS = ["all", "pending", "pending_confirmation", "approved", "rejected"];
 
 const COMPARISON_FIELDS = [
   { id: "name", label: "Full name", flag: "name", format: (record) => record.full_name || joinName(record) },
@@ -164,7 +164,13 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
   const [search, setSearch] = useState("");
   const [requests, setRequests] = useState([]);
   const [allRequests, setAllRequests] = useState([]);
-  const [counts, setCounts] = useState({ all: 0, pending: 0, approved: 0, rejected: 0 });
+  const [counts, setCounts] = useState({
+    all: 0,
+    pending: 0,
+    pending_confirmation: 0,
+    approved: 0,
+    rejected: 0,
+  });
   const handledFocusIdRef = useRef(null);
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState("");
@@ -187,6 +193,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
   const [decisionResult, setDecisionResult] = useState(null);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetCooldowns, setResetCooldowns] = useState({});
+  const [resendCooldowns, setResendCooldowns] = useState({});
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [isEditingInfo, setIsEditingInfo] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
@@ -243,7 +250,13 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
       if (requestNumber !== listRequestRef.current) return;
       setRequests(filtered.requests || []);
       setAllRequests(all.requests || []);
-      const nextCounts = { all: 0, pending: 0, approved: 0, rejected: 0 };
+      const nextCounts = {
+        all: 0,
+        pending: 0,
+        pending_confirmation: 0,
+        approved: 0,
+        rejected: 0,
+      };
       (all.requests || []).forEach((item) => {
         nextCounts.all += 1;
         if (Object.hasOwn(nextCounts, item.status)) nextCounts[item.status] += 1;
@@ -308,28 +321,32 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
     return () => window.clearTimeout(timer);
   }, [focusRegistrationId, allRequests, activeStatus, handleStatusFilterChange]);
 
+  const selectedRequestId = selectedRequest?.id ?? null;
+  const selectedRequestStatus = selectedRequest?.status ?? null;
+  const selectedMatchedResidentId = selectedRequest?.matched_resident_id ?? null;
+
   useEffect(() => {
-    if (!selectedRequest) return undefined;
+    if (!selectedRequestId) return undefined;
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.showModal();
 
-    api.clearNotificationsByResource("resident_registration", selectedRequest.id)
+    api.clearNotificationsByResource("resident_registration", selectedRequestId)
       .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.notifications }))
       .catch(() => {});
 
     let active = true;
-    api.getResidentRegistrationMatches(selectedRequest.id)
+    api.getResidentRegistrationMatches(selectedRequestId)
       .then(async (result) => {
         if (!active) return;
         let nextResult = result;
-        const linkedId = selectedRequest.matched_resident_id;
+        const linkedId = selectedMatchedResidentId;
         const apiMatches = result?.matches || [];
         const hasLinkedInMatches =
           linkedId != null &&
           apiMatches.some((item) => getMatchResidentId(item) === linkedId);
 
         if (
-          selectedRequest.status === "approved" &&
+          (selectedRequestStatus === "approved" || selectedRequestStatus === "pending_confirmation") &&
           linkedId != null &&
           !hasLinkedInMatches
         ) {
@@ -371,7 +388,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
       });
 
     return () => { active = false; };
-  }, [selectedRequest, matchRetryKey, queryClient]);
+  }, [selectedRequestId, selectedRequestStatus, selectedMatchedResidentId, matchRetryKey, queryClient]);
 
   const visibleRequests = useMemo(() => requests, [requests]);
   const totalFiltered = visibleRequests.length;
@@ -440,7 +457,9 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedRequest, confirmModal, actionLoading, resetLoading]);
 
-  const activeCooldownExpiresAt = selectedRequest ? resetCooldowns[selectedRequest.id] || 0 : 0;
+  const activeCooldownExpiresAt = selectedRequest
+    ? Math.max(resetCooldowns[selectedRequest.id] || 0, resendCooldowns[selectedRequest.id] || 0)
+    : 0;
   useEffect(() => {
     if (!activeCooldownExpiresAt || activeCooldownExpiresAt <= Date.now()) {
       return undefined;
@@ -489,6 +508,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
     setActionError("");
     setMatchRetryKey(0);
     setDecisionResult(null);
+    setRejectionReason("");
     setManualSearch("");
     setManualResults([]);
     setManualError("");
@@ -664,7 +684,8 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
         matchedResidentId,
         hasRequiredMismatch ? trimmedOverrideReason : ""
       );
-      setDecisionResult({ status: "approved", result });
+      const nextStatus = result.request?.status || "pending_confirmation";
+      setDecisionResult({ status: nextStatus, result });
       setConfirmModal(null);
       setOverrideReason("");
       setSelectedRequest((current) =>
@@ -672,20 +693,28 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
           ? {
               ...current,
               ...(result.request || {}),
-              status: "approved",
+              status: nextStatus,
               matched_resident_id: matchedResidentId,
-              has_account: true,
-              account_email: result.account?.email || current.email,
+              has_account: Boolean(result.request?.has_account),
+              account_email: result.request?.account_email || null,
             }
           : current
       );
-      setRequests((current) => current.filter((item) => item.id !== selectedRequest.id));
+      if (activeStatus === "pending") {
+        setRequests((current) => current.filter((item) => item.id !== selectedRequest.id));
+      }
       setCounts((current) => ({
         ...current,
         pending: Math.max(0, current.pending - 1),
-        approved: current.approved + 1,
+        [nextStatus]: (current[nextStatus] || 0) + 1,
       }));
-      showToast(`Registration approved for ${selectedRequest.full_name || joinName(selectedRequest)}!`, "success");
+      showToast(
+        result.email_sent
+          ? `Confirmation email sent to ${selectedRequest.email}. Account will be created once confirmed.`
+          : result.message || "Approved and awaiting confirmation, but the email was not sent.",
+        result.email_sent ? "success" : "error"
+      );
+      window.dispatchEvent(new CustomEvent(REGISTRATIONS_UPDATED_EVENT));
       setRefreshKey((current) => current + 1);
     } catch (error) {
       const message = error.message || "The registration could not be approved.";
@@ -703,7 +732,9 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
 
   async function rejectRequest(event) {
     if (event) event.preventDefault();
-    if (!selectedRequest || actionLockRef.current || decisionResult) return;
+    if (!selectedRequest || actionLockRef.current) return;
+    if (selectedRequest.status !== "pending" && selectedRequest.status !== "pending_confirmation") return;
+    const prevStatus = selectedRequest.status;
     const reason = rejectionReason.trim();
     if (!reason) {
       setActionError("A rejection reason is required.");
@@ -722,17 +753,21 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
               ...current,
               ...(result.request || {}),
               status: "rejected",
+              matched_resident_id: null,
               rejection_reason: reason || null,
             }
           : current
       );
-      setRequests((current) => current.filter((item) => item.id !== selectedRequest.id));
+      if (activeStatus === prevStatus) {
+        setRequests((current) => current.filter((item) => item.id !== selectedRequest.id));
+      }
       setCounts((current) => ({
         ...current,
-        pending: Math.max(0, current.pending - 1),
+        [prevStatus]: Math.max(0, (current[prevStatus] || 0) - 1),
         rejected: current.rejected + 1,
       }));
       showToast("Registration rejected.", "info");
+      window.dispatchEvent(new CustomEvent(REGISTRATIONS_UPDATED_EVENT));
       setRefreshKey((current) => current + 1);
     } catch (error) {
       const message = error.message || "The registration could not be rejected.";
@@ -768,6 +803,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
         setMatchResult(result.matches);
         setMatchError("");
       }
+      window.dispatchEvent(new CustomEvent(REGISTRATIONS_UPDATED_EVENT));
       setRefreshKey((current) => current + 1);
       showToast(
         result.message || "Registration unlinked from roster record.",
@@ -785,21 +821,45 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
   }
 
   async function resendDecisionEmail() {
-    if (!selectedRequest || actionLockRef.current || !decisionResult) return;
+    if (
+      !selectedRequest ||
+      actionLockRef.current ||
+      (!decisionResult && selectedRequest.status !== "pending_confirmation")
+    ) {
+      return;
+    }
     actionLockRef.current = true;
     setActionLoading(true);
     setActionError("");
     try {
       const result = await api.resendResidentRegistrationEmail(selectedRequest.id);
-      setDecisionResult((current) => ({
-        ...current,
-        result: { ...current.result, email_sent: result.email_sent },
-        resendMessage: result.message,
-      }));
-      showToast(result.message || "Email resent successfully.", "success");
+      if (result.request) {
+        setSelectedRequest((current) => (current ? { ...current, ...result.request } : current));
+      }
+      if (decisionResult) {
+        setDecisionResult((current) =>
+          current
+            ? {
+                ...current,
+                result: { ...current.result, email_sent: result.email_sent },
+                resendMessage: result.message,
+              }
+            : current
+        );
+      }
+      if (result.email_sent) {
+        const now = Date.now();
+        setNowMs(now);
+        setResendCooldowns((current) => ({ ...current, [selectedRequest.id]: now + 30000 }));
+      }
+      showToast(
+        result.message || "Confirmation email sent.",
+        result.email_sent ? "success" : "error"
+      );
+      setRefreshKey((current) => current + 1);
     } catch (error) {
-      setActionError(error.message || "The activation email could not be resent.");
-      showToast(error.message || "The activation email could not be resent.", "error");
+      setActionError(error.message || "The confirmation email could not be resent.");
+      showToast(error.message || "The confirmation email could not be resent.", "error");
     } finally {
       actionLockRef.current = false;
       setActionLoading(false);
@@ -930,11 +990,22 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
 
   const activeReferenceMatch = selectedResident || displayedMatches[0] || null;
   const matchBanner = (() => {
-    if (selectedRequest?.status === "approved" && selectedRequest?.matched_resident_id != null) {
+    if (
+      (selectedRequest?.status === "approved" || selectedRequest?.status === "pending_confirmation") &&
+      selectedRequest?.matched_resident_id != null
+    ) {
       const linkedRecord = activeReferenceMatch ? getMatchResident(activeReferenceMatch) : null;
       const linkedName = linkedRecord
         ? linkedRecord.full_name || joinName(linkedRecord)
         : "";
+      if (selectedRequest.status === "pending_confirmation") {
+        return {
+          className: "is-info",
+          text: linkedName
+            ? `Matched to ${linkedName} (Roster #${selectedRequest.matched_resident_id}) — awaiting resident email confirmation`
+            : `Matched to Roster #${selectedRequest.matched_resident_id} — awaiting resident email confirmation`,
+        };
+      }
       return {
         className: "is-success",
         text: linkedName
@@ -959,6 +1030,9 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
   const resetCooldownSeconds = selectedRequest
     ? Math.max(0, Math.ceil(((resetCooldowns[selectedRequest.id] || 0) - nowMs) / 1000))
     : 0;
+  const resendCooldownSeconds = selectedRequest
+    ? Math.max(0, Math.ceil(((resendCooldowns[selectedRequest.id] || 0) - nowMs) / 1000))
+    : 0;
   const hasApprovedAccount = Boolean(
     selectedRequest &&
       selectedRequest.status === "approved" &&
@@ -981,10 +1055,11 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
       (selectedResident.available || !selectedResident.resident) &&
       (!hasRequiredMismatch || isAdmin)
   );
+  const isAwaitingConfirmation = selectedRequest?.status === "pending_confirmation";
   const canUnlink = Boolean(
     isAdmin &&
       selectedRequest &&
-      selectedRequest.status === "approved" &&
+      (selectedRequest.status === "approved" || selectedRequest.status === "pending_confirmation") &&
       selectedRequest.matched_resident_id != null &&
       !actionLoading &&
       !resetLoading &&
@@ -1039,10 +1114,10 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
         </div>
       </header>
 
-      {/* 2. 4 Clickable StatCards (?filter=all|pending|approved|rejected) */}
+      {/* 2. 5 Clickable StatCards (?filter=all|pending|pending_confirmation|approved|rejected) */}
       {listLoading && allRequests.length === 0 ? (
         <div className="rr-stats-grid" aria-hidden="true">
-          {Array.from({ length: 4 }).map((_, idx) => (
+          {Array.from({ length: 5 }).map((_, idx) => (
             <div key={idx} className="rr-skel-stat-card">
               <div className="rr-skel-stat-top">
                 <span className="rr-skel rr-skel-tile" />
@@ -1076,12 +1151,22 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
             onClick={() => handleStatusFilterChange("pending")}
           />
           <StatCard
+            icon={Mail}
+            iconTone="primary"
+            label="Awaiting email"
+            value={counts.pending_confirmation}
+            showProgress={false}
+            helper="Pending confirmation"
+            active={activeStatus === "pending_confirmation"}
+            onClick={() => handleStatusFilterChange("pending_confirmation")}
+          />
+          <StatCard
             icon={CheckCircle2}
             tint="success"
             label="Approved"
             value={counts.approved}
             showProgress={false}
-            helper="Linked to roster"
+            helper="Active accounts"
             active={activeStatus === "approved"}
             onClick={() => handleStatusFilterChange("approved")}
           />
@@ -1186,7 +1271,13 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
               <h3>
                 {activeStatus === "all" && !search
                   ? "No resident registrations"
-                  : `No ${activeStatus === "all" ? "matching" : activeStatus} registrations`}
+                  : `No ${
+                      activeStatus === "all"
+                        ? "matching"
+                        : activeStatus === "pending_confirmation"
+                          ? "awaiting email"
+                          : activeStatus
+                    } registrations`}
               </h3>
               <p>
                 {search || activeStatus !== "all"
@@ -1675,7 +1766,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
 
               {actionError && <p className="rr-review-inline-error" role="alert">{actionError}</p>}
 
-              {decisionResult && !decisionResult.result.email_sent && (
+              {decisionResult && !decisionResult.result.email_sent && !isAwaitingConfirmation && (
                 <div className="rr-decision-result" role="status">
                   <div className="rr-email-warning">
                     <span className="rr-email-warning-text">
@@ -1695,7 +1786,58 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                 </div>
               )}
 
-              {/* 3. Account Card (bg #F8FAFC, 1px border) */}
+              {/* 3. Awaiting Email Confirmation Card */}
+              {isAwaitingConfirmation && (() => {
+                const emailDelivered = Boolean(selectedRequest.confirmation_sent_at) &&
+                  !(decisionResult && decisionResult.result && decisionResult.result.email_sent === false);
+                return (
+                  <section
+                    className={`rr-account-card ${emailDelivered ? "is-awaiting" : "is-unsent"}`}
+                    aria-label="Email confirmation pending"
+                  >
+                    <div className="rr-account-info">
+                      <span className="rr-account-label">
+                        {emailDelivered ? "AWAITING EMAIL CONFIRMATION" : "CONFIRMATION EMAIL NOT SENT"}
+                      </span>
+                      <span className="rr-account-login">
+                        {emailDelivered ? (
+                          <>
+                            Confirmation link sent to <strong className="rr-account-email">{selectedRequest.email}</strong>.
+                            The resident account will only be created once they confirm via email.
+                          </>
+                        ) : (
+                          <>
+                            No active confirmation email has been delivered to{" "}
+                            <strong className="rr-account-email">{selectedRequest.email}</strong> yet.
+                            Click resend to email a new confirmation link.
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      className="rr-reset-pw-btn"
+                      onClick={resendDecisionEmail}
+                      disabled={actionLoading || resetLoading || editSaving || resendCooldownSeconds > 0}
+                    >
+                      {actionLoading ? (
+                        <Loader2 size={15} strokeWidth={2} className="rr-spin" aria-hidden="true" />
+                      ) : (
+                        <Mail size={15} strokeWidth={2} aria-hidden="true" />
+                      )}
+                      <span>
+                        {actionLoading
+                          ? "Sending..."
+                          : resendCooldownSeconds > 0
+                            ? `Resend confirmation email (${resendCooldownSeconds}s)`
+                            : "Resend confirmation email"}
+                      </span>
+                    </Button>
+                  </section>
+                );
+              })()}
+
+              {/* 4. Account Card (bg #F8FAFC, 1px border) */}
               {hasApprovedAccount && (
                 <section className="rr-account-card" aria-label="Account">
                   <div className="rr-account-info">
@@ -1765,6 +1907,16 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                 </>
               ) : (
                 <>
+                  {isAwaitingConfirmation && (
+                    <Button
+                      variant="danger-outline"
+                      className="rr-review-footer-btn rr-review-reject-btn"
+                      onClick={() => setConfirmModal("reject")}
+                      disabled={actionLoading || resetLoading || editSaving}
+                    >
+                      Reject
+                    </Button>
+                  )}
                   {canUnlink && (
                     <Button
                       variant="danger-outline"
@@ -1804,18 +1956,19 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
               >
                 {confirmModal === "approve" && (
                   <form className="resident-confirm-card" onSubmit={approveRequest}>
-                    <h3 id="resident-confirm-title">Approve resident registration?</h3>
+                    <h3 id="resident-confirm-title">Approve &amp; send confirmation email?</h3>
                     <p>
-                      Create an active resident account for{" "}
+                      Send an account confirmation link to{" "}
+                      <strong>{selectedRequest.email}</strong> for{" "}
                       <strong>{selectedRequest.full_name || joinName(selectedRequest)}</strong>{" "}
-                      linked to{" "}
+                      (matched to{" "}
                       <strong>
                         {getMatchResident(selectedResident).full_name || joinName(getMatchResident(selectedResident))}
                       </strong>
                       {getMatchResidentId(selectedResident) != null
-                        ? ` (Roster #${getMatchResidentId(selectedResident)})`
+                        ? `, Roster #${getMatchResidentId(selectedResident)}`
                         : ""}
-                      ?
+                      )? Their resident account will only be created once they confirm their email address.
                     </p>
                     {hasRequiredMismatch && isAdmin && (
                       <>
@@ -1860,7 +2013,7 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                         {actionLoading && (
                           <Loader2 size={15} strokeWidth={2} className="rr-spin" aria-hidden="true" />
                         )}
-                        <span>{actionLoading ? "Approving..." : "Approve"}</span>
+                        <span>{actionLoading ? "Sending..." : "Approve & send email"}</span>
                       </Button>
                     </div>
                   </form>
@@ -1920,9 +2073,9 @@ export default function ResidentRegistrations({ focusRegistrationId = null }) {
                       {selectedRequest.matched_resident_id != null
                         ? ` (currently linked to Roster #${selectedRequest.matched_resident_id})`
                         : ""}
-                      ? This revokes the linked resident account and removes any evacuation center
-                      and room assignment it inherited from that roster family, returning the
-                      request to pending review.
+                      {isAwaitingConfirmation
+                        ? "? This cancels the pending email confirmation link and returns the request to pending review."
+                        : "? This revokes the linked resident account and removes any evacuation center and room assignment it inherited from that roster family, returning the request to pending review."}
                     </p>
                     <div className="resident-confirm-actions">
                       <Button

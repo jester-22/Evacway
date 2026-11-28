@@ -454,7 +454,7 @@ def _login(expected_type):
     if expected_type == 'resident' and account is None and email:
         registration_request = ResidentRegistrationRequest.query.filter(
             func.lower(ResidentRegistrationRequest.email) == email,
-            ResidentRegistrationRequest.status.in_(('pending', 'rejected')),
+            ResidentRegistrationRequest.status.in_(('pending', 'pending_confirmation', 'rejected')),
         ).order_by(ResidentRegistrationRequest.created_at.desc()).first()
     now = utc_now()
     if account and account.login_locked_until and account.login_locked_until > now:
@@ -476,6 +476,11 @@ def _login(expected_type):
     if expected_type == 'resident' and registration_request and password_matches:
         if registration_request.status == 'pending':
             return jsonify({'error': 'Awaiting verification.', 'status': 'awaiting_verification'}), 403
+        if registration_request.status == 'pending_confirmation':
+            return jsonify({
+                'error': 'Your registration was approved! Please check your email and click the confirmation link to activate your account.',
+                'status': 'pending_confirmation',
+            }), 403
         reason = registration_request.rejection_reason or 'No reason was provided.'
         return jsonify({
             'error': f'Your registration was rejected: {reason}',

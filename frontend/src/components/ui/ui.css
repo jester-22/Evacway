@@ -80,6 +80,7 @@
 .ui-status-pill--responding,
 .ui-status-pill--in-progress,
 .ui-status-pill--in_progress,
+.ui-status-pill--pending_confirmation,
 .ui-status-pill--tone-primary {
   background-color: var(--primary-50);
   color: var(--primary-hover);
@@ -88,6 +89,7 @@
 .ui-status-pill--responding .ui-status-pill__dot,
 .ui-status-pill--in-progress .ui-status-pill__dot,
 .ui-status-pill--in_progress .ui-status-pill__dot,
+.ui-status-pill--pending_confirmation .ui-status-pill__dot,
 .ui-status-pill--tone-primary .ui-status-pill__dot {
   background-color: var(--primary);
 }

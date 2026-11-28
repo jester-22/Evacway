@@ -1597,7 +1597,7 @@ class ResidentRegistrationRequest(BaseModel):
     __tablename__ = 'resident_registration_requests'
     __table_args__ = (
         db.CheckConstraint(
-            "status IN ('pending', 'approved', 'rejected')",
+            "status IN ('pending', 'pending_confirmation', 'approved', 'rejected')",
             name='ck_resident_registration_request_status'
         ),
     )
@@ -1615,7 +1615,7 @@ class ResidentRegistrationRequest(BaseModel):
     privacy_consent = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     privacy_consent_at = db.Column(db.DateTime, nullable=True)
     privacy_notice_version = db.Column(db.String(40), nullable=True)
-    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    status = db.Column(db.String(30), nullable=False, default='pending', index=True)
     matched_resident_id = db.Column(
         db.Integer,
         db.ForeignKey('residents.id', ondelete='SET NULL')
@@ -1626,6 +1626,10 @@ class ResidentRegistrationRequest(BaseModel):
     )
     reviewed_at = db.Column(db.DateTime)
     rejection_reason = db.Column(db.Text)
+    confirmation_token_hash = db.Column(db.String(128), nullable=True, index=True)
+    confirmation_expires_at = db.Column(db.DateTime, nullable=True)
+    confirmation_sent_at = db.Column(db.DateTime, nullable=True)
+    confirmed_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=utc_now, nullable=False)
 
     def to_dict(self):
@@ -1650,6 +1654,9 @@ class ResidentRegistrationRequest(BaseModel):
             "reviewed_by": self.reviewed_by,
             "reviewed_at": to_utc_iso(self.reviewed_at) if self.reviewed_at else None,
             "rejection_reason": self.rejection_reason,
+            "confirmation_sent_at": to_utc_iso(self.confirmation_sent_at) if self.confirmation_sent_at else None,
+            "confirmation_expires_at": to_utc_iso(self.confirmation_expires_at) if self.confirmation_expires_at else None,
+            "confirmed_at": to_utc_iso(self.confirmed_at) if self.confirmed_at else None,
             "created_at": to_utc_iso(self.created_at) if self.created_at else None,
         }
 

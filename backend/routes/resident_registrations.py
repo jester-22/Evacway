@@ -1,9 +1,10 @@
+import hashlib
 import re
 import secrets
 import time
 import unicodedata
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from difflib import SequenceMatcher
 
 from flask import Blueprint, current_app, jsonify, request
@@ -48,6 +49,28 @@ from utils import role_required
 registrations_bp = Blueprint('resident_registrations', __name__)
 _registration_rate_limits = defaultdict(list)
 _EMAIL_RE = re.compile(r'[^@\s]+@[^@\s]+\.[^@\s]+')
+REGISTRATION_CONFIRMATION_TTL_HOURS = 72
+
+
+def _hash_confirmation_token(token):
+    return hashlib.sha256(str(token or '').encode('utf-8')).hexdigest()
+
+
+def _issue_confirmation_token(registration, now=None, mark_sent=False):
+    now = now or utc_now()
+    raw_token = secrets.token_urlsafe(32)
+    registration.confirmation_token_hash = _hash_confirmation_token(raw_token)
+    registration.confirmation_expires_at = now + timedelta(hours=REGISTRATION_CONFIRMATION_TTL_HOURS)
+    if mark_sent:
+        registration.confirmation_sent_at = now
+    else:
+        registration.confirmation_sent_at = None
+    return raw_token
+
+
+def _clear_confirmation_token(registration):
+    registration.confirmation_token_hash = None
+    registration.confirmation_expires_at = None
 
 
 def _is_rate_limited(ip_address, max_requests=5, window_seconds=900):
@@ -206,7 +229,9 @@ def _duplicate_registration(email, contact_digits, exclude_request_id=None):
     if ResidentAccount.query.filter(func.lower(ResidentAccount.email) == email, ResidentAccount.is_active == True).first():
         return 'An account with this email already exists.'
 
-    pending_query = ResidentRegistrationRequest.query.filter_by(status='pending')
+    pending_query = ResidentRegistrationRequest.query.filter(
+        ResidentRegistrationRequest.status.in_(('pending', 'pending_confirmation'))
+    )
     if exclude_request_id is not None:
         pending_query = pending_query.filter(
             ResidentRegistrationRequest.id != exclude_request_id
@@ -276,6 +301,15 @@ def _resident_match_result(registration):
         for (resident_id,) in ResidentAccount.query.with_entities(ResidentAccount.resident_id).filter(
             ResidentAccount.resident_id.isnot(None),
             ResidentAccount.is_active == True,
+        ).all()
+    } | {
+        resident_id
+        for (resident_id,) in ResidentRegistrationRequest.query.with_entities(
+            ResidentRegistrationRequest.matched_resident_id
+        ).filter(
+            ResidentRegistrationRequest.status == 'pending_confirmation',
+            ResidentRegistrationRequest.matched_resident_id.isnot(None),
+            ResidentRegistrationRequest.id != registration.id,
         ).all()
     }
     candidates = []
@@ -347,9 +381,12 @@ def _resident_match_result(registration):
     return {'status': status, 'matches': matches}
 
 
-def _send_decision_email(registration):
+def _send_decision_email(registration, confirmation_token=None):
     try:
-        send_resident_registration_email(registration)
+        if confirmation_token is not None:
+            send_resident_registration_email(registration, confirmation_token=confirmation_token)
+        else:
+            send_resident_registration_email(registration)
         return True
     except Exception:
         current_app.logger.exception(
@@ -359,10 +396,11 @@ def _send_decision_email(registration):
         return False
 
 
-def _send_decision_notifications(registration):
+def _send_decision_notifications(registration, confirmation_token=None):
     return send_registration_decision_notifications(
         registration,
         email_sender=send_resident_registration_email,
+        confirmation_token=confirmation_token,
     )
 
 
@@ -435,8 +473,8 @@ def submit_resident_registration():
 def list_resident_registrations():
     status = (request.args.get('status') or 'pending').strip().lower()
     search = (request.args.get('search') or '').strip()
-    if status not in {'pending', 'approved', 'rejected', 'all'}:
-        return jsonify({'error': 'status must be pending, approved, rejected, or all.'}), 400
+    if status not in {'pending', 'pending_confirmation', 'approved', 'rejected', 'all'}:
+        return jsonify({'error': 'status must be pending, pending_confirmation, approved, rejected, or all.'}), 400
 
     query = ResidentRegistrationRequest.query
     if status != 'all':
@@ -585,13 +623,14 @@ def update_resident_registration(request_id):
             return jsonify({'error': 'An account with this email already exists.'}), 409
 
         conflict_pending = ResidentRegistrationRequest.query.filter(
-            ResidentRegistrationRequest.status == 'pending',
+            ResidentRegistrationRequest.status.in_(('pending', 'pending_confirmation')),
             ResidentRegistrationRequest.id != registration.id,
             func.lower(ResidentRegistrationRequest.email) == email,
         ).first()
         if conflict_pending:
             return jsonify({'error': 'Another pending registration already uses this email.'}), 409
 
+    email_changed = email != current_email
     registration.first_name = first_name
     registration.middle_name = middle_name or None
     registration.last_name = last_name
@@ -600,6 +639,10 @@ def update_resident_registration(request_id):
     registration.address = address or None
     registration.contact_number = contact_number or None
     registration.email = email
+
+    if registration.status == 'pending_confirmation' and email_changed:
+        _clear_confirmation_token(registration)
+        registration.confirmation_sent_at = None
 
     if linked_account is not None and str(linked_account.email or '').strip().lower() != email:
         linked_account.email = email
@@ -620,8 +663,14 @@ def update_resident_registration(request_id):
     payload['has_account'] = linked_account is not None
     payload['account_email'] = linked_account.email if linked_account else None
 
+    update_message = (
+        'Account email updated. The previous confirmation link was invalidated — click Resend confirmation email to send a new link.'
+        if registration.status == 'pending_confirmation' and email_changed
+        else 'Account info updated and roster match re-analyzed.'
+    )
+
     return jsonify({
-        'message': 'Account info updated and roster match re-analyzed.',
+        'message': update_message,
         'request': payload,
         'matches': _resident_match_result(registration),
     }), 200
@@ -653,6 +702,12 @@ def approve_resident_registration(request_id):
         return jsonify({'error': 'This resident record is already linked to an account.'}), 409
     if ResidentAccount.query.filter_by(resident_id=resident.id).first():
         return jsonify({'error': 'This resident record is already linked to an account.'}), 409
+    if ResidentRegistrationRequest.query.filter(
+        ResidentRegistrationRequest.status == 'pending_confirmation',
+        ResidentRegistrationRequest.matched_resident_id == resident.id,
+        ResidentRegistrationRequest.id != registration.id,
+    ).first():
+        return jsonify({'error': 'This resident record is already reserved by another request awaiting email confirmation.'}), 409
 
     reviewer_id = int(get_jwt_identity())
     reviewer = db.session.get(User, reviewer_id)
@@ -697,18 +752,13 @@ def approve_resident_registration(request_id):
         return jsonify({'error': duplicate}), 409
 
     now = utc_now()
-    registration.status = 'approved'
+    registration.status = 'pending_confirmation'
     registration.matched_resident_id = resident.id
     registration.reviewed_by = reviewer_id
     registration.reviewed_at = now
     registration.rejection_reason = None
-    account = ResidentAccount(
-        resident_id=resident.id,
-        email=registration.email,
-        password_hash=registration.password_hash,
-        is_active=True,
-    )
-    db.session.add(account)
+    raw_token = _issue_confirmation_token(registration, now=now)
+
     override_log = None
     if is_override:
         override_log = RegistrationLinkOverrideLog(
@@ -724,10 +774,10 @@ def approve_resident_registration(request_id):
         resource_id=registration.id,
     ).delete(synchronize_session=False)
     action_text = (
-        f'Approved resident registration #{registration.id} '
-        f'(admin override link to roster #{resident.id}: {override_reason})'
+        f'Approved resident registration #{registration.id} (awaiting email confirmation; '
+        f'admin override link to roster #{resident.id}: {override_reason})'
         if is_override
-        else f'Approved resident registration #{registration.id}'
+        else f'Approved resident registration #{registration.id} (awaiting email confirmation)'
     )[:255]
     db.session.add(SystemLog(
         user_id=reviewer_id,
@@ -741,15 +791,22 @@ def approve_resident_registration(request_id):
             'error': 'The email or resident record was linked by another account. Refresh and review the request again.'
         }), 409
 
-    delivery = _send_decision_notifications(registration)
+    delivery = _send_decision_notifications(registration, confirmation_token=raw_token)
     email_sent = delivery['email_sent']
+    if email_sent:
+        registration.confirmation_sent_at = utc_now()
+        db.session.commit()
     req_payload = registration.to_dict()
-    req_payload['has_account'] = True
-    req_payload['account_email'] = account.email
+    req_payload['has_account'] = False
+    req_payload['account_email'] = None
     response_body = {
-        'message': 'Resident account approved.' if email_sent else 'Resident account approved, but the email was not sent.',
+        'message': (
+            f'Confirmation email sent to {registration.email}. Account will be created once confirmed.'
+            if email_sent
+            else 'Registration approved and awaiting confirmation, but the confirmation email was not sent.'
+        ),
         'request': req_payload,
-        'account': account.to_dict(),
+        'account': None,
         'email_sent': email_sent,
     }
     if override_log is not None:
@@ -820,6 +877,9 @@ def unlink_resident_registration(request_id):
     registration.reviewed_by = None
     registration.reviewed_at = None
     registration.rejection_reason = None
+    _clear_confirmation_token(registration)
+    registration.confirmation_sent_at = None
+    registration.confirmed_at = None
 
     admin_id = int(get_jwt_identity())
     assignment_summary = ''
@@ -872,14 +932,17 @@ def reject_resident_registration(request_id):
     registration = db.session.get(ResidentRegistrationRequest, request_id)
     if not registration:
         return jsonify({'error': 'Registration request not found.'}), 404
-    if registration.status != 'pending':
-        return jsonify({'error': 'Only pending requests can be rejected.'}), 409
+    if registration.status not in {'pending', 'pending_confirmation'}:
+        return jsonify({'error': 'Only pending or awaiting-confirmation requests can be rejected.'}), 409
 
     reviewer_id = int(get_jwt_identity())
     registration.status = 'rejected'
+    registration.matched_resident_id = None
     registration.reviewed_by = reviewer_id
     registration.reviewed_at = utc_now()
     registration.rejection_reason = reason
+    _clear_confirmation_token(registration)
+    registration.confirmation_sent_at = None
     StaffNotification.query.filter_by(
         resource_type='resident_registration',
         resource_id=registration.id,
@@ -905,13 +968,141 @@ def resend_resident_registration_email(request_id):
     registration = db.session.get(ResidentRegistrationRequest, request_id)
     if not registration:
         return jsonify({'error': 'Registration request not found.'}), 404
-    if registration.status not in {'approved', 'rejected'}:
-        return jsonify({'error': 'Email can only be resent after a request is approved or rejected.'}), 409
+    if registration.status not in {'pending_confirmation', 'approved', 'rejected'}:
+        return jsonify({'error': 'Email can only be resent after a request is approved, awaiting confirmation, or rejected.'}), 409
+
+    if registration.status == 'pending_confirmation':
+        raw_token = secrets.token_urlsafe(32)
+        email_sent = _send_decision_email(registration, confirmation_token=raw_token)
+        if email_sent:
+            now = utc_now()
+            registration.confirmation_token_hash = _hash_confirmation_token(raw_token)
+            registration.confirmation_expires_at = now + timedelta(hours=REGISTRATION_CONFIRMATION_TTL_HOURS)
+            registration.confirmation_sent_at = now
+            db.session.commit()
+        req_payload = registration.to_dict()
+        req_payload['has_account'] = False
+        req_payload['account_email'] = None
+        return jsonify({
+            'message': (
+                f'Confirmation email sent to {registration.email}.'
+                if email_sent
+                else 'Email was not sent. Check SMTP configuration and retry.'
+            ),
+            'email_sent': email_sent,
+            'request': req_payload,
+        }), 200
 
     email_sent = _send_decision_email(registration)
     return jsonify({
         'message': 'Decision email sent.' if email_sent else 'Email was not sent. Check SMTP configuration and retry.',
         'email_sent': email_sent,
+    }), 200
+
+
+@registrations_bp.route('/api/resident-registrations/confirm-email', methods=['POST'])
+def confirm_resident_registration_email():
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'A JSON object is required.'}), 400
+
+    raw_token = str(data.get('token') or '').strip()
+    if not raw_token:
+        return jsonify({'error': 'A confirmation token is required.', 'code': 'missing_token'}), 400
+
+    token_hash = _hash_confirmation_token(raw_token)
+    registration = (
+        ResidentRegistrationRequest.query
+        .filter_by(confirmation_token_hash=token_hash)
+        .with_for_update()
+        .first()
+    )
+    if not registration:
+        return jsonify({
+            'error': 'This confirmation link is invalid or has already been used.',
+            'code': 'invalid_token',
+        }), 404
+
+    if registration.status != 'pending_confirmation':
+        return jsonify({
+            'error': 'This registration request is no longer awaiting email confirmation.',
+            'code': 'invalid_status',
+        }), 409
+
+    now = utc_now()
+    expires_at = registration.confirmation_expires_at
+    if expires_at is not None:
+        if expires_at.tzinfo is not None and now.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=None)
+        if expires_at <= now:
+            return jsonify({
+                'error': 'This confirmation link has expired. Please contact LGU staff to resend your confirmation email.',
+                'code': 'expired_token',
+            }), 410
+
+    if not registration.matched_resident_id:
+        return jsonify({
+            'error': 'This registration is no longer linked to a resident record. Please contact LGU staff.',
+            'code': 'missing_resident',
+        }), 409
+
+    resident = db.session.get(Resident, registration.matched_resident_id)
+    if not resident:
+        return jsonify({
+            'error': 'The linked resident record could not be found. Please contact LGU staff.',
+            'code': 'missing_resident',
+        }), 409
+
+    normalized_email = str(registration.email or '').strip().lower()
+    if User.query.filter_by(resident_id=resident.id).first() or ResidentAccount.query.filter_by(resident_id=resident.id).first():
+        return jsonify({
+            'error': 'This resident record is already linked to an active account.',
+            'code': 'already_linked',
+        }), 409
+
+    if User.query.filter(func.lower(User.email) == normalized_email).first() or ResidentAccount.query.filter(
+        func.lower(ResidentAccount.email) == normalized_email,
+        ResidentAccount.is_active == True,
+    ).first():
+        return jsonify({
+            'error': 'An account with this email address already exists.',
+            'code': 'duplicate_email',
+        }), 409
+
+    account = ResidentAccount(
+        resident_id=resident.id,
+        email=normalized_email,
+        password_hash=registration.password_hash,
+        is_active=True,
+    )
+    db.session.add(account)
+    registration.status = 'approved'
+    registration.confirmed_at = now
+    _clear_confirmation_token(registration)
+
+    db.session.add(SystemLog(
+        user_id=None,
+        action=(
+            f'Resident confirmed email and activated account '
+            f'(Request #{registration.id}, {normalized_email})'
+        )[:255],
+    ))
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            'error': 'Could not activate account because the email or resident record is already in use.',
+            'code': 'conflict',
+        }), 409
+
+    return jsonify({
+        'message': 'Your email has been confirmed and your EvacWay resident account is now active.',
+        'email': account.email,
+        'full_name': registration.to_dict()['full_name'],
+        'status': 'approved',
+        'account': account.to_dict(),
     }), 200
 
 
@@ -1007,13 +1198,18 @@ def manual_create_resident_account():
     if not email or not _EMAIL_RE.fullmatch(email):
         return jsonify({'error': 'A valid email address is required.'}), 400
 
-    # Duplicate check for email across both User and ResidentAccount
+    # Duplicate check for email across User, ResidentAccount, and awaiting-confirmation requests
     duplicate_email = (
         User.query.filter(func.lower(User.email) == email).first()
         or ResidentAccount.query.filter(func.lower(ResidentAccount.email) == email).first()
     )
     if duplicate_email:
         return jsonify({'error': f'An account with the email "{email}" already exists.'}), 409
+    if ResidentRegistrationRequest.query.filter(
+        ResidentRegistrationRequest.status == 'pending_confirmation',
+        func.lower(ResidentRegistrationRequest.email) == email,
+    ).first():
+        return jsonify({'error': f'A registration awaiting email confirmation already uses "{email}".'}), 409
 
     resident = None
     if resident_id:
@@ -1026,6 +1222,11 @@ def manual_create_resident_account():
             return jsonify({'error': 'Selected resident record was not found.'}), 404
         if ResidentAccount.query.filter_by(resident_id=resident.id).first() or User.query.filter_by(resident_id=resident.id).first():
             return jsonify({'error': 'This resident already has an active account.'}), 409
+        if ResidentRegistrationRequest.query.filter_by(
+            status='pending_confirmation',
+            matched_resident_id=resident.id,
+        ).first():
+            return jsonify({'error': 'This resident already has a registration awaiting email confirmation.'}), 409
     else:
         # Create resident record
         first_name = str(data.get('first_name') or '').strip()

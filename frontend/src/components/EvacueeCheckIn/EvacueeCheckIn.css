@@ -32,8 +32,10 @@
   top: 24px;
   right: 24px;
   z-index: 10000;
+  max-width: min(460px, calc(100vw - 32px));
   background: #0f172a;
   color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   padding: 12px 20px;
   border-radius: 12px;
   box-shadow: var(--shadow-lg);

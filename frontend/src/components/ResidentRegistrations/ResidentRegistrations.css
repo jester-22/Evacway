@@ -39,44 +39,68 @@
 }
 
 /* ==========================================================================
-   1. FLOATING TOAST NOTIFICATION
+   1. FLOATING TOAST NOTIFICATION (Evacuee Arrival style)
    ========================================================================== */
+
+@keyframes rrToastFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 
 .resident-floating-toast {
   position: fixed;
-  top: 20px;
+  top: 24px;
   right: 24px;
-  z-index: 4200;
+  z-index: 10000;
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: min(420px, calc(100vw - 32px));
-  padding: 12px 16px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  background-color: var(--surface);
-  color: var(--text);
+  max-width: min(460px, calc(100vw - 32px));
+  padding: 12px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background-color: #0f172a;
+  color: #ffffff;
   box-shadow: var(--shadow-lg);
-  font-size: var(--text-muted);
-  font-weight: 600;
+  font-size: 0.875rem;
+  font-weight: 500;
+  animation: rrToastFadeIn 0.2s ease-out;
 }
 
 .resident-floating-toast.is-success {
-  border-color: var(--ew-safe-border);
-  background-color: var(--success-bg);
-  color: var(--success-fg);
+  border-color: rgba(255, 255, 255, 0.08);
+  background-color: #0f172a;
+  color: #ffffff;
+}
+
+.resident-floating-toast.is-success .resident-toast-icon {
+  color: #22c55e;
 }
 
 .resident-floating-toast.is-error {
-  border-color: var(--ew-danger-border);
-  background-color: var(--danger-bg);
-  color: var(--danger-fg);
+  border-color: rgba(248, 113, 113, 0.28);
+  background-color: #0f172a;
+  color: #ffffff;
+}
+
+.resident-floating-toast.is-error .resident-toast-icon {
+  color: #f87171;
 }
 
 .resident-floating-toast.is-info {
-  border-color: var(--primary-200);
-  background-color: var(--primary-50);
-  color: var(--primary-hover);
+  border-color: rgba(96, 165, 250, 0.28);
+  background-color: #0f172a;
+  color: #ffffff;
+}
+
+.resident-floating-toast.is-info .resident-toast-icon {
+  color: #60a5fa;
 }
 
 .resident-toast-icon {
@@ -100,15 +124,31 @@
   justify-content: center;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: 6px;
   background-color: transparent;
-  color: currentColor;
+  color: rgba(255, 255, 255, 0.65);
   cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.resident-toast-close:hover {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.12);
 }
 
 .resident-toast-close:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid #60a5fa;
   outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .resident-floating-toast {
+    top: 16px;
+    right: 16px;
+    left: 16px;
+    max-width: none;
+  }
 }
 
 /* ==========================================================================
@@ -188,8 +228,8 @@
 .rr-stats-grid {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
   width: 100%;
 }
 
@@ -1369,6 +1409,24 @@
   background-color: var(--bg-2);
 }
 
+.rr-account-card.is-awaiting {
+  border-color: var(--primary-200);
+  background-color: var(--primary-50);
+}
+
+.rr-account-card.is-awaiting .rr-account-label {
+  color: var(--primary-hover);
+}
+
+.rr-account-card.is-unsent {
+  border-color: var(--ew-warning-border);
+  background-color: var(--warn-bg);
+}
+
+.rr-account-card.is-unsent .rr-account-label {
+  color: var(--warn-fg);
+}
+
 .rr-account-info {
   display: flex;
   flex-direction: column;
@@ -2044,7 +2102,7 @@
   }
 
   .rr-stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -2070,8 +2128,8 @@
   }
 
   .rr-stats-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .rr-table-toolbar {

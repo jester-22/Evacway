@@ -10,6 +10,7 @@ import AdminDashboard from "./pages/admin/AdminDashboard";
 import Login from "./pages/auth/Login";
 import ForgotPassword from "./pages/auth/ForgotPassword";
 import PasswordSetup from "./pages/auth/PasswordSetup";
+import ConfirmRegistration from "./pages/auth/ConfirmRegistration";
 import NetworkStatus from "./components/NetworkStatus/NetworkStatus";
 import Dashboard from "./components/Dashboard/Dashboard";
 
@@ -68,6 +69,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/set-password" element={<PasswordSetup />} />
+            <Route path="/confirm-registration" element={<ConfirmRegistration />} />
             <Route path="/data-privacy-notice" element={<DataPrivacyNotice />} />
             <Route
               path="/dashboard"

@@ -203,6 +203,12 @@ with app.app_context():
     except Exception as e:
         app.logger.warning("Could not ensure users.recovery_email: %s", e)
 
+    try:
+        from migrate_registration_confirmation import ensure_registration_confirmation_columns
+        ensure_registration_confirmation_columns(db)
+    except Exception as e:
+        app.logger.warning("Could not ensure resident_registration_requests confirmation columns: %s", e)
+
 
 # =========================================================
 # BLUEPRINTS

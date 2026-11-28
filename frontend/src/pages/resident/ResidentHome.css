@@ -3230,21 +3230,23 @@
   transform: translateX(-50%);
   z-index: 1300;
 
-  max-width: 90vw;
-  padding: 8px 14px;
+  max-width: min(460px, 90vw);
+  padding: 12px 20px;
 
-  border-radius: 9px;
-  box-shadow: var(--shadow-md);
+  border-radius: 12px;
+  background: #0f172a;
+  box-shadow: var(--shadow-lg);
 
-  color: #fff;
-  font-size: 12.5px;
-  font-weight: 600;
-  line-height: 1.35;
+  color: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
   text-align: center;
 }
 
 .toast-error {
-  background: #dc2626;
+  background: #0f172a;
+  border: 1px solid rgba(248, 113, 113, 0.35);
 }
 
 .toast-error.route-pin-error {
@@ -3257,18 +3259,19 @@
 .route-pin-error button {
   flex-shrink: 0;
   min-height: 34px;
-  padding: 5px 9px;
-  color: #1d4ed8;
-  background: #fff;
-  border: 1px solid #dbeafe;
-  border-radius: 7px;
-  font-size: 11px;
-  font-weight: 700;
+  padding: 5px 10px;
+  color: #ffffff;
+  background: #2563eb;
+  border: 1px solid #2563eb;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
 }
 
 .toast-success {
-  background: #16a34a;
+  background: #0f172a;
+  border: 1px solid rgba(34, 197, 94, 0.35);
 }
 
 
@@ -4784,16 +4787,17 @@
 
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   max-width: calc(100% - 28px);
-  padding: 10px 14px 10px 18px;
-  background: #16a34a;
+  padding: 12px 16px 12px 20px;
+  background: #0f172a;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: #ffffff;
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
-  font-size: 13.5px;
-  font-weight: 700;
-  animation: navToastSlide 0.25s ease-out;
+  font-size: 0.875rem;
+  font-weight: 500;
+  animation: navToastSlide 0.2s ease-out;
   box-sizing: border-box;
 }
 
@@ -4805,15 +4809,16 @@
   height: 24px;
   margin-left: 4px;
   border: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
-  color: #ffffff;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .nav-arrival-dismiss:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
 }
 
 @media (max-width: 768px) {
@@ -4826,6 +4831,7 @@
 
 .nav-arrival-icon {
   font-size: 16px;
+  color: #22c55e;
 }
 
 @keyframes navToastSlide {

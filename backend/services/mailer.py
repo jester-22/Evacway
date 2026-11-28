@@ -4,6 +4,7 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
+from urllib.parse import quote
 
 import requests
 from flask import current_app
@@ -312,7 +313,7 @@ def send_staff_mfa_email_code(user, code, expires_minutes=10, purpose="signin"):
     _send_smtp_message(message)
 
 
-def send_resident_registration_email(registration):
+def send_resident_registration_email(registration, confirmation_token=None):
     username = current_app.config.get("MAIL_USERNAME")
     from_address = current_app.config.get("MAIL_FROM_ADDRESS") or username
     from_name = current_app.config.get("MAIL_FROM_NAME", "EvacWay System")
@@ -331,6 +332,85 @@ def send_resident_registration_email(registration):
     message = EmailMessage()
     message["From"] = formataddr((from_name, from_address))
     message["To"] = registration.email
+
+    if registration.status == "pending_confirmation":
+        if not confirmation_token:
+            raise ValueError("A confirmation token is required for pending_confirmation emails.")
+        public_url = (
+            current_app.config.get("APP_URL_PUBLIC")
+            or current_app.config.get("FRONTEND_URL_PUBLIC")
+            or current_app.config.get("FRONTEND_URL")
+            or ""
+        ).strip().rstrip("/")
+        local_url = (current_app.config.get("APP_URL_LOCAL") or "").strip().rstrip("/")
+        if local_url == public_url:
+            local_url = ""
+        encoded_token = quote(str(confirmation_token), safe="")
+        confirm_path = f"/confirm-registration?token={encoded_token}"
+        if not public_url and not local_url:
+            raise MailConfigurationError("Configure FRONTEND_URL_PUBLIC or FRONTEND_URL for confirmation emails.")
+        public_confirm_url = f"{public_url}{confirm_path}" if public_url else f"{local_url}{confirm_path}"
+        local_confirm_url = f"{local_url}{confirm_path}" if (local_url and public_url) else ""
+        logo_url = f"{public_url}/evacway-logo-text.png" if public_url.startswith("https://") else ""
+
+        message["Subject"] = "Confirm your email to activate your EvacWay account"
+        plain_lines = [
+            f"Hello {recipient_name},",
+            "",
+            "Your EvacWay resident registration has been approved by LGU staff.",
+            "To confirm that this email address belongs to you and finish creating your account, please open the link below:",
+            "",
+            public_confirm_url,
+            "",
+            "This confirmation link expires in 72 hours.",
+            "Once confirmed, you can log in using your email and the password you chose during registration.",
+            "",
+            "Email: " + registration.email,
+            "Password: The password you chose during registration.",
+        ]
+        if local_confirm_url:
+            plain_lines.extend([
+                "",
+                "If that link does not open, try this local link:",
+                local_confirm_url,
+                "The second link only works on the computer that runs EvacWay.",
+            ])
+        plain_lines.extend([
+            "",
+            "If you did not register for EvacWay, you can safely ignore this email and no account will be created.",
+        ])
+        message.set_content("\n".join(plain_lines) + "\n")
+
+        html_parts = [
+            "<!doctype html><html><body style='margin:0;padding:24px;font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#17324d'>",
+            "<div style='max-width:560px;margin:0 auto'>",
+        ]
+        if logo_url:
+            html_parts.append(
+                f"<p style='margin:0 0 20px'><img src='{html.escape(logo_url, quote=True)}' alt='EvacWay' style='display:block;width:auto;height:40px;border:0'></p>"
+            )
+        html_parts.extend([
+            "<h2 style='margin:0 0 16px;color:#174f88;font-size:22px;line-height:1.25'>Confirm your email to activate your EvacWay account</h2>",
+            f"<p style='margin:0 0 16px'>Hello {html.escape(recipient_name)},</p>",
+            "<p style='margin:0 0 16px'>Your EvacWay resident registration has been reviewed and approved by LGU staff. Click the button below to confirm your email address and finish creating your account.</p>",
+            f"<p style='margin:0 0 20px'><a href='{html.escape(public_confirm_url, quote=True)}' style='display:inline-block;height:42px;line-height:42px;padding:0 20px;background:#2563eb;color:#ffffff;font-weight:600;text-decoration:none;border-radius:8px'>Confirm &amp; Activate Account</a></p>",
+            "<div style='margin:0 0 18px;padding:16px;background:#f4f7fb;border:1px solid #dbe5f0;border-radius:8px'>",
+            f"<p style='margin:0 0 8px'><strong>Email:</strong> {html.escape(registration.email)}</p>",
+            "<p style='margin:0'><strong>Password:</strong> The password you chose during registration.</p>",
+            "</div>",
+            "<p style='margin:0 0 12px;color:#5b6b82'>This confirmation link expires in 72 hours. Your account will only be created after you confirm.</p>",
+        ])
+        if local_confirm_url:
+            html_parts.extend([
+                f"<p style='margin:0 0 4px'><a href='{html.escape(local_confirm_url, quote=True)}' style='color:#2563eb'>If the button does not open, try this local link</a></p>",
+                "<p style='margin:0 0 12px;color:#5b6b82'>The second link only works on the computer that runs EvacWay.</p>",
+            ])
+        html_parts.extend([
+            "<p style='margin:16px 0 0;font-size:12px;color:#64748b'>If you did not request an EvacWay account, you can safely ignore this email.</p>",
+            "</div></body></html>",
+        ])
+        message.add_alternative("".join(html_parts), subtype="html")
+        return _send_smtp_message(message)
 
     if registration.status == "approved":
         public_url = (

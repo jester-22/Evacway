@@ -211,6 +211,12 @@ export const api = {
       method: "POST",
     }),
 
+  confirmResidentRegistration: (token) =>
+    request("/api/resident-registrations/confirm-email", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
   sendResidentResetPasswordEmail: (requestId) =>
     request(`/api/resident-registrations/${requestId}/reset-password`, {
       method: "POST",

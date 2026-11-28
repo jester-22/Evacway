@@ -254,6 +254,27 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         """Headers for a resident logged in via resident_accounts table."""
         return self.resident_account['headers']
 
+    def _approve_and_confirm(self, registration_id, resident_id, headers=None, override_reason=None):
+        """Run the full 2-step approval + email confirmation flow and return (approve_res, confirm_res)."""
+        headers = headers or self._staff_headers()
+        payload = {'matched_resident_id': resident_id}
+        if override_reason is not None:
+            payload['override_reason'] = override_reason
+        with patch('routes.resident_registrations.send_resident_registration_email') as send_email:
+            approve_res = self.client.post(
+                f'/api/resident-registrations/{registration_id}/approve',
+                headers=headers,
+                json=payload,
+            )
+        self.assertEqual(approve_res.status_code, 200, approve_res.get_json())
+        token = send_email.call_args.kwargs.get('confirmation_token')
+        self.assertTrue(token)
+        confirm_res = self.client.post(
+            '/api/resident-registrations/confirm-email',
+            json={'token': token},
+        )
+        return approve_res, confirm_res
+
     def test_public_barangay_list_returns_only_id_and_name_without_token(self):
         with db.engine.begin() as connection:
             first_id = connection.execute(
@@ -356,6 +377,14 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         )
         with patch('services.mailer.smtplib.SMTP') as smtp:
             smtp_server = smtp.return_value.__enter__.return_value
+            registration.status = 'pending_confirmation'
+            send_resident_registration_email(registration, confirmation_token='sample-confirm-token-123')
+            confirm_message = smtp_server.send_message.call_args.args[0]
+            confirm_body = confirm_message.get_body(preferencelist=('plain',)).get_content()
+            self.assertIn('/confirm-registration?token=sample-confirm-token-123', confirm_body)
+            self.assertNotIn('Secret123!', confirm_body)
+
+            smtp_server.send_message.reset_mock()
             registration.status = 'approved'
             send_resident_registration_email(registration)
             approval_message = smtp_server.send_message.call_args.args[0]
@@ -481,11 +510,29 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertTrue(response.get_json()['email_sent'])
+        self.assertEqual(registration.status, 'pending_confirmation')
+        self.assertEqual(ResidentAccount.query.filter_by(email='jose@example.com').count(), 0)
+        send_email.assert_called_once()
+        token = send_email.call_args.kwargs.get('confirmation_token')
+        self.assertTrue(token)
+
+        # Resident cannot log in until email is confirmed
+        before_confirm_login = self.client.post('/api/auth/resident-login', json={
+            'email': 'jose@example.com',
+            'password': 'Secret123!',
+        })
+        self.assertEqual(before_confirm_login.status_code, 403)
+        self.assertEqual(before_confirm_login.get_json()['status'], 'pending_confirmation')
+
+        # Confirm email via single-use token -> account created & active
+        confirm_res = self.client.post('/api/resident-registrations/confirm-email', json={'token': token})
+        self.assertEqual(confirm_res.status_code, 200, confirm_res.get_json())
         account = ResidentAccount.query.filter_by(email='jose@example.com').one()
         self.assertTrue(account.is_active)
         self.assertEqual(account.resident_id, resident.id)
+        db.session.refresh(registration)
         self.assertEqual(registration.status, 'approved')
-        send_email.assert_called_once()
+        self.assertIsNone(registration.confirmation_token_hash)
 
         login = self.client.post('/api/auth/resident-login', json={
             'email': 'jose@example.com',
@@ -523,8 +570,10 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             )
         self.assertEqual(approved.status_code, 200)
         self.assertFalse(approved.get_json()['email_sent'])
+        self.assertIsNone(approved.get_json()['request']['confirmation_sent_at'])
         self.assertEqual(resent.status_code, 200)
         self.assertFalse(resent.get_json()['email_sent'])
+        self.assertIsNone(resent.get_json()['request']['confirmation_sent_at'])
 
     def test_rejection_requires_reason_and_keeps_request(self):
         resident = self._create_roster_resident()
@@ -622,42 +671,35 @@ class ResidentRegistrationApiTests(unittest.TestCase):
     # ============================================================
 
     def test_approval_creates_resident_account_not_user(self):
-        """Approval should create a ResidentAccount, not a User with role='resident'."""
+        """Approval + email confirmation should create a ResidentAccount, not a User with role='resident'."""
         resident = self._create_roster_resident()
         self._submit()
         registration = ResidentRegistrationRequest.query.one()
 
-        with patch('routes.resident_registrations.send_resident_registration_email'):
-            response = self.client.post(
-                f'/api/resident-registrations/{registration.id}/approve',
-                headers=self._staff_headers(),
-                json={'matched_resident_id': resident.id},
-            )
+        approve_res, confirm_res = self._approve_and_confirm(registration.id, resident.id)
+        self.assertEqual(approve_res.status_code, 200, approve_res.get_json())
+        self.assertIsNone(approve_res.get_json()['account'])
+        self.assertEqual(confirm_res.status_code, 200, confirm_res.get_json())
 
-        self.assertEqual(response.status_code, 200, response.get_json())
-        # Verify ResidentAccount was created
+        # Verify ResidentAccount was created upon email confirmation
         account = ResidentAccount.query.filter_by(resident_id=resident.id).one()
         self.assertEqual(account.email, 'jose@example.com')
         self.assertTrue(account.is_active)
         self.assertTrue(check_password_hash(account.password_hash, 'Secret123!'))
         # Verify NO User was created with role='resident'
         self.assertEqual(User.query.filter_by(email='jose@example.com').count(), 0)
-        # Verify response contains account info
-        self.assertIn('account', response.get_json())
-        self.assertEqual(response.get_json()['account']['resident_id'], resident.id)
+        # Verify confirmation response contains account info
+        self.assertIn('account', confirm_res.get_json())
+        self.assertEqual(confirm_res.get_json()['account']['resident_id'], resident.id)
 
     def test_resident_login_uses_resident_accounts_table(self):
-        """Login should work with resident_accounts table."""
+        """Login should work with resident_accounts table after confirmation."""
         resident = self._create_roster_resident()
         self._submit()
         registration = ResidentRegistrationRequest.query.one()
 
-        with patch('routes.resident_registrations.send_resident_registration_email'):
-            self.client.post(
-                f'/api/resident-registrations/{registration.id}/approve',
-                headers=self._staff_headers(),
-                json={'matched_resident_id': resident.id},
-            )
+        _, confirm_res = self._approve_and_confirm(registration.id, resident.id)
+        self.assertEqual(confirm_res.status_code, 200)
 
         # Login with the resident account
         login = self.client.post('/api/auth/resident-login', json={
@@ -807,12 +849,8 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         self._submit()
         registration = ResidentRegistrationRequest.query.one()
 
-        with patch('routes.resident_registrations.send_resident_registration_email'):
-            self.client.post(
-                f'/api/resident-registrations/{registration.id}/approve',
-                headers=self._staff_headers(),
-                json={'matched_resident_id': resident.id},
-            )
+        _, confirm_res = self._approve_and_confirm(registration.id, resident.id)
+        self.assertEqual(confirm_res.status_code, 200)
 
         login = self.client.post('/api/auth/resident-login', json={
             'email': 'jose@example.com',
@@ -893,12 +931,8 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         self._submit()
         registration = ResidentRegistrationRequest.query.one()
 
-        with patch('routes.resident_registrations.send_resident_registration_email'):
-            self.client.post(
-                f'/api/resident-registrations/{registration.id}/approve',
-                headers=self._staff_headers(),
-                json={'matched_resident_id': resident.id},
-            )
+        _, confirm_res = self._approve_and_confirm(registration.id, resident.id)
+        self.assertEqual(confirm_res.status_code, 200)
 
         login = self.client.post('/api/auth/resident-login', json={
             'email': 'jose@example.com',
@@ -922,12 +956,8 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         self._submit()
         registration = ResidentRegistrationRequest.query.one()
 
-        with patch('routes.resident_registrations.send_resident_registration_email'):
-            self.client.post(
-                f'/api/resident-registrations/{registration.id}/approve',
-                headers=self._staff_headers(),
-                json={'matched_resident_id': resident.id},
-            )
+        _, confirm_res = self._approve_and_confirm(registration.id, resident.id)
+        self.assertEqual(confirm_res.status_code, 200)
 
         # Request password reset
         with patch('routes.auth.send_password_setup_email') as mock_send:
@@ -1216,15 +1246,11 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         )
         self.assertEqual(res_forbidden.status_code, 403)
 
-        # Approve registration
-        with patch('routes.resident_registrations.send_resident_registration_email'):
-            approve_res = self.client.post(
-                f'/api/resident-registrations/{registration.id}/approve',
-                headers=self._staff_headers(),
-                json={'matched_resident_id': resident.id},
-            )
+        # Approve registration -> pending_confirmation, then confirm email -> approved + active account
+        approve_res, confirm_res = self._approve_and_confirm(registration.id, resident.id)
         self.assertEqual(approve_res.status_code, 200)
-        self.assertTrue(approve_res.get_json()['request']['has_account'])
+        self.assertFalse(approve_res.get_json()['request']['has_account'])
+        self.assertEqual(confirm_res.status_code, 200)
 
         # List returns has_account=True for approved request with active account
         list_res = self.client.get(
@@ -1419,7 +1445,7 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         self.assertIn('barangay', err_both)
         self.assertEqual(ResidentAccount.query.count(), 0)
 
-        # Matching name and barangay -> 200
+        # Matching name and barangay -> 200 (awaiting email confirmation)
         with patch('routes.resident_registrations.send_resident_registration_email'):
             res_ok = self.client.post(
                 f'/api/resident-registrations/{registration.id}/approve',
@@ -1427,7 +1453,7 @@ class ResidentRegistrationApiTests(unittest.TestCase):
                 json={'matched_resident_id': name_and_brgy_match.id},
             )
         self.assertEqual(res_ok.status_code, 200, res_ok.get_json())
-        self.assertEqual(registration.status, 'approved')
+        self.assertEqual(registration.status, 'pending_confirmation')
         self.assertEqual(registration.matched_resident_id, name_and_brgy_match.id)
         self.assertEqual(RegistrationLinkOverrideLog.query.count(), 0)
 
@@ -1480,7 +1506,7 @@ class ResidentRegistrationApiTests(unittest.TestCase):
                 },
             )
         self.assertEqual(ok_res.status_code, 200, ok_res.get_json())
-        self.assertEqual(registration.status, 'approved')
+        self.assertEqual(registration.status, 'pending_confirmation')
         self.assertEqual(registration.matched_resident_id, mismatched.id)
 
         log = RegistrationLinkOverrideLog.query.one()
@@ -1512,16 +1538,12 @@ class ResidentRegistrationApiTests(unittest.TestCase):
         db.session.add_all([room, assignment])
         db.session.commit()
 
-        # Submit & approve registration
+        # Submit, approve, and confirm registration
         self.assertEqual(self._submit().status_code, 201)
         registration = ResidentRegistrationRequest.query.one()
-        with patch('routes.resident_registrations.send_resident_registration_email'):
-            approve_res = self.client.post(
-                f'/api/resident-registrations/{registration.id}/approve',
-                headers=self._staff_headers(),
-                json={'matched_resident_id': resident.id},
-            )
+        approve_res, confirm_res = self._approve_and_confirm(registration.id, resident.id)
         self.assertEqual(approve_res.status_code, 200)
+        self.assertEqual(confirm_res.status_code, 200)
 
         # Linked resident account logs in and inherits the roster family's center & room
         login_res = self.client.post('/api/auth/resident-login', json={
@@ -1657,6 +1679,164 @@ class ResidentRegistrationApiTests(unittest.TestCase):
             'password': 'ChosenPassword123!',
         })
         self.assertEqual(good_login.status_code, 200)
+
+    def test_email_confirmation_expiry_resend_rotation_and_replay_protection(self):
+        from datetime import timedelta
+        from models import utc_now
+
+        resident = self._create_roster_resident()
+        self._submit()
+        registration = ResidentRegistrationRequest.query.one()
+
+        with patch('routes.resident_registrations.send_resident_registration_email') as send_email:
+            approve_res = self.client.post(
+                f'/api/resident-registrations/{registration.id}/approve',
+                headers=self._staff_headers(),
+                json={'matched_resident_id': resident.id},
+            )
+        self.assertEqual(approve_res.status_code, 200, approve_res.get_json())
+        first_token = send_email.call_args.kwargs['confirmation_token']
+
+        # Listing with status=pending_confirmation returns the request
+        list_res = self.client.get(
+            '/api/resident-registrations?status=pending_confirmation',
+            headers=self._staff_headers(),
+        )
+        self.assertEqual(list_res.status_code, 200)
+        self.assertEqual(list_res.get_json()['count'], 1)
+        self.assertFalse(list_res.get_json()['requests'][0]['has_account'])
+
+        # Resending rotates the token so the first token no longer works
+        with patch('routes.resident_registrations.send_resident_registration_email') as resend_email:
+            resend_res = self.client.post(
+                f'/api/resident-registrations/{registration.id}/resend-email',
+                headers=self._staff_headers(),
+            )
+        self.assertEqual(resend_res.status_code, 200, resend_res.get_json())
+        self.assertTrue(resend_res.get_json()['email_sent'])
+        second_token = resend_email.call_args.kwargs['confirmation_token']
+        self.assertNotEqual(first_token, second_token)
+
+        old_confirm = self.client.post('/api/resident-registrations/confirm-email', json={'token': first_token})
+        self.assertEqual(old_confirm.status_code, 404)
+
+        # Expired token returns 410 and does not create an account
+        db.session.refresh(registration)
+        registration.confirmation_expires_at = utc_now() - timedelta(minutes=1)
+        db.session.commit()
+        expired_confirm = self.client.post('/api/resident-registrations/confirm-email', json={'token': second_token})
+        self.assertEqual(expired_confirm.status_code, 410)
+        self.assertEqual(expired_confirm.get_json()['code'], 'expired_token')
+        self.assertEqual(ResidentAccount.query.count(), 0)
+
+        # Resend issues a fresh valid token
+        with patch('routes.resident_registrations.send_resident_registration_email') as resend_email2:
+            self.assertEqual(
+                self.client.post(
+                    f'/api/resident-registrations/{registration.id}/resend-email',
+                    headers=self._staff_headers(),
+                ).status_code,
+                200,
+            )
+        fresh_token = resend_email2.call_args.kwargs['confirmation_token']
+
+        # Confirming once succeeds; replaying fails with 404
+        ok_confirm = self.client.post('/api/resident-registrations/confirm-email', json={'token': fresh_token})
+        self.assertEqual(ok_confirm.status_code, 200, ok_confirm.get_json())
+        self.assertEqual(ResidentAccount.query.count(), 1)
+        replay = self.client.post('/api/resident-registrations/confirm-email', json={'token': fresh_token})
+        self.assertEqual(replay.status_code, 404)
+
+    def test_pending_confirmation_email_edit_reject_and_roster_reservation(self):
+        resident = self._create_roster_resident()
+        self._submit(email='first@example.com', contact_number='09181111111')
+        self._submit(email='second@example.com', contact_number='09182222222')
+        first_req = ResidentRegistrationRequest.query.filter_by(email='first@example.com').one()
+        second_req = ResidentRegistrationRequest.query.filter_by(email='second@example.com').one()
+
+        with patch('routes.resident_registrations.send_resident_registration_email') as send_email:
+            self.assertEqual(
+                self.client.post(
+                    f'/api/resident-registrations/{first_req.id}/approve',
+                    headers=self._staff_headers(),
+                    json={'matched_resident_id': resident.id},
+                ).status_code,
+                200,
+            )
+        old_token = send_email.call_args.kwargs['confirmation_token']
+
+        # Second request cannot claim the same roster resident while first awaits confirmation
+        conflict_approve = self.client.post(
+            f'/api/resident-registrations/{second_req.id}/approve',
+            headers=self._staff_headers(),
+            json={'matched_resident_id': resident.id},
+        )
+        self.assertEqual(conflict_approve.status_code, 409)
+
+        # Manual account creation also blocks email and resident_id reserved by pending_confirmation
+        manual_same_res = self.client.post(
+            '/api/resident-registrations/manual-create',
+            headers=self._staff_headers(),
+            json={'resident_id': resident.id, 'email': 'unique-manual@example.com'},
+        )
+        self.assertEqual(manual_same_res.status_code, 409)
+        other_res = self._create_roster_resident(first_name='Other', last_name='Person', contact_number='09183333333')
+        manual_same_email = self.client.post(
+            '/api/resident-registrations/manual-create',
+            headers=self._staff_headers(),
+            json={'resident_id': other_res.id, 'email': 'first@example.com'},
+        )
+        self.assertEqual(manual_same_email.status_code, 409)
+
+        # A failed resend must NOT invalidate the previously delivered confirmation token
+        with patch(
+            'routes.resident_registrations.send_resident_registration_email',
+            side_effect=RuntimeError('Temporary SMTP outage'),
+        ):
+            failed_resend = self.client.post(
+                f'/api/resident-registrations/{first_req.id}/resend-email',
+                headers=self._staff_headers(),
+            )
+        self.assertEqual(failed_resend.status_code, 200)
+        self.assertFalse(failed_resend.get_json()['email_sent'])
+        db.session.refresh(first_req)
+        self.assertIsNotNone(first_req.confirmation_sent_at)
+        from routes.resident_registrations import _hash_confirmation_token
+        self.assertEqual(first_req.confirmation_token_hash, _hash_confirmation_token(old_token))
+
+        # Editing email on pending_confirmation invalidates the old confirmation link
+        patch_res = self.client.patch(
+            f'/api/resident-registrations/{first_req.id}',
+            headers=self._staff_headers(),
+            json={'email': 'corrected@example.com'},
+        )
+        self.assertEqual(patch_res.status_code, 200, patch_res.get_json())
+        self.assertIn('invalidated', patch_res.get_json()['message'].lower())
+        self.assertEqual(
+            self.client.post('/api/resident-registrations/confirm-email', json={'token': old_token}).status_code,
+            404,
+        )
+
+        # Rejecting a pending_confirmation request releases the roster resident
+        with patch('routes.resident_registrations.send_resident_registration_email'):
+            reject_res = self.client.post(
+                f'/api/resident-registrations/{first_req.id}/reject',
+                headers=self._staff_headers(),
+                json={'reason': 'Email bounced'},
+            )
+        self.assertEqual(reject_res.status_code, 200, reject_res.get_json())
+        db.session.refresh(first_req)
+        self.assertEqual(first_req.status, 'rejected')
+        self.assertIsNone(first_req.matched_resident_id)
+
+        # Now the second request can be approved for that roster resident
+        with patch('routes.resident_registrations.send_resident_registration_email'):
+            second_approve = self.client.post(
+                f'/api/resident-registrations/{second_req.id}/approve',
+                headers=self._staff_headers(),
+                json={'matched_resident_id': resident.id},
+            )
+        self.assertEqual(second_approve.status_code, 200, second_approve.get_json())
 
 if __name__ == '__main__':
     unittest.main()

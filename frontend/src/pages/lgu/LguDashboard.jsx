@@ -223,35 +223,43 @@ function LguDashboard() {
       <div className="dashboard-content">
         {flashNotice && (
           <div
+            role="status"
+            aria-live="polite"
             style={{
-              margin: "14px 20px 0",
-              padding: "10px 16px",
-              borderRadius: "8px",
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              color: "#991b1b",
+              position: "fixed",
+              top: "24px",
+              right: "24px",
+              zIndex: 10000,
+              maxWidth: "min(460px, calc(100vw - 32px))",
+              padding: "12px 20px",
+              borderRadius: "12px",
+              background: "#0f172a",
+              border: "1px solid rgba(248, 113, 113, 0.28)",
+              color: "#ffffff",
               display: "flex",
               alignItems: "center",
-              justifyContent: "space-between",
-              fontSize: "13.5px",
-              fontWeight: "600",
-              boxShadow: "var(--shadow-xs)",
+              gap: "10px",
+              fontSize: "0.875rem",
+              fontWeight: "500",
+              boxShadow: "var(--shadow-lg)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <FontAwesomeIcon icon={faTriangleExclamation} />
-              <span>{flashNotice}</span>
-            </div>
+            <FontAwesomeIcon icon={faTriangleExclamation} style={{ color: "#f87171", flexShrink: 0 }} />
+            <span>{flashNotice}</span>
             <button
               type="button"
               onClick={() => setFlashNotice("")}
               style={{
-                background: "none",
+                marginLeft: "4px",
+                background: "transparent",
                 border: "none",
-                color: "#991b1b",
+                color: "rgba(255, 255, 255, 0.65)",
                 cursor: "pointer",
-                padding: "2px 6px",
+                padding: "4px 6px",
+                borderRadius: "6px",
                 fontSize: "14px",
+                display: "inline-flex",
+                alignItems: "center",
               }}
               aria-label="Dismiss"
             >
